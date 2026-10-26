@@ -1,0 +1,8 @@
+concept
+assumption  假设
+implicit     隐式的
+explicit     明确的
+unconcious	无意识的
+notion		概念
+conception	构思；构想；理解(认为某事怎样或应该怎样)；设想；受孕；怀孕
+perceive	感知；认为；察觉到；意识到；注意到；将…视为；将…理解为
