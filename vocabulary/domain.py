@@ -38,6 +38,7 @@ class WordEntry:
     important: bool = True
     learned: bool = False
     id: int | None = None
+    sort_order: int | None = None
 
 
 class ValidationError(ValueError):
@@ -65,6 +66,8 @@ def clean_senses(senses: list[Sense], label: str) -> list[Sense]:
 
 
 def clean_entry(entry: WordEntry) -> WordEntry:
+    if entry.sort_order is not None and (type(entry.sort_order) is not int or entry.sort_order < 1):
+        raise ValidationError("排序号必须是正整数。")
     text = entry.text.strip()
     if not text:
         raise ValidationError("请先输入主词。")
@@ -76,5 +79,5 @@ def clean_entry(entry: WordEntry) -> WordEntry:
             raise ValidationError(f"关联词 {index}：请填写单词。")
         related.append(RelatedWord(item.text.strip(), clean_senses(item.senses, f"关联词 {index}")))
     return WordEntry(text, clean_senses(entry.senses, "主词"), related,
-                     entry.important, entry.learned, entry.id)
+                     entry.important, entry.learned, entry.id, entry.sort_order)
 

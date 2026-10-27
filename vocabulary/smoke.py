@@ -8,6 +8,8 @@ from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QLabel
 
 from .shortcuts import SettingsDialog
+from .import_dialog import ImportConflictDialog
+from .transfer import read_entries, serialize_entries, write_entries
 
 
 def run_smoke(app, window, directory: Path):
@@ -22,11 +24,27 @@ def run_smoke(app, window, directory: Path):
         assert all(row.hidden for row in window.model.rows)
         assert window.settings_button.text() == "快捷键设置"
         assert window.add_related_button.text().startswith("新增关联词  ")
-        footer = (window.settings_button, window.add_related_button, window.remove_related_button,
+        footer = (window.add_related_button, window.remove_related_button,
                   window.star_button, window.save_button)
         centers = [control.mapTo(window, control.rect().center()).y() for control in footer]
         assert max(centers) - min(centers) <= 2
+        tabs = list(window.filter_buttons.values())
+        assert abs(window.settings_button.mapTo(window, QPoint(0, 0)).y()
+                   - tabs[0].mapTo(window, QPoint(0, 0)).y()) <= 4
+        assert window.settings_button.mapTo(window, QPoint(0, 0)).x() > tabs[-1].mapTo(window, QPoint(0, 0)).x()
         report["checks"].append("compact_header_and_single_footer_row")
+        block = window.blocks[0]
+        row = block.rows[0]
+        assert block.word.height() == row.pos.height() == row.translation.height()
+        assert row.pos.width() < 120
+        assert row.translation.verticalScrollBar().maximum() == 0
+        assert block.add_button.text().startswith("增加释义")
+        assert block.remove_button.text().startswith("删除释义")
+        assert not window.toast.isVisible()
+        initial_editor_height = window.editor_panel.height()
+        assert 180 <= initial_editor_height < 250
+        assert window.form_scroll.verticalScrollBar().maximum() == 0
+        report["checks"].append("compact_inputs_and_no_status_footer")
         repo = window.repository
         existing = repo.list_entries()
         if existing:
@@ -75,6 +93,13 @@ def run_smoke(app, window, directory: Path):
         assert not any(row.hidden for row in window.model.rows)
         report["checks"].append("global_show_hide_toggle")
         QTest.qWait(60)
+        index = window.model.index(1, 1)
+        QTest.mouseClick(window.table.viewport(), Qt.MouseButton.LeftButton,
+                         pos=window.table.visualRect(index).center())
+        assert len(window.table.selectionModel().selectedRows()) == 3
+        assert window.table.currentIndex() == index
+        report["checks"].append("related_click_selects_entire_group")
+        QTest.qWait(60)
         window.grab().save(str(directory / "main-expanded.png"))
         assert window.model.rowCount() == 3
         index = window.model.index(0, 3)
@@ -109,6 +134,65 @@ def run_smoke(app, window, directory: Path):
         dialog.close()
         window.shortcuts.set_suspended(False)
         report["checks"].append("settings_window")
+        window.activateWindow()
+        QTest.qWait(20)
+        field = window.blocks[0].word
+        field.setFocus()
+        QTest.qWait(20)
+        assert not window._save_form()
+        QTest.qWait(220)
+        assert window.toast.isVisible() and field.hasFocus()
+        window.grab().save(str(directory / "floating-notice.png"))
+        QTest.qWait(2250)
+        assert not window.toast.isVisible()
+        report["checks"].append("floating_error_notice_and_auto_dismiss")
+        expanded_height = window.editor_panel.height()
+        QTest.mouseClick(window.collapse_button, Qt.MouseButton.LeftButton)
+        QTest.qWait(40)
+        assert window.form_collapsed and window.editor_panel.height() <= 60
+        assert not window.editor_body.isVisible()
+        window.grab().save(str(directory / "form-collapsed.png"))
+        QTest.mouseClick(window.collapse_button, Qt.MouseButton.LeftButton)
+        QTest.qWait(40)
+        assert not window.form_collapsed and field.hasFocus()
+        assert abs(window.editor_panel.height() - expanded_height) <= 2
+        report["checks"].append("collapse_expand_and_restore_form")
+        for _ in range(3):
+            window.blocks[0].add_sense()
+        QTest.qWait(40)
+        assert initial_editor_height < window.editor_panel.height() <= window.centralWidget().height() // 2
+        if window.editor_panel.height() < window.centralWidget().height() // 2:
+            assert window.form_scroll.verticalScrollBar().maximum() == 0
+        for _ in range(5):
+            window.add_related()
+        QTest.qWait(50)
+        assert window.editor_panel.height() == window.centralWidget().height() // 2
+        assert window.form_scroll.verticalScrollBar().maximum() > 0
+        window.grab().save(str(directory / "form-automatic-scroll.png"))
+        window.reset_form()
+        QTest.qWait(40)
+        assert window.editor_panel.height() == initial_editor_height
+        assert window.form_scroll.verticalScrollBar().maximum() == 0
+        report["checks"].append("automatic_form_height_and_scroll_limit")
+        entries = repo.list_entries()
+        write_entries(directory / "all-words.json", entries)
+        imported = read_entries(directory / "all-words.json")
+        assert serialize_entries(imported) == serialize_entries(entries)
+        result = repo.import_entries(imported)
+        assert result.inserted == 0 and len(result.conflicts) == len(entries)
+        comparison = ImportConflictDialog(repo, result, window)
+        comparison.show()
+        QTest.qWait(40)
+        comparison.grab().save(str(directory / "import-comparison.png"))
+        QTest.mouseClick(comparison.cards[0][1].description, Qt.MouseButton.LeftButton)
+        assert len(comparison.conflicts) == len(entries) - 1
+        adopted = next(entry for entry in repo.list_entries()
+                       if entry.text.casefold() == entries[0].text.casefold())
+        assert adopted.id != entries[0].id
+        from dataclasses import replace
+        assert replace(adopted, id=entries[0].id, sort_order=entries[0].sort_order) == entries[0]
+        comparison.close()
+        report["checks"].append("json_roundtrip_and_immediate_card_import")
         report["ok"] = True
     except Exception:
         report["error"] = traceback.format_exc()

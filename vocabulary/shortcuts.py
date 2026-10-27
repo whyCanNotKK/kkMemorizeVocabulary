@@ -1,8 +1,9 @@
-from PySide6.QtCore import QObject, Qt, Signal
+from PySide6.QtCore import QEvent, QObject, Qt, Signal
 from PySide6.QtGui import QKeySequence, QShortcut
-from PySide6.QtWidgets import QDialog, QHBoxLayout, QLabel, QLineEdit, QVBoxLayout
+from PySide6.QtWidgets import QApplication, QDialog, QHBoxLayout, QLabel, QLineEdit, QVBoxLayout, QWidget
 
 from .domain import DEFAULT_SHORTCUTS, SHORTCUT_LABELS, ValidationError
+from .native_shortcuts import WindowHotkeys
 from .widgets import button
 
 
@@ -42,6 +43,27 @@ class ShortcutManager(QObject):
         self.suspended = False
         self.validate(self.values)
         self._apply(self.values)
+        self.native = WindowHotkeys(self)
+        QApplication.instance().installEventFilter(self)
+
+    def eventFilter(self, target, event):
+        if target is self.window and event.type() in (QEvent.Type.WindowActivate, QEvent.Type.WindowDeactivate):
+            self.native.context_changed()
+        if event.type() in (QEvent.Type.ShortcutOverride, QEvent.Type.KeyPress):
+            app = QApplication.instance()
+            if (not self.suspended and app.activeWindow() is self.window
+                    and not app.activeModalWidget() and not app.activePopupWidget()
+                    and isinstance(target, QWidget)
+                    and (target is self.window or self.window.isAncestorOf(target))):
+                sequence = QKeySequence(event.keyCombination()).toString(
+                    QKeySequence.SequenceFormat.PortableText).replace("Enter", "Return")
+                action = next((key for key, value in self.values.items() if value == sequence), None)
+                if action is not None:
+                    event.accept()
+                    if event.type() == QEvent.Type.KeyPress and not event.isAutoRepeat():
+                        self.callbacks[action]()
+                    return True
+        return False
 
     @staticmethod
     def validate(values):
@@ -77,11 +99,14 @@ class ShortcutManager(QObject):
         self.values = dict(values)
         for shortcut in self.bindings:
             shortcut.setEnabled(not self.suspended)
+        if hasattr(self, "native"):
+            self.native.refresh()
 
     def set_suspended(self, value):
         self.suspended = value
         for shortcut in self.bindings:
             shortcut.setEnabled(not value)
+        self.native.refresh()
 
     def update(self, values):
         validated = self.validate(values)

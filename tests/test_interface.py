@@ -27,6 +27,123 @@ def test_window_starts_empty_and_new_word_defaults_important(window):
     assert window.filter_name == "pending"
 
 
+def test_invalid_save_uses_timed_floating_notice_without_moving_form(window, qtbot):
+    field = window.blocks[0].word
+    field.setFocus()
+    geometry = window.form_scroll.geometry()
+    assert not window._save_form()
+    assert window.toast.label.text() == "请先输入主词。"
+    assert window.toast.isVisible() and field.hasFocus()
+    initial_y = window.toast.y()
+    qtbot.waitUntil(lambda: window.toast.opacity.opacity() > 0.99, timeout=1000)
+    assert window.toast.y() < initial_y
+    assert window.toast.geometry().bottom() < window.save_button.mapTo(
+        window.centralWidget(), window.save_button.rect().topLeft()).y()
+    assert window.form_scroll.geometry() == geometry
+    qtbot.waitUntil(lambda: not window.toast.isVisible(), timeout=3000)
+    assert field.hasFocus() and window.form_scroll.geometry() == geometry
+
+
+def test_repeated_floating_notice_replaces_message_and_restarts_duration(window, qtbot):
+    window.show_notice("第一条提示", True)
+    qtbot.wait(1200)
+    window.show_notice("第二条提示", True)
+    qtbot.wait(1300)
+    assert window.toast.isVisible()
+    assert window.toast.label.text() == "第二条提示"
+    window.toast.dismiss()
+
+
+def test_collapse_preserves_draft_focus_and_automatic_height(window, qtbot):
+    fill_form(window)
+    window.add_related()
+    qtbot.wait(20)
+    child = window.blocks[-1]
+    child.word.setText("related-draft")
+    child.rows[0].translation.setFocus()
+    draft = window.form_value()
+    expanded_height = window.editor_panel.height()
+    qtbot.mouseClick(window.collapse_button, Qt.MouseButton.LeftButton)
+    qtbot.wait(20)
+    assert window.form_collapsed and not window.editor_body.isVisible()
+    assert window.editor_panel.height() <= 60
+    assert window.form_value() == draft and window.is_dirty()
+    assert window.collapse_button.hasFocus()
+    qtbot.keyClick(window.collapse_button, Qt.Key.Key_Space)
+    qtbot.wait(30)
+    assert not window.form_collapsed and window.editor_body.isVisible()
+    assert abs(window.editor_panel.height() - expanded_height) <= 2
+    assert window.form_value() == draft and child.rows[0].translation.hasFocus()
+
+
+def test_form_grows_with_senses_then_scrolls_at_half_window_and_shrinks(window, qtbot):
+    initial = window.editor_panel.height()
+    assert 180 <= initial < 250
+    assert window.form_scroll.verticalScrollBar().maximum() == 0
+    block = window.blocks[0]
+    for _ in range(3):
+        block.add_sense()
+    qtbot.waitUntil(lambda: window.editor_panel.height() > initial)
+    assert window.editor_panel.height() < window.centralWidget().height() // 2
+    qtbot.waitUntil(lambda: window.form_scroll.verticalScrollBar().maximum() == 0)
+    for _ in range(6):
+        block.add_sense()
+    qtbot.waitUntil(lambda: window.form_scroll.verticalScrollBar().maximum() > 0)
+    assert window.editor_panel.height() == window.centralWidget().height() // 2
+    for _ in range(9):
+        block.remove_last_sense()
+    qtbot.waitUntil(lambda: window.editor_panel.height() == initial)
+    qtbot.waitUntil(lambda: window.form_scroll.verticalScrollBar().maximum() == 0)
+
+
+def test_related_words_grow_form_and_resize_recalculates_half_window_limit(window, qtbot):
+    initial = window.editor_panel.height()
+    for _ in range(7):
+        window.add_related()
+    qtbot.waitUntil(lambda: window.form_scroll.verticalScrollBar().maximum() > 0)
+    assert window.editor_panel.height() == window.centralWidget().height() // 2
+    window.resize(1100, 1100)
+    qtbot.waitUntil(lambda: window.editor_panel.height() == window.centralWidget().height() // 2)
+    window.resize(860, 640)
+    qtbot.waitUntil(lambda: window.editor_panel.height() == window.centralWidget().height() // 2)
+    assert window.height() == 640
+    assert window.save_button.isVisible()
+    window.reset_form()
+    qtbot.waitUntil(lambda: window.editor_panel.height() == initial)
+    assert window.form_scroll.verticalScrollBar().maximum() == 0
+
+
+def test_dragging_between_panels_does_not_resize_form(window, qtbot):
+    from PySide6.QtCore import QPoint
+    height = window.editor_panel.height()
+    boundary = window.editor_panel.mapTo(window.centralWidget(), QPoint(100, -5))
+    qtbot.mousePress(window.centralWidget(), Qt.MouseButton.LeftButton, pos=boundary)
+    qtbot.mouseMove(window.centralWidget(), boundary - QPoint(0, 100))
+    qtbot.mouseRelease(window.centralWidget(), Qt.MouseButton.LeftButton,
+                       pos=boundary - QPoint(0, 100))
+    assert window.editor_panel.height() == height
+
+
+def test_form_actions_expand_collapsed_panel_and_duplicate_toast_locates_word(window, repo, qtbot):
+    saved = seed(repo)
+    window.set_form_collapsed(True)
+    qtbot.keyClick(window.table, Qt.Key.Key_N, Qt.KeyboardModifier.ControlModifier)
+    qtbot.wait(30)
+    assert not window.form_collapsed and len(window.blocks) == 2
+    window.reset_form()
+    window.set_form_collapsed(True)
+    window.list_action(saved.id, "edit")
+    assert not window.form_collapsed and window.edit_id == saved.id
+    window.reset_form()
+    fill_form(window, "RECORD")
+    assert not window._save_form()
+    assert window.toast.action.isVisible()
+    qtbot.mouseClick(window.toast.action, Qt.MouseButton.LeftButton)
+    assert not window.toast.isVisible()
+    assert window.filter_name == "all"
+    assert window.table.currentIndex().data(Qt.ItemDataRole.UserRole).entry.id == saved.id
+
+
 def test_pos_digits_space_and_escape(qtbot):
     combo = PosCombo()
     qtbot.addWidget(combo)
@@ -82,6 +199,70 @@ def test_mask_single_summary_expand_hide(window, repo, qtbot):
     assert window.model.rowCount() == 1 and window.model.rows[0].hidden
 
 
+def test_selecting_related_sense_selects_only_its_whole_entry(window, repo, qtbot):
+    saved = seed(repo)
+    other = repo.save(WordEntry("other", [Sense("adj.", "其他的")]))
+    window.reveal(saved.id, True)
+    window.reveal(other.id, True)
+    index = window.model.index(2, 3)
+    qtbot.mouseClick(window.table.viewport(), Qt.MouseButton.LeftButton,
+                     pos=window.table.visualRect(index).center())
+    assert {item.row() for item in window.table.selectionModel().selectedRows()} == {0, 1, 2}
+    assert window.table.currentIndex() == index
+
+    for number in (0, 1, 2):
+        index = window.model.index(number, 1)
+        qtbot.mouseClick(window.table.viewport(), Qt.MouseButton.LeftButton,
+                         pos=window.table.visualRect(index).center())
+        assert {item.row() for item in window.table.selectionModel().selectedRows()} == {0, 1, 2}
+        assert window.table.currentIndex() == index
+
+    # The continuous highlight must also follow keyboard and programmatic selection.
+    qtbot.keyClick(window.table, Qt.Key.Key_Down)
+    assert {item.row() for item in window.table.selectionModel().selectedRows()} == {3}
+    window.table.setCurrentIndex(window.model.index(1, 2))
+    assert {item.row() for item in window.table.selectionModel().selectedRows()} == {0, 1, 2}
+
+
+def test_group_selection_survives_reveal_and_refresh(window, repo):
+    saved = seed(repo)
+    window.refresh()
+    window.table.setCurrentIndex(window.model.index(0, 1))
+    window.reveal(saved.id, True)
+    assert {item.row() for item in window.table.selectionModel().selectedRows()} == {0, 1, 2}
+    window.refresh()
+    assert {item.row() for item in window.table.selectionModel().selectedRows()} == {0, 1, 2}
+    window.reveal(saved.id, False)
+    assert len(window.table.selectionModel().selectedRows()) == 1
+
+
+@pytest.mark.parametrize("related", [False, True])
+@pytest.mark.parametrize("field_name", ["word", "pos", "translation"])
+@pytest.mark.parametrize("action", ["add_sense", "add_related"])
+@pytest.mark.parametrize("composing", [False, True])
+def test_add_shortcuts_work_from_each_form_input(window, qtbot, related, field_name, action, composing):
+    if related:
+        window.add_related()
+        qtbot.wait(10)
+    block = window.blocks[-1]
+    field = block.word if field_name == "word" else getattr(block.rows[0], field_name)
+    field.setFocus()
+    qtbot.wait(10)
+    assert field.hasFocus()
+    if composing:
+        QApplication.sendEvent(field, QInputMethodEvent("pin yin", []))
+    words_before, senses_before = len(window.blocks), len(block.rows)
+    key = Qt.Key.Key_J if action == "add_sense" else Qt.Key.Key_N
+    qtbot.keyClick(field, key, Qt.KeyboardModifier.ControlModifier)
+    qtbot.wait(10)
+    if action == "add_sense":
+        assert len(block.rows) == senses_before + 1
+        assert len(window.blocks) == words_before
+    else:
+        assert len(window.blocks) == words_before + 1
+        assert len(block.rows) == senses_before
+
+
 def test_shortcut_target_and_focus_labels(window, qtbot):
     window.blocks[0].word.setFocus()
     qtbot.wait(10)
@@ -101,6 +282,35 @@ def test_shortcut_target_and_focus_labels(window, qtbot):
     assert len(child.rows) == 1
     qtbot.keyClick(child.rows[-1].pos, Qt.Key.Key_K, Qt.KeyboardModifier.ControlModifier)
     assert len(child.rows) == 1
+
+
+@pytest.mark.parametrize("field_name", ["word", "translation"])
+@pytest.mark.parametrize("action,key", [("add_sense", Qt.Key.Key_Backspace), ("add_related", Qt.Key.Key_Delete)])
+def test_configured_shortcuts_take_priority_over_input_editing(window, qtbot, field_name, action, key):
+    sequence = "Ctrl+Backspace" if action == "add_sense" else "Ctrl+Delete"
+    window.shortcuts.update(dict(window.shortcuts.values, **{action: sequence}))
+    block = window.blocks[0]
+    field = block.word if field_name == "word" else block.rows[0].translation
+    if field_name == "word":
+        field.setText("keep this text")
+    else:
+        field.setPlainText("keep this text")
+    field.setFocus()
+    qtbot.keyClick(field, Qt.Key.Key_Home)
+    qtbot.keyClick(field, key, Qt.KeyboardModifier.ControlModifier)
+    qtbot.wait(10)
+    assert len(block.rows) == (2 if action == "add_sense" else 1)
+    assert len(window.blocks) == (2 if action == "add_related" else 1)
+    assert (field.text() if field_name == "word" else field.toPlainText()) == "keep this text"
+
+
+def test_sense_shortcut_resolves_live_input_focus_instead_of_cached_target(window, qtbot):
+    field = window.blocks[0].rows[0].translation
+    field.setFocus()
+    qtbot.wait(10)
+    window.active_block = None
+    qtbot.keyClick(field, Qt.Key.Key_J, Qt.KeyboardModifier.ControlModifier)
+    assert len(window.blocks[0].rows) == 2
 
 
 def test_tab_reverse_newline_and_star_space(window, qtbot):
@@ -162,7 +372,7 @@ def test_reserved_shortcuts_rejected(key):
         normalize_shortcut(key)
 
 
-def test_learning_and_star_actions_persist_and_undo(window, repo):
+def test_learning_and_star_actions_persist_and_restore_via_learned_filter(window, repo):
     saved = seed(repo)
     window.refresh()
     window.list_action(saved.id, "important")
@@ -170,7 +380,10 @@ def test_learning_and_star_actions_persist_and_undo(window, repo):
     window.list_action(saved.id, "learned")
     assert repo.get(saved.id).learned
     assert window.model.rowCount() == 0
-    window.undo_mark()
+    assert not hasattr(window, "undo")
+    window.set_filter("learned")
+    window.list_action(saved.id, "learned")
+    window.set_filter("pending")
     assert not repo.get(saved.id).learned and window.model.rowCount() == 1
 
 
