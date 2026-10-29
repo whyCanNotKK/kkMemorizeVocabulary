@@ -73,6 +73,7 @@ try {
     Write-Host '[5/6] Verifying the bundle and creating the portable ZIP...'
     Invoke-BuildCommand $python @('scripts/verify_release.py')
     Copy-Item -LiteralPath README.md -Destination dist/kkMemorizeVocabulary/README.md
+    Copy-Item -LiteralPath README.zh-CN.md -Destination dist/kkMemorizeVocabulary/README.zh-CN.md
     New-Item -ItemType Directory -Path dist/kkMemorizeVocabulary/docs -Force | Out-Null
     Copy-Item -Path docs/* -Destination dist/kkMemorizeVocabulary/docs -Recurse -Force
     Compress-Archive -Path dist/kkMemorizeVocabulary -DestinationPath dist/kkMemorizeVocabulary-windows-x64.zip -Force

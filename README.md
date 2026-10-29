@@ -1,44 +1,112 @@
 # kkMemorizeVocabulary
 
-完全离线的 Python / PySide6 桌面单词本：多词性、多行释义、附属关联词、重点星标、记忆状态、直接编辑和可配置快捷键。
+**English** | [简体中文](README.zh-CN.md)
 
-完整需求与架构见 [项目设计说明](docs/项目设计说明.md)。
+An offline vocabulary notebook for Windows. Enter English words, organize Chinese definitions, and hide answers for review. Built with Python, PySide6 / Qt Widgets, and SQLite, it stores all entries and settings locally.
 
-## 搜索与排序更新
+[GitHub repository](https://github.com/whyCanNotKK/kkMemorizeVocabulary) · [Releases](https://github.com/whyCanNotKK/kkMemorizeVocabulary/releases) · [Project design (Chinese)](docs/项目设计说明.md) · [Acceptance record (Chinese)](docs/验收记录.md)
 
-- 词性框聚焦时可按 n、v 选择名词、动词；按 a 选择形容词，已是 adj. 时再按 a 切换为 adv.，再按切回 adj.。仍可使用 1–9，主词、关联词和列表编辑一致。
-- 顶部搜索框自动匹配单词、翻译、关联词及其翻译的任意子字符串，忽略大小写和关键词首尾空格，切换分类保留关键词。导出仅包含当前分类中搜索匹配的完整词条（包含视口外结果）。
-- 搜索结果临时展开，直接显示全部翻译及关联词；清空搜索后恢复各词原来的遮掩状态。搜索期间不会通过逐词隐藏收起结果；全局隐藏开关仍会更新清空搜索后的基础状态。
-- 待记和已记列表按隐藏排序号、ID 升序，全部页先待记后已记。新增及切换记忆状态追加到目标分类末尾，编辑内容保留排序。
-- 操作栏左侧拖拽柄可移动整个词条组；鼠标释放后保存，Esc 或在列表外释放取消。全部页不支持拖拽；待记页左上角随机图标可打乱顺序，成功后列表自动回到顶部。搜索非空时禁用拖拽和随机。
-- 数据库自动从版本 1 升级到 2，按各分类现有 ID 顺序补齐排序号。新版 JSON 导出 version 2 并包含 sort_order，仍支持导入 version 1；旧版程序不能打开新版数据库或交换文件。
-- 导入文件全部词带排序号时按号稳定升序，否则按文件顺序；只借用该顺序，入库重新排号。先导入非重复词；重复词采用已有内容不变，采用导入内容会删除原词并新建 ID，追加到对应分类末尾。单条按点击顺序，全部采用按剩余候选顺序；同名连续采用以最后一次为准。
+## Features
 
-启动新版前可先按下文方法备份数据库；升级后请继续使用新版程序。
+- **Organize vocabulary**: multiple parts of speech and definitions, multiline translations, and related words with their own definitions.
+- **Review with hidden answers**: reveal an entire entry with one click, hide entries individually or globally, star important words, and track learned words.
+- **Edit quickly**: edit cells directly or load a complete entry into the bottom form; configure shortcuts for common actions.
+- **Search and reorder**: search words, related words, and translations; drag entire entries or shuffle the words still being learned.
+- **Exchange entries offline**: import and export complete entries as JSON, with side-by-side choices for duplicates.
+- **Keep your progress**: saved entries, learning status, order, and shortcuts persist in a local SQLite database.
 
-## 直接使用
+Designed for Windows 10/11 x64. Packaged builds include Python and Qt, so users need no Python installation or internet connection to install or run them. Setting up the source environment and building for the first time require internet access. The app currently has a Chinese interface and does not include an online dictionary, automatic translation, pronunciation, accounts, cloud sync, or spaced repetition.
 
-双击 `dist\kkMemorizeVocabulary-Setup.exe`，按安装向导选择目录并安装。默认仅安装给当前用户，无需管理员权限，创建开始菜单和桌面快捷方式；之后通过快捷方式启动。在 Windows“设置 → 应用”中可卸载，卸载保留单词和设置。成品适用于 Windows 10/11 x64，无需安装 Python，安装和使用均不联网。
+## Get started
 
-也可使用免安装 ZIP：解压后保留整个文件夹，双击其中的 `kkMemorizeVocabulary.exe`。
+### Installer or portable build
 
-1. 底部横向输入单词、词性、翻译，可添加多条释义和多个关联词；新词保存后追加到列表末尾，自动展开并滚动定位。
-2. 默认保存为重点词；保存按钮左侧星标可以切换，Tab 聚焦后也可按空格切换。
-3. 单击灰色遮罩揭晓整组答案，Ctrl+单击翻译重新隐藏；右上角“全局隐藏”开关控制所有筛选中的词条，每次启动默认隐藏。
-4. 双击单词、词性、翻译可直接修改；用保存快捷键或离开编辑框保存，Esc 取消。增删整组内容时点击铅笔。
-5. 圆圈标记已记下，红色横杠恢复待记，垃圾桶删除整个主词及其附属内容。点击列表星标立即保存。
-6. “快捷键设置”在顶部三个筛选标签右侧，底部保留“新增关联词”，有关联词时才显示“移除末项关联词”。快捷键修改后自动写入 SQLite 并立即生效，按钮提示同步更新。
-7. 选中主词或关联词时，整组词条连续高亮。录入框等高，使用“增加释义”“删除释义”增删末项释义，关联词之间用分割线区分；列表操作保持滚动位置，待记、全部和已记下分别记住本次运行的浏览位置，重启从顶部开始。恢复待记请使用已记下列表中的红色横杠。
-8. “全局隐藏”右侧依次为导入、导出图标，提示为“导入单词”“导出当前页面所有单词”。导出范围跟随当前分类及搜索关键词，导入完成后可在左右对比弹窗中处理重复主词。
-9. 录入区按实际内容计算高度，初始不预留下方空白，随关联词、释义增加自动增高，最多占窗口高度一半，再通过滚动查看内容；删除或保存后自动缩小，两区之间不再支持拖动调节。顶部正中的 V 形按钮可将整区收起到一行，再次点击展开；草稿和原输入位置保留。错误以保存按钮上方的居中文字提示显示，带紧凑深色背景遮挡下方内容，停留约 2 秒后上浮消失，不占用录入空间。仅有一条释义时隐藏“删除释义”。
-10. 关联词输入框左侧显示与列表一致的折角箭头，输入框略短，词性与翻译仍与主词对齐。快捷键适用于中英文输入状态，应用在自身窗口内优先按配置分发，并从实际焦点读取释义操作的目标词；切换到其他程序或打开设置时释放原生接收，不更改输入法设置。
-11. 单词列表的词性使用统一大小、文字居中的圆角标签，列宽随最长词性所需空间收紧。
+Check [Releases](https://github.com/whyCanNotKK/kkMemorizeVocabulary/releases) for packaged builds. If no release assets are available, run from source or build the app using the instructions below. GitHub's **Download ZIP** contains source code; generated files under `dist/` are not included in the repository.
 
-## JSON 导入导出
+| File | Usage |
+| --- | --- |
+| `kkMemorizeVocabulary-Setup.exe` | Run the installer. The default location is `%LOCALAPPDATA%\Programs\kkMemorizeVocabulary`, with no administrator access required. A Start menu shortcut is created; a desktop shortcut is optional. |
+| `kkMemorizeVocabulary-windows-x64.zip` | Extract the entire folder and run `kkMemorizeVocabulary.exe`. Keep the adjacent `_internal` directory. |
+| `kkMemorizeVocabulary-Setup.exe.sha256` | Installer SHA256 checksum, which you can compare with `Get-FileHash`. |
 
-导出文件为 UTF-8 JSON，范围跟随当前分类与搜索关键词，包含需要滚动才能看到的匹配词；隐藏或展开状态不影响导出，每个词都保留排序号、重点和记忆状态、所有释义、关联词及其全部释义。导出文件可直接用于导入，数组顺序及翻译内的换行保留。未保存的录入内容需先保存再导出。
+**`BuildInstaller.exe` in the repository root is a build tool.** It requires the source code, Python, and a build environment. To use the app, launch the installed application or `kkMemorizeVocabulary.exe` from the portable build.
 
-新导出格式版本为 2，最小示例（导入仍兼容版本 1）：
+### Run from source
+
+Install Python 3.12 x64 on Windows x64, then run these commands in PowerShell:
+
+```powershell
+git clone https://github.com/whyCanNotKK/kkMemorizeVocabulary.git
+cd kkMemorizeVocabulary
+py -3.12 -m venv .venv
+.\.venv\Scripts\python.exe -m pip install -r requirements.lock.txt
+.\.venv\Scripts\python.exe main.py --data-dir artifacts\development
+```
+
+If you have already downloaded the source, start with the environment creation command from the project root. If the `py` launcher is unavailable, use `python -m venv .venv` after confirming that `python` refers to Python 3.12 x64. The lock file includes runtime, testing, and packaging dependencies.
+
+These commands use an isolated development data directory. Once the environment is ready, you can also run `.\start.bat --data-dir artifacts\development`. For everyday use with the default data directory, run:
+
+```powershell
+.\.venv\Scripts\python.exe main.py
+```
+
+You can also double-click `start.bat`. It launches the app using the existing `.venv` and does not install dependencies automatically.
+
+## Using the app
+
+### Add and edit entries
+
+1. Enter a word, part of speech, and translation in the bottom form, then press **Ctrl+Enter** to save. Each main or related word requires a name and at least one complete definition. Enter inserts a new line in translation fields.
+2. Use “增加释义” (Add definition) for another meaning of the same word, or “新增关联词” (Add related word) for an attached word. Definition actions apply to the word containing the current focus. Each word must retain at least one definition.
+3. New entries are starred by default; use the star beside the Save button to change this. A saved new entry appears at the end of the words to learn, expands automatically, and scrolls into view.
+4. Double-click a name, part of speech, or translation in the table to edit it. Use the save shortcut or leave the editor to commit; Esc cancels. To add or remove related words or definitions, click the pencil to edit the whole entry, then save or cancel.
+
+Main words must be unique after trimming surrounding whitespace and ignoring case. Related words may share names and do not create reciprocal links automatically. Duplicate or invalid entries keep your input; duplicate warnings offer “查看已有词” (View existing word).
+
+The entry form grows with its content, up to half the window's client height, then scrolls internally. The chevron at its top center collapses or expands the form while retaining your draft. Collapsing does not save the draft; unsaved changes still need to be handled before exiting.
+
+### Review and learning status
+
+- The default tab is “待记” (To learn). You can also select “全部” (All) or “已记下” (Learned). Saved entries start with their answers hidden on each launch.
+- Click a gray mask to reveal all definitions and related words. **Ctrl+click a translation** to hide the entire group when not editing.
+- The global hide toggle at the top right affects all entries, including those outside the current category. Reveal states last only for the current session; newly saved entries still expand automatically.
+- Click the circle to mark an entry as learned, or the red minus in the Learned list to move it back. Table stars save immediately. The trash icon deletes the main word and all attached content after confirmation.
+- Each category remembers its scroll position during the current session. All start at the top after restarting.
+
+### Search and order
+
+Search matches literal substrings in main words, their translations, related words, and related translations. Matching ignores case and surrounding whitespace in the query. The query remains when switching categories. Matching entries appear as complete groups with all answers temporarily revealed; clearing the search restores their previous reveal states. Individual hiding is disabled during search, while the global toggle can still change the state restored afterward.
+
+Drag the handle on the left of an entry's actions to move its entire group within To learn or Learned. Release to save; Esc or releasing outside the table viewport cancels. All does not support dragging. The shuffle button at the top left of To learn randomizes the order and scrolls to the top on success. **Dragging and shuffling are disabled while the search query is nonempty.** Shuffling also requires at least two words to learn.
+
+Order is saved in the database. New entries and entries whose learning status changes go to the end of their destination category; ordinary edits preserve position. All shows words to learn first, followed by learned words.
+
+## Default shortcuts
+
+Open “快捷键设置” (Shortcut settings) at the top to customize the first six actions. Changes take effect immediately and are saved in the database. Shortcuts are handled within the app's own window and support both English and Chinese input modes.
+
+| Shortcut | Action |
+| --- | --- |
+| Ctrl+N | Add a related word and focus its name field |
+| Ctrl+M | Remove the last related word |
+| Ctrl+J | Add a definition to the currently focused word |
+| Ctrl+K | Remove that word's last definition, keeping at least one |
+| Ctrl+Enter | Save the whole entry; when editing a table cell, save that cell first |
+| Ctrl+I | Toggle the important flag for the main word in the bottom form |
+| Tab / Shift+Tab | Move focus forward / backward |
+| Enter | Insert a new line in a translation field |
+| Space | Open a focused part-of-speech selector, or toggle a focused star |
+| 1–9 | Select a part of speech when its selector has focus |
+| n / v / a | Select noun / verb / adjective; repeated a presses alternate between adj. and adv. |
+
+The number keys map to: 1 noun, 2 verb, 3 adjective, 4 adverb, 5 preposition, 6 pronoun, 7 conjunction, 8 interjection, and 9 other. Letter keys accept either case and work with the selector open or closed.
+
+## JSON import and export
+
+The import and export buttons sit to the right of the global hide toggle. Export includes **all saved entries matching both the current category and search query**, including results outside the visible viewport. Hidden answers are exported in full. Save draft entries before exporting them.
+
+Exports use UTF-8 JSON and include important flags, learning status, order, all definitions, and related words. Array order and line breaks inside translations are preserved. Shortcuts, internal database IDs, and temporary reveal states are excluded. Exports use version 2; imports accept versions 1 and 2:
 
 ```json
 {
@@ -59,94 +127,95 @@
 }
 ```
 
-除 `sort_order` 可缺省外，各字段均需提供，`related` 可为空数组，`senses` 至少有一条完整释义。排序号存在时须为正整数，不能为布尔值；它仅决定导入顺序，不会直接写入数据库。词性使用 `n.`、`v.`、`adj.`、`adv.`、`prep.`、`pron.`、`conj.`、`interj.` 或 `其他`；`important`、`learned` 使用 JSON 布尔值 `true` / `false`。格式或内容无效时会在写入任何词条前报错。
+All fields shown are required except `sort_order`. `related` may be empty; `senses` must contain at least one complete definition. Part-of-speech values are `n.`, `v.`, `adj.`, `adv.`, `prep.`, `pron.`, `conj.`, `interj.`, or `其他` (other). `important` and `learned` must be JSON booleans. When present, `sort_order` must be a positive integer, not a boolean. The entire file is validated first; an invalid format or entry prevents any entries from being written.
 
-导入仅按主词去除首尾空格、忽略大小写判断重复，关联词同名允许。全文件均有排序号时稳定升序，否则按文件顺序。先导入不重复的词，收集全部重复项（包括文件内重复），最后在弹窗中左右对比完整内容。点击左侧立即保留当前词条，点击右侧在同一事务中删除原词并新建，采用完整内容和状态，生成新 ID 及目标分类末尾排序号；成功后该对卡片消失，滚动位置保持不变。也可用“全部使用左侧”“全部使用右侧”直接处理剩余项目。单条按点击顺序，批量按剩余候选顺序，同名最后采用者生效，其余左侧卡片同步最新系统内容及 ID。关闭弹窗保留未处理的原词、已导入的新词和已确认的选择。
+Import order and duplicate handling:
 
-对比卡片用亮/暗星标展示重点；已记下时在主词行右侧显示绿色圆圈，悬停提示“已记住此单词”。关联词整体缩进四个空格；词性使用统一大小、文字居中的圆角标签，不显示横杠或补齐用空格。中文译文在标签右侧对齐显示，保留换行。
+- If every entry has a sort number, entries are processed in stable ascending order; otherwise, file order is used. The database assigns new sort numbers rather than reusing imported values.
+- Nonduplicate entries are imported in one transaction first. All duplicates then appear for comparison. Only main word names are compared, after trimming whitespace and ignoring case; duplicates within the same file are also detected.
+- Click the left card to keep the existing entry, or the right card to adopt the complete imported entry and its status. Adopting deletes and recreates the entry in one transaction, with a new ID and a position at the end of its destination category. Each successful choice immediately removes that card pair.
+- Use “全部使用左侧 / 右侧” (Use all left / right) to handle the remaining pairs. Individual choices apply in click order; batch choices follow the remaining candidate order. For repeated names, the last adopted entry wins. A failed batch adoption rolls back the entire batch.
+- Closing the comparison window keeps unresolved existing entries, newly imported words, and all choices already saved.
 
-JSON 交换词条不包含快捷键设置；完整程序数据备份仍可按下文复制数据库。
+## Data, backups, and updates
 
-## 默认快捷键
+The default data directory is `%LOCALAPPDATA%\kkMemorizeVocabulary`, separate from the installation directory:
 
-| 快捷键 | 操作 |
+| File | Contents |
 | --- | --- |
-| Ctrl+N | 新增关联词并聚焦其单词框 |
-| Ctrl+M | 移除最后一个关联词 |
-| Ctrl+J | 新增当前焦点所在词的释义 |
-| Ctrl+K | 移除当前词最后一条释义，至少保留一条 |
-| Ctrl+Enter | 保存整组；列表编辑时优先保存当前编辑 |
-| Ctrl+I | 切换底部主词的重点状态 |
-| Tab / Shift+Tab | 正向 / 反向切换焦点 |
-| Enter | 翻译输入框内换行 |
-| 空格 | 打开词性下拉框；星标聚焦时切换重点 |
-| 1–9 | 词性框聚焦时直接选择词性 |
-| n / v / a | 选择名词 / 动词 / 形容词；a 可在 adj. 与 adv. 间切换 |
+| `vocabulary.sqlite3` | All entries, important flags, learning status, order, and shortcuts |
+| `application.log` and rotated logs | Errors and diagnostic information |
 
-词性数字：1 名词、2 动词、3 形容词、4 副词、5 介词、6 代词、7 连词、8 感叹词、9 其他。数字只在下拉选项中显示。
+**Back up or restore**: close the app before copying or restoring the database file. While the app is running, `vocabulary.sqlite3-wal` and `vocabulary.sqlite3-shm` may exist; do not move or delete them individually during use. JSON is useful for exchanging entries; a complete backup should use the database to retain shortcut settings.
 
-删除已填写内容时会确认，默认聚焦确认按钮，空格确认、Esc 取消。主词重名会保留输入并提供定位入口，不覆盖原内容。
+**Update**: close the app first. For an installed build, run the new installer using the same installation directory. For a portable build, replace the complete application folder. The user data directory is retained, including when uninstalling through Windows Settings → Apps.
 
-## 数据、备份与更新
+**Compatibility**: the current SQLite schema version is 2. Version 1 databases migrate automatically, preserving the order within each category. Back up before upgrading and continue using the newer app afterward; older versions cannot open v2 databases or v2 JSON files. Database and application versions are managed separately.
 
-默认数据目录为 `%LOCALAPPDATA%\kkMemorizeVocabulary`：
-
-- `vocabulary.sqlite3` 保存全部词条、状态和快捷键；`application.log` 为自动轮转的错误日志。
-- 备份和恢复前先退出程序，再复制数据库文件。运行时可能存在 `-wal` 和 `-shm` 文件，不要单独移动或删除。
-- 安装版更新时退出程序，再运行新的 `kkMemorizeVocabulary-Setup.exe`，使用原安装目录；免安装版替换发布程序文件夹。两种方式均保留用户数据目录，卸载安装版也保留该目录。
-- 自定义目录：`kkMemorizeVocabulary.exe --data-dir "D:\MyVocabulary"`。
-
-## 源码运行
-
-需要 Windows 64 位 Python 3.12，首次安装依赖需要联网：
+To use another writable data directory, launch with:
 
 ```powershell
-python -m venv .venv
-.\.venv\Scripts\python.exe -m pip install -r requirements.lock.txt
-.\.venv\Scripts\python.exe main.py
+.\kkMemorizeVocabulary.exe --data-dir "D:\MyVocabulary"
 ```
 
-也可双击 `start.bat`。开发数据建议隔离：
+Portable builds also use the default user data directory unless `--data-dir` is supplied. Set this explicitly if you want to carry data with the application folder.
 
-```powershell
-.\.venv\Scripts\python.exe main.py --data-dir artifacts\development
-```
+## Development and verification
 
-## 测试与打包
-
-**一键生成安装包：双击根目录的 `BuildInstaller.exe`。** 它会自动检查环境、准备依赖和打包工具、执行测试、构建和校验程序，再生成安装包；成功后打开输出目录并选中安装包。窗口显示进度，结束后按 Enter 关闭。该入口需要与项目源码和 `build.ps1` 放在一起，每次打包当前源码。
-
-构建电脑需要 Windows x64 和 Python 3.12 x64。缺少 `.venv` 时自动创建，依赖不齐时按 `requirements.lock.txt` 安装。首次需要联网下载依赖及 Inno Setup 6.7.3；后者校验 SHA256 并以便携模式缓存于 `build\tools`，无需另装编译器。环境齐全后再次构建无需重新下载。
-
-命令行方式与双击入口执行同一流程：
+Use `--data-dir artifacts\development` for development as shown above. Automated tests use temporary databases and do not write to the default user data directory:
 
 ```powershell
 .\.venv\Scripts\python.exe -m pytest -q
-powershell -ExecutionPolicy Bypass -File build.ps1
 ```
 
-输出：
-
-- `dist\kkMemorizeVocabulary-Setup.exe`：可单独复制到其他电脑、双击安装的完整安装包。
-- `dist\kkMemorizeVocabulary-Setup.exe.sha256`：安装包校验值。
-- `dist\kkMemorizeVocabulary\` 及 `dist\kkMemorizeVocabulary-windows-x64.zip`：免安装版，必须保留 EXE 旁的 `_internal` 目录。
-
-构建日志为 `build\installer-build.log`。失败时窗口显示 `BUILD FAILED` 并返回非零退出码；此时 `dist` 中可能仍有上次的安装包，不代表本次成功。重复双击时只允许一个构建运行。安装包版本读取 `pyproject.toml`，安装配置位于 `installer\`。
-
-根目录入口的源码为 `scripts\BuildInstaller.cs`；修改入口后可用 Windows 自带 .NET Framework 编译器重建：
-
-```powershell
-powershell -ExecutionPolicy Bypass -File scripts\build-launcher.ps1
-```
-
-打包脚本会隔离依赖搜索路径，并校验包内源码一致性及 Windows/ICU 依赖，避免其他开发工具的 DLL 混入发布程序。
-
-隔离冒烟检查会写入演示词并自动退出，必须显式指定测试目录：
+The source smoke check writes demonstration entries, produces `smoke-result.json` and interface screenshots, then exits automatically. **An explicit isolated directory is required**:
 
 ```powershell
 .\.venv\Scripts\python.exe main.py --smoke-test --data-dir artifacts\source-smoke
 ```
 
-同一目录再次启动可验证重启后的数据和快捷键恢复。目录内输出 JSON 验证结果及界面截图。
+Run the same command again to check data and shortcut restoration after restart. Inspect `ok` and the individual checks in the report. Historical results and acceptance details are in the [acceptance record (Chinese)](docs/验收记录.md).
 
-第一版不包含联网词典、云同步、自动发音或记忆算法。
+| Path | Responsibility |
+| --- | --- |
+| `main.py`, `vocabulary/app.py` | Arguments, data directory, logging, and application lifecycle |
+| `vocabulary/domain.py`, `vocabulary/storage.py` | Domain objects, validation, SQLite, and transactions |
+| `vocabulary/window.py`, `vocabulary/table.py`, `vocabulary/widgets.py` | Window coordination, table editing, and input controls |
+| `vocabulary/shortcuts.py`, `vocabulary/native_shortcuts.py`, `vocabulary/theme.py` | Shortcuts, Windows native key handling, and appearance |
+| `vocabulary/transfer.py`, `vocabulary/import_dialog.py` | JSON format and duplicate comparison |
+| `tests/` | Storage and interface tests |
+| `build.ps1`, `installer/`, `scripts/` | Building, installer configuration, and release verification |
+
+The [project design (Chinese)](docs/项目设计说明.md) defines requirements, module boundaries, and data version policies. Update it and any affected data version strategy before implementing new features.
+
+## Build a Windows installer
+
+The build machine needs Windows x64 and Python 3.12 x64. Double-click **`BuildInstaller.exe`** in the repository root, or run this command from the project root:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File build.ps1
+```
+
+The launcher invokes the adjacent `build.ps1`, displays progress, and keeps its window open until you press Enter. On success, it opens the output directory with the installer selected. Keep the launcher with the source code; each build packages the current source.
+
+The script creates `.venv` if missing, installs missing locked dependencies, prepares Inno Setup, runs tests, builds with PyInstaller, verifies bundled source and DLLs, and generates the portable ZIP and installer. The first build downloads the pinned Inno Setup 6.7.3, checks its SHA256, and caches a portable compiler in `build\tools`. No global compiler installation is required; later builds can reuse the prepared environment and cache.
+
+Successful builds produce:
+
+| Path | Contents |
+| --- | --- |
+| `dist\kkMemorizeVocabulary-Setup.exe` | Complete installer that can be distributed on its own |
+| `dist\kkMemorizeVocabulary-Setup.exe.sha256` | Installer SHA256 checksum |
+| `dist\kkMemorizeVocabulary\` | Complete portable application directory, including `_internal` |
+| `dist\kkMemorizeVocabulary-windows-x64.zip` | Portable application archive |
+| `build\installer-build.log` | Build log |
+
+Both README language versions are included in the packaged application. The installer version comes from `pyproject.toml`. A failure prints `BUILD FAILED` and returns a nonzero exit code; old files may remain under `dist/`, so their presence alone does not indicate success. Only one build can run at a time.
+
+After editing the launcher source, `scripts\BuildInstaller.cs`, rebuild it with the .NET Framework compiler included with Windows:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\build-launcher.ps1
+```
+
+If a packaged app reports a Qt DLL loading error, check that its complete application directory is present, then rebuild and verify it with the build script. The script isolates dependency search paths and checks source consistency and Windows / ICU dependencies to prevent DLLs from other development tools entering the bundle.
