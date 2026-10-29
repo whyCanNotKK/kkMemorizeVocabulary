@@ -24,9 +24,11 @@ def run_smoke(app, window, directory: Path):
         assert all(row.hidden for row in window.model.rows)
         assert window.settings_button.text() == "快捷键设置"
         assert window.add_related_button.text().startswith("新增关联词  ")
+        assert window.remove_related_button.isHidden()
         footer = (window.add_related_button, window.remove_related_button,
                   window.star_button, window.save_button)
-        centers = [control.mapTo(window, control.rect().center()).y() for control in footer]
+        centers = [control.mapTo(window, control.rect().center()).y()
+                   for control in footer if control.isVisible()]
         assert max(centers) - min(centers) <= 2
         tabs = list(window.filter_buttons.values())
         assert abs(window.settings_button.mapTo(window, QPoint(0, 0)).y()
@@ -63,6 +65,7 @@ def run_smoke(app, window, directory: Path):
             QTest.keyClick(block.rows[0].translation, Qt.Key.Key_N, Qt.KeyboardModifier.ControlModifier)
             QTest.qWait(30)
             child = window.blocks[-1]
+            assert window.remove_related_button.isVisible()
             child.word.setText("serendipitous")
             child.rows[0].pos.setFocus()
             QTest.keyClick(child.rows[0].pos, Qt.Key.Key_3)

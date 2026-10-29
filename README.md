@@ -18,14 +18,16 @@
 
 ## 直接使用
 
-解压发布 ZIP，保留整个文件夹，双击 `kkMemorizeVocabulary.exe`。无需安装 Python，使用时不联网。
+双击 `dist\kkMemorizeVocabulary-Setup.exe`，按安装向导选择目录并安装。默认仅安装给当前用户，无需管理员权限，创建开始菜单和桌面快捷方式；之后通过快捷方式启动。在 Windows“设置 → 应用”中可卸载，卸载保留单词和设置。成品适用于 Windows 10/11 x64，无需安装 Python，安装和使用均不联网。
+
+也可使用免安装 ZIP：解压后保留整个文件夹，双击其中的 `kkMemorizeVocabulary.exe`。
 
 1. 底部横向输入单词、词性、翻译，可添加多条释义和多个关联词；新词保存后追加到列表末尾，自动展开并滚动定位。
 2. 默认保存为重点词；保存按钮左侧星标可以切换，Tab 聚焦后也可按空格切换。
 3. 单击灰色遮罩揭晓整组答案，Ctrl+单击翻译重新隐藏；右上角“全局隐藏”开关控制所有筛选中的词条，每次启动默认隐藏。
 4. 双击单词、词性、翻译可直接修改；用保存快捷键或离开编辑框保存，Esc 取消。增删整组内容时点击铅笔。
 5. 圆圈标记已记下，红色横杠恢复待记，垃圾桶删除整个主词及其附属内容。点击列表星标立即保存。
-6. “快捷键设置”在顶部三个筛选标签右侧，底部保留“新增关联词”和“移除末项关联词”。快捷键修改后自动写入 SQLite 并立即生效，按钮提示同步更新。
+6. “快捷键设置”在顶部三个筛选标签右侧，底部保留“新增关联词”，有关联词时才显示“移除末项关联词”。快捷键修改后自动写入 SQLite 并立即生效，按钮提示同步更新。
 7. 选中主词或关联词时，整组词条连续高亮。录入框等高，使用“增加释义”“删除释义”增删末项释义，关联词之间用分割线区分；列表操作保持滚动位置，待记、全部和已记下分别记住本次运行的浏览位置，重启从顶部开始。恢复待记请使用已记下列表中的红色横杠。
 8. “全局隐藏”右侧依次为导入、导出图标，提示为“导入单词”“导出当前页面所有单词”。导出范围跟随当前分类及搜索关键词，导入完成后可在左右对比弹窗中处理重复主词。
 9. 录入区按实际内容计算高度，初始不预留下方空白，随关联词、释义增加自动增高，最多占窗口高度一半，再通过滚动查看内容；删除或保存后自动缩小，两区之间不再支持拖动调节。顶部正中的 V 形按钮可将整区收起到一行，再次点击展开；草稿和原输入位置保留。错误以保存按钮上方的居中文字提示显示，带紧凑深色背景遮挡下方内容，停留约 2 秒后上浮消失，不占用录入空间。仅有一条释义时隐藏“删除释义”。
@@ -91,7 +93,7 @@ JSON 交换词条不包含快捷键设置；完整程序数据备份仍可按下
 
 - `vocabulary.sqlite3` 保存全部词条、状态和快捷键；`application.log` 为自动轮转的错误日志。
 - 备份和恢复前先退出程序，再复制数据库文件。运行时可能存在 `-wal` 和 `-shm` 文件，不要单独移动或删除。
-- 更新时替换发布程序文件夹，保留用户数据目录。
+- 安装版更新时退出程序，再运行新的 `kkMemorizeVocabulary-Setup.exe`，使用原安装目录；免安装版替换发布程序文件夹。两种方式均保留用户数据目录，卸载安装版也保留该目录。
 - 自定义目录：`kkMemorizeVocabulary.exe --data-dir "D:\MyVocabulary"`。
 
 ## 源码运行
@@ -112,12 +114,30 @@ python -m venv .venv
 
 ## 测试与打包
 
+**一键生成安装包：双击根目录的 `BuildInstaller.exe`。** 它会自动检查环境、准备依赖和打包工具、执行测试、构建和校验程序，再生成安装包；成功后打开输出目录并选中安装包。窗口显示进度，结束后按 Enter 关闭。该入口需要与项目源码和 `build.ps1` 放在一起，每次打包当前源码。
+
+构建电脑需要 Windows x64 和 Python 3.12 x64。缺少 `.venv` 时自动创建，依赖不齐时按 `requirements.lock.txt` 安装。首次需要联网下载依赖及 Inno Setup 6.7.3；后者校验 SHA256 并以便携模式缓存于 `build\tools`，无需另装编译器。环境齐全后再次构建无需重新下载。
+
+命令行方式与双击入口执行同一流程：
+
 ```powershell
 .\.venv\Scripts\python.exe -m pytest -q
 powershell -ExecutionPolicy Bypass -File build.ps1
 ```
 
-输出为 `dist\kkMemorizeVocabulary\` 及 `dist\kkMemorizeVocabulary-windows-x64.zip`。发布时必须保留 EXE 旁的 `_internal` 目录。
+输出：
+
+- `dist\kkMemorizeVocabulary-Setup.exe`：可单独复制到其他电脑、双击安装的完整安装包。
+- `dist\kkMemorizeVocabulary-Setup.exe.sha256`：安装包校验值。
+- `dist\kkMemorizeVocabulary\` 及 `dist\kkMemorizeVocabulary-windows-x64.zip`：免安装版，必须保留 EXE 旁的 `_internal` 目录。
+
+构建日志为 `build\installer-build.log`。失败时窗口显示 `BUILD FAILED` 并返回非零退出码；此时 `dist` 中可能仍有上次的安装包，不代表本次成功。重复双击时只允许一个构建运行。安装包版本读取 `pyproject.toml`，安装配置位于 `installer\`。
+
+根目录入口的源码为 `scripts\BuildInstaller.cs`；修改入口后可用 Windows 自带 .NET Framework 编译器重建：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\build-launcher.ps1
+```
 
 打包脚本会隔离依赖搜索路径，并校验包内源码一致性及 Windows/ICU 依赖，避免其他开发工具的 DLL 混入发布程序。
 

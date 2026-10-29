@@ -409,7 +409,9 @@ class MainWindow(QMainWindow):
         self.update_tab_order()
 
     def update_related_actions(self):
-        self.remove_related_button.setEnabled(len(self.blocks) > 1)
+        has_related = len(self.blocks) > 1
+        self.remove_related_button.setEnabled(has_related)
+        self.remove_related_button.setVisible(has_related)
 
     def form_value(self):
         if not self.blocks:
