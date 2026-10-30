@@ -39,7 +39,7 @@ def confirm_remove(parent, message: str) -> bool:
 
 
 class FloatingNotice(QFrame):
-    """A focus-preserving overlay anchored above a control, outside layouts."""
+    """A focus-preserving overlay above a control or at the window bottom."""
     actionTriggered = Signal()
 
     def __init__(self, parent):
@@ -81,7 +81,7 @@ class FloatingNotice(QFrame):
         self.animation.finished.connect(self.hide)
         self.hide()
 
-    def show_message(self, text, anchor, with_action=False):
+    def show_message(self, text, anchor=None, with_action=False):
         self.animation.stop()
         self.label.setText(text)
         self.action.setVisible(with_action)
@@ -90,7 +90,11 @@ class FloatingNotice(QFrame):
                        for line in text.splitlines()), default=0) + 2
         self.label.setFixedWidth(min(maximum, max(1, natural)))
         self.adjustSize()
-        point = anchor.mapTo(self.parentWidget(), QPoint(anchor.width() // 2, -self.height() - 8))
+        if anchor is None:
+            point = QPoint(self.parentWidget().width() // 2,
+                           self.parentWidget().height() - self.height() - 20)
+        else:
+            point = anchor.mapTo(self.parentWidget(), QPoint(anchor.width() // 2, -self.height() - 8))
         point.setX(max(12, min(point.x() - self.width() // 2, self.parentWidget().width() - self.width() - 12)))
         point.setY(max(12, point.y()))
         self.motion_in.setStartValue(point + QPoint(0, 12))

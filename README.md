@@ -71,6 +71,7 @@ The entry form grows with its content, up to half the window's client height, th
 
 - The default tab is “待记” (To learn). You can also select “全部” (All) or “已记下” (Learned). Saved entries start with their answers hidden on each launch.
 - Click a gray mask to reveal all definitions and related words. **Ctrl+click a translation** to hide the entire group when not editing.
+- Left-click directly on a main or visible related word to copy its full name, including when a long name is shortened on screen. A brief notice appears at the bottom center of the window. This also works on the study page.
 - The global hide toggle at the top right affects all entries, including those outside the current category. Reveal states last only for the current session; newly saved entries still expand automatically.
 - Click the circle to mark an entry as learned, or the red minus in the Learned list to move it back. Table stars save immediately. The trash icon deletes the main word and all attached content after confirmation.
 - Each category remembers its scroll position during the current session. All start at the top after restarting.

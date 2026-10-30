@@ -4,7 +4,7 @@ import time
 
 import shiboken6
 from PySide6.QtCore import QAbstractTableModel, QEasingCurve, QEvent, QItemSelection, QItemSelectionModel, QModelIndex, QPoint, QPersistentModelIndex, QRect, QRectF, QSize, Qt, QTimer, QVariantAnimation, Signal
-from PySide6.QtGui import QColor, QFont, QPainter, QPen, QTextDocument, QTextOption
+from PySide6.QtGui import QColor, QFont, QFontMetricsF, QPainter, QPen, QTextDocument, QTextOption
 from PySide6.QtWidgets import (
     QAbstractItemView, QApplication, QHeaderView, QLineEdit, QPlainTextEdit,
     QPushButton, QStyle, QStyledItemDelegate, QStyleOptionViewItem, QTableView,
@@ -135,6 +135,27 @@ class WordDelegate(QStyledItemDelegate):
         self.edit_index = None
         self._committing = False
 
+    def word_layout(self, index, rect, base_font):
+        """Use the same word geometry for painting and pointer hit testing."""
+        row = index.data(Qt.ItemDataRole.UserRole)
+        font = QFont(base_font)
+        font.setPixelSize(15 if row.owner == -1 else 13)
+        font.setWeight(QFont.Weight.DemiBold if row.owner == -1 else QFont.Weight.Normal)
+        left = 26 if row.owner >= 0 else 10
+        area = QRectF(rect).adjusted(left, row.top_padding, -10, -row.top_padding)
+        metrics = QFontMetricsF(font)
+        text = metrics.elidedText(index.data() or "", Qt.TextElideMode.ElideRight, area.width())
+        return font, text, area
+
+    def word_hit(self, index, point):
+        row = index.data(Qt.ItemDataRole.UserRole)
+        if index.column() != 1 or row is None or row.sense != 0:
+            return False
+        rect = self.view.visualRect(index)
+        font, text, area = self.word_layout(index, rect, self.view.font())
+        bounds = QFontMetricsF(font).boundingRect(area, Qt.AlignmentFlag.AlignTop, text)
+        return bool(text) and bounds.intersected(area).intersected(QRectF(rect)).contains(point)
+
     def paint(self, painter, option, index):
         row = index.data(Qt.ItemDataRole.UserRole)
         if row is None:
@@ -176,19 +197,14 @@ class WordDelegate(QStyledItemDelegate):
             text = index.data() or ""
             font = QFont(option.font)
             if column == 1:
-                font.setPixelSize(15 if row.owner == -1 else 13)
-                font.setWeight(QFont.Weight.DemiBold if row.owner == -1 else QFont.Weight.Normal)
+                font, text, area = self.word_layout(index, rect, option.font)
                 painter.setFont(font)
                 painter.setPen(QColor(TEXT if row.owner == -1 else "#bdc8d5"))
-                left = 10
                 if row.owner >= 0 and row.sense == 0:
                     x, y = int(rect.left()) + 12, int(rect.top()) + top + 3
                     draw_related_arrow(painter, x, y)
-                    left = 26
                     painter.setPen(QColor("#bdc8d5"))
-                metrics = painter.fontMetrics()
-                text = metrics.elidedText(text, Qt.TextElideMode.ElideRight, int(rect.width()) - left - 10)
-                painter.drawText(rect.adjusted(left, top, -10, -top), Qt.AlignmentFlag.AlignTop, text)
+                painter.drawText(area, Qt.AlignmentFlag.AlignTop, text)
             elif column == 2:
                 badge = QRectF(rect.left() + (rect.width() - self.view.pos_badge_width) / 2,
                                rect.top() + top, self.view.pos_badge_width, 20)
@@ -324,6 +340,7 @@ class WordDelegate(QStyledItemDelegate):
 
 
 class WordTable(QTableView):
+    wordClicked = Signal(str)
     revealRequested = Signal(int, bool)
     actionRequested = Signal(int, str)
     moveRequested = Signal(int, int)
@@ -465,6 +482,8 @@ class WordTable(QTableView):
                 self.revealRequested.emit(row.entry.id, False)
                 event.accept()
                 return
+            if self.delegate.word_hit(index, event.position()):
+                self.wordClicked.emit(row.word.text)
         super().mousePressEvent(event)
 
     def _begin_drag(self, point):

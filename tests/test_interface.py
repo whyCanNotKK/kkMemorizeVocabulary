@@ -54,6 +54,101 @@ def test_repeated_floating_notice_replaces_message_and_restarts_duration(window,
     window.toast.dismiss()
 
 
+def test_click_word_copies_full_name_with_bottom_notice(window, repo, qtbot):
+    from PySide6.QtCore import QPoint
+
+    saved = seed(repo)
+    window.refresh()
+    clipboard = QApplication.clipboard()
+    rect = window.table.visualRect(window.model.index(0, 1))
+    qtbot.mouseClick(window.table.viewport(), Qt.MouseButton.LeftButton,
+                    pos=rect.topLeft() + QPoint(15, 14))
+    assert clipboard.text() == "record"
+    assert window.model.rows[0].hidden  # Copying does not reveal answers.
+    assert window.toast.label.text() == "已复制：record"
+    assert window.toast.isVisible() and not window.toast.action.isVisible()
+    qtbot.waitUntil(lambda: window.toast.opacity.opacity() > 0.99, timeout=1000)
+    root = window.centralWidget()
+    assert abs(window.toast.geometry().center().x() - root.rect().center().x()) <= 1
+    assert 18 <= root.height() - window.toast.geometry().bottom() <= 22
+
+    window.reveal(saved.id, True)
+    rect = window.table.visualRect(window.model.index(2, 1))
+    qtbot.mouseClick(window.table.viewport(), Qt.MouseButton.LeftButton,
+                    pos=rect.topLeft() + QPoint(31, 10))
+    assert clipboard.text() == "recorder"
+    assert window.toast.label.text() == "已复制：recorder"
+    assert window.table.currentIndex() == window.model.index(2, 1)
+
+    long_word = "VeryLongWord" * 8
+    repo.save(WordEntry(long_word, [Sense("n.", "长词")]))
+    window.refresh()
+    rect = window.table.visualRect(window.model.index(3, 1))
+    # The ellipsis is clickable, but the clipboard receives the unabridged name.
+    qtbot.mouseClick(window.table.viewport(), Qt.MouseButton.LeftButton,
+                    pos=QPoint(rect.right() - 14, rect.top() + 14))
+    assert clipboard.text() == long_word
+
+
+def test_copy_requires_left_click_on_visible_word_text(window, repo, qtbot):
+    from PySide6.QtCore import QPoint
+
+    saved = seed(repo)
+    window.reveal(saved.id, True)
+    clipboard = QApplication.clipboard()
+    clipboard.setText("unchanged")
+    table = window.table
+    main = table.visualRect(window.model.index(0, 1))
+    child = table.visualRect(window.model.index(2, 1))
+    for point in (
+            main.topLeft() + QPoint(2, 14),  # Left padding.
+            main.topLeft() + QPoint(15, 2),  # Above the text.
+            QPoint(main.right() - 5, main.center().y()),  # Trailing whitespace.
+            child.topLeft() + QPoint(16, 10),  # Related-word arrow.
+            table.visualRect(window.model.index(1, 1)).center(),  # Extra sense.
+            table.visualRect(window.model.index(0, 2)).center(),  # Part of speech.
+            table.visualRect(window.model.index(0, 3)).center(),  # Translation.
+    ):
+        qtbot.mouseClick(table.viewport(), Qt.MouseButton.LeftButton, pos=point)
+        assert clipboard.text() == "unchanged"
+        assert not window.toast.isVisible()
+    for button in (Qt.MouseButton.RightButton, Qt.MouseButton.MiddleButton):
+        qtbot.mouseClick(table.viewport(), button, pos=main.topLeft() + QPoint(15, 14))
+        assert clipboard.text() == "unchanged"
+        assert not window.toast.isVisible()
+
+
+@pytest.mark.parametrize("page", ["pending", "all", "learned", "study17"])
+def test_copy_works_in_all_lists_with_form_hidden_or_collapsed(window, repo, qtbot, page):
+    from PySide6.QtCore import QPoint
+
+    saved = seed(repo)
+    if page == "learned":
+        repo.set_flag(saved.id, "learned", True)
+    if page == "study17":
+        from datetime import date
+        from vocabulary.learning import StudyContext
+
+        context = StudyContext(date(2026, 10, 30), False)
+        repo.prepare_study(context)
+        window.set_filter(page)
+        window.study_page.load(context)
+        table = window.study_page.table
+    else:
+        window.set_filter(page)
+        window.refresh()
+        window.set_form_collapsed(True)
+        table = window.table
+    QApplication.clipboard().setText("unchanged")
+    qtbot.wait(20)
+    rect = table.visualRect(table.model().index(0, 1))
+    qtbot.mouseClick(table.viewport(), Qt.MouseButton.LeftButton,
+                    pos=rect.topLeft() + QPoint(15, 14))
+    assert QApplication.clipboard().text() == "record"
+    assert window.toast.isVisible()
+    assert window.toast.label.text() == "已复制：record"
+
+
 def test_collapse_preserves_draft_focus_and_automatic_height(window, qtbot):
     fill_form(window)
     window.add_related()

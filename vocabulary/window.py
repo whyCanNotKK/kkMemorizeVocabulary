@@ -100,6 +100,7 @@ class MainWindow(QMainWindow):
 
         self.model = WordTableModel(self.commit_cell, self)
         self.table = WordTable(self.model, self.before_inline)
+        self.table.wordClicked.connect(self.copy_word)
         self.table.revealRequested.connect(self.reveal)
         self.table.actionRequested.connect(self.list_action)
         self.table.moveRequested.connect(self.move_word)
@@ -107,6 +108,7 @@ class MainWindow(QMainWindow):
         self.table.delegate.editingChanged.connect(self.inline_changed)
         list_layout.addWidget(self.table, 1)
         self.study_page = StudyPage(repository)
+        self.study_page.table.wordClicked.connect(self.copy_word)
         self.study_page.error.connect(lambda text: self.show_notice(text, True))
         self.study_page.hide()
         list_layout.addWidget(self.study_page, 1)
@@ -214,6 +216,10 @@ class MainWindow(QMainWindow):
         self.refresh()
         QApplication.instance().focusChanged.connect(self.focus_changed)
         QTimer.singleShot(0, self.blocks[0].word.setFocus)
+
+    def copy_word(self, text):
+        QApplication.clipboard().setText(text)
+        self.toast.show_message(f"已复制：{text}")
 
     def show_notice(self, text, error=False, duplicate=False):
         if error:
