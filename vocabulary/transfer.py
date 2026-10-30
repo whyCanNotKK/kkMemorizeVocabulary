@@ -106,8 +106,11 @@ def read_entries(path: str | Path) -> list[WordEntry]:
 
 def write_entries(path: str | Path, entries: list[WordEntry]):
     """Replace the destination only after a complete file has been written."""
+    write_text_atomically(path, serialize_entries(entries))
+
+
+def write_text_atomically(path: str | Path, content: str):
     path = Path(path)
-    content = serialize_entries(entries)
     temporary = None
     try:
         with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", newline="\n",

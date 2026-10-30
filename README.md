@@ -14,8 +14,9 @@ An offline vocabulary notebook for Windows. Enter English words, organize Chines
 - **Search and reorder**: search words, related words, and translations; drag entire entries or shuffle the words still being learned.
 - **Exchange entries offline**: import and export complete entries as JSON, with side-by-side choices for duplicates.
 - **Keep your progress**: saved entries, learning status, order, and shortcuts persist in a local SQLite database.
+- **Seventeen-day study**: study up to 30 new words daily in fixed groups, with morning and afternoon completion and scheduled reviews.
 
-Designed for Windows 10/11 x64. Packaged builds include Python and Qt, so users need no Python installation or internet connection to install or run them. Setting up the source environment and building for the first time require internet access. The app currently has a Chinese interface and does not include an online dictionary, automatic translation, pronunciation, accounts, cloud sync, or spaced repetition.
+Designed for Windows 10/11 x64. Packaged builds include Python and Qt, so users need no Python installation or internet connection to install or run them. Setting up the source environment and building for the first time require internet access. The app currently has a Chinese interface and does not include an online dictionary, automatic translation, pronunciation, accounts, or cloud sync.
 
 ## Get started
 
@@ -81,6 +82,20 @@ Search matches literal substrings in main words, their translations, related wor
 Drag the handle on the left of an entry's actions to move its entire group within To learn or Learned. Release to save; Esc or releasing outside the table viewport cancels. All does not support dragging. The shuffle button at the top left of To learn randomizes the order and scrolls to the top on success. **Dragging and shuffling are disabled while the search query is nonempty.** Shuffling also requires at least two words to learn.
 
 Order is saved in the database. New entries and entries whose learning status changes go to the end of their destination category; ordinary edits preserve position. All shows words to learn first, followed by learned words.
+
+### Seventeen-day study
+
+Open “十七天背单词” to load study tasks. On the first morning visit each day, the app draws up to 30 unselected To learn words into permanent groups of up to 10. The batch stays fixed even after restarting; a short or empty batch is not topped up. Older tasks appear first. Group numbers replace stars, and entries only offer a study completion action, with no editing or dragging.
+
+Entering the page or clicking its refresh icon captures the date and period in Beijing time: morning before 15:00, afternoon from 15:00 onward. Actions keep using that captured date and period until you refresh or reenter, including across midnight. Search and the entry form are hidden on this page. Drafts and the form's collapsed state are preserved, and form shortcuts are inactive until returning to another page. Answer masks and the global hide toggle remain available.
+
+Complete each word in both periods. An afternoon completion settles the round only after its morning completion; completing the morning after an earlier afternoon clears that afternoon mark so another afternoon review is required. Missed sessions retain their progress. The stages are days 1, 2, 4, 7 and 15, with successive gaps of 1, 2, 3 and 8 days counted from the actual settled date. Finished words stay excluded from future draws. Study progress does not change the original Learned status.
+
+The import/export icons on this page use a separate study file: UTF-8 JSON with `format: kkMemorizeVocabulary.study17`, `version: 1`. It includes complete entries for every participating word, their progress keyed by normalized word text rather than database IDs, and daily draw dates and the group counter. Future, already reviewed and fully finished words are all included. Exporting does not change progress.
+
+If local progress exists, importing offers “导入单词和进度” (Words and progress), “仅导入单词” (Words only), or Cancel. Words use the existing duplicate comparison dialog and immediate-save behavior. Unresolved comparisons retain the local entries when closed. Progress is then mapped to the final local IDs and replaces all local study records and draw settings in one transaction, preserving file dates and group numbers. Words-only imports retain local progress, including rebinding it when an adopted entry changes ID. If progress restoration fails, it rolls back that phase while retaining words already saved, and you can retry. Canceling or selecting an invalid file makes no changes.
+
+Successful progress restoration reloads the page's date, period and tasks without drawing new words; the next explicit refresh or page visit uses the restored daily markers. Ordinary word JSON remains version 2 and exchanges entries only; the two file formats use separate import paths. Importing over a participating word preserves its progress, and deleting the word deletes it. A database backup preserves all entries, progress and shortcuts. This source update does not rebuild previously packaged releases.
 
 ## Default shortcuts
 
@@ -150,7 +165,7 @@ The default data directory is `%LOCALAPPDATA%\kkMemorizeVocabulary`, separate fr
 
 **Update**: close the app first. For an installed build, run the new installer using the same installation directory. For a portable build, replace the complete application folder. The user data directory is retained, including when uninstalling through Windows Settings → Apps.
 
-**Compatibility**: the current SQLite schema version is 2. Version 1 databases migrate automatically, preserving the order within each category. Back up before upgrading and continue using the newer app afterward; older versions cannot open v2 databases or v2 JSON files. Database and application versions are managed separately.
+**Compatibility**: the current SQLite schema version is 3. Version 1 and 2 databases migrate automatically, preserving entries, settings and category order. Back up before upgrading and continue using the newer app afterward; older apps cannot open v3 databases. JSON remains version 2, with imports accepting versions 1 and 2. Database and application versions are managed separately.
 
 To use another writable data directory, launch with:
 

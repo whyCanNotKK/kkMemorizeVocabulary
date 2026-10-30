@@ -44,6 +44,7 @@ class WordTableModel(QAbstractTableModel):
         super().__init__(parent)
         self.rows = []
         self.edit_callback = edit_callback
+        self.study_groups = None
 
     def populate(self, entries, revealed):
         self.beginResetModel()
@@ -74,6 +75,12 @@ class WordTableModel(QAbstractTableModel):
         if not index.isValid() or index.row() >= len(self.rows):
             return None
         row, column = self.rows[index.row()], index.column()
+        if self.study_groups is not None and row.first:
+            if column == 0 and role in (Qt.ItemDataRole.DisplayRole, Qt.ItemDataRole.ToolTipRole,
+                                       Qt.ItemDataRole.AccessibleTextRole):
+                return str(self.study_groups[row.entry.id])
+            if column == 4 and role == Qt.ItemDataRole.AccessibleTextRole:
+                return "记下"
         if role == Qt.ItemDataRole.UserRole:
             return row
         if role in (Qt.ItemDataRole.DisplayRole, Qt.ItemDataRole.EditRole, Qt.ItemDataRole.ToolTipRole):
@@ -93,14 +100,14 @@ class WordTableModel(QAbstractTableModel):
 
     def flags(self, index):
         flags = Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable
-        if index.isValid():
+        if index.isValid() and self.study_groups is None:
             row, column = self.rows[index.row()], index.column()
             if (column == 1 and row.sense == 0) or (column in (2, 3) and not row.hidden):
                 flags |= Qt.ItemFlag.ItemIsEditable
         return flags
 
     def setData(self, index, value, role=Qt.ItemDataRole.EditRole):
-        if role != Qt.ItemDataRole.EditRole or not index.isValid():
+        if self.study_groups is not None or role != Qt.ItemDataRole.EditRole or not index.isValid():
             return False
         return self.edit_callback(self.rows[index.row()], index.column(), value)
 
@@ -143,8 +150,12 @@ class WordDelegate(QStyledItemDelegate):
             painter.drawLine(rect.topLeft(), rect.topRight())
         column = index.column()
         if column == 0 and row.first:
-            draw_symbol(painter, "star", QRectF(rect.center().x() - 8, rect.top() + 10, 16, 16),
-                        GOLD if row.entry.important else "#596371")
+            if self.view.study_mode:
+                painter.setPen(QColor(MUTED))
+                painter.drawText(rect, Qt.AlignmentFlag.AlignCenter, index.data() or "")
+            else:
+                draw_symbol(painter, "star", QRectF(rect.center().x() - 8, rect.top() + 10, 16, 16),
+                            GOLD if row.entry.important else "#596371")
         elif column == 4 and row.first:
             for action, target in self.view.action_rects(option.rect):
                 if action == "drag" and not self.view.reorder_enabled:
@@ -153,6 +164,8 @@ class WordDelegate(QStyledItemDelegate):
                     color = "#ef929a" if action == "learned" and row.entry.learned else (
                         ACCENT if action == "learned" else MUTED)
                 name = ("minus" if row.entry.learned else "circle") if action == "learned" else action
+                if action == "study":
+                    name, color = "circle", ACCENT
                 draw_symbol(painter, name, QRectF(target).adjusted(7, 7, -7, -7), color)
         elif column == 2 and row.hidden:
             mask = QRectF(rect.left() + 12, rect.top() + 11, min(360, rect.width() - 28), 14)
@@ -322,6 +335,8 @@ class WordTable(QTableView):
         self.show_drag_handle = True
         self.reorder_enabled = True
         self.search_active = False
+        self.study_mode = False
+        self.empty_text = None
         self._drag_candidate = None
         self._drag_active = False
         self.setModel(model)
@@ -373,10 +388,11 @@ class WordTable(QTableView):
         self.shuffle_button.move(4, max(0, (self.horizontalHeader().height() - 30) // 2))
 
     def set_page_state(self, page, searching, count):
-        self.show_drag_handle = page != "all"
+        self.study_mode = page == "study17"
+        self.show_drag_handle = page not in {"all", "study17"}
         self.reorder_enabled = self.show_drag_handle and not searching
         self.search_active = searching
-        self.setColumnWidth(4, 154 if self.show_drag_handle else 120)
+        self.setColumnWidth(4, 54 if self.study_mode else (154 if self.show_drag_handle else 120))
         self.shuffle_button.setVisible(page == "pending")
         self.shuffle_button.setEnabled(not searching and count >= 2)
         self.viewport().update()
@@ -408,7 +424,8 @@ class WordTable(QTableView):
         self.resizeRowsToContents()
 
     def action_rects(self, rect):
-        names = ("drag", "learned", "edit", "trash") if self.show_drag_handle else ("learned", "edit", "trash")
+        names = ("study",) if self.study_mode else (
+            ("drag", "learned", "edit", "trash") if self.show_drag_handle else ("learned", "edit", "trash"))
         return [(name, QRect(rect.left() + 5 + i * 34, rect.top() + 2, 32, 32))
                 for i, name in enumerate(names)]
 
@@ -421,7 +438,7 @@ class WordTable(QTableView):
                 if not self.delegate.submit():
                     event.accept()
                     return
-            if column == 0 and row.first:
+            if column == 0 and row.first and not self.study_mode:
                 self.actionRequested.emit(row.entry.id, "important")
                 event.accept()
                 return
@@ -598,6 +615,9 @@ class WordTable(QTableView):
         painter.drawRect(QRectF(1, top + 1, self.viewport().width() - 2, source[3] - 2))
 
     def mouseDoubleClickEvent(self, event):
+        if self.study_mode:
+            event.accept()
+            return
         index = self.indexAt(event.position().toPoint())
         if index.isValid():
             row = index.data(Qt.ItemDataRole.UserRole)
@@ -634,13 +654,15 @@ class WordTable(QTableView):
                 text = ""
                 if index.column() == 4 and row.first:
                     labels = {"learned": "恢复待记" if row.entry.learned else "标记已记下",
+                              "study": "记下",
                               "edit": "编辑整组", "trash": "删除单词",
                               "drag": "按住拖动整个词条" if self.reorder_enabled else "搜索时不可调整排序"}
                     for name, rect in self.action_rects(self.visualRect(index)):
                         if rect.contains(event.pos()):
                             text = labels[name]
                 elif index.column() == 0 and row.first:
-                    text = "取消重点" if row.entry.important else "设为重点"
+                    text = (f"第 {index.data()} 组" if self.study_mode else
+                            ("取消重点" if row.entry.important else "设为重点"))
                 elif row.hidden and index.column() in (2, 3):
                     text = "点击查看词性、翻译和关联词"
                 else:
@@ -663,5 +685,6 @@ class WordTable(QTableView):
             painter = QPainter(self.viewport())
             painter.setPen(QColor(MUTED))
             painter.drawText(self.viewport().rect(), Qt.AlignmentFlag.AlignCenter,
+                             self.empty_text if self.empty_text is not None else
                              "未找到匹配单词" if self.search_active else
                              "这里还没有单词\n在下方添加，开始积累你的单词本")

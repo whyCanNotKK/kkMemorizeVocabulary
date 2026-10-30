@@ -129,6 +129,9 @@ def draw_symbol(p: QPainter, name: str, rect: QRectF, color: str):
         p.drawPolygon(QPolygonF([QPointF(-10, 0), QPointF(-5, -6), QPointF(5, -6),
                                 QPointF(10, 0), QPointF(5, 6), QPointF(-5, 6)]))
         p.drawEllipse(QRectF(-3, -3, 6, 6))
+    elif name == "refresh":
+        p.drawArc(QRectF(-8, -8, 16, 16), 45 * 16, 285 * 16)
+        p.drawPolyline(QPolygonF([QPointF(1, -7), QPointF(6, -7), QPointF(6, -12)]))
     elif name == "shuffle":
         for direction in (-1, 1):
             p.drawPolyline(QPolygonF([QPointF(-9, -6 * direction), QPointF(-5, -6 * direction),

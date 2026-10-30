@@ -35,7 +35,7 @@ def test_v1_migration_preserves_each_category_order_and_aggregates(tmp_path):
     connection.close()
     repo = Repository(path)
     try:
-        assert repo.connection.execute("PRAGMA user_version").fetchone()[0] == 2
+        assert repo.connection.execute("PRAGMA user_version").fetchone()[0] == 3
         assert [(e.id, e.sort_order) for e in repo.list_entries()] == [(3, 1), (10, 2), (7, 1), (22, 2)]
         assert repo.max_pending_sort_order == repo.max_learned_sort_order == 2
         assert repo.save(word("p3")).sort_order == 3
