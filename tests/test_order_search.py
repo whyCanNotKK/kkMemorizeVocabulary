@@ -28,6 +28,12 @@ def test_v1_migration_preserves_each_category_order_and_aggregates(tmp_path):
         CREATE TABLE words (id INTEGER PRIMARY KEY, text TEXT NOT NULL,
             normalized_text TEXT NOT NULL UNIQUE, important INTEGER NOT NULL DEFAULT 1,
             learned INTEGER NOT NULL DEFAULT 0, created_at TEXT DEFAULT 'old', updated_at TEXT DEFAULT 'old');
+        CREATE TABLE related_words (id INTEGER PRIMARY KEY, word_id INTEGER REFERENCES words(id) ON DELETE CASCADE,
+            text TEXT NOT NULL, position INTEGER NOT NULL);
+        CREATE TABLE senses (id INTEGER PRIMARY KEY, word_id INTEGER REFERENCES words(id) ON DELETE CASCADE,
+            related_id INTEGER REFERENCES related_words(id) ON DELETE CASCADE,
+            pos TEXT NOT NULL, translation TEXT NOT NULL, position INTEGER NOT NULL);
+        CREATE TABLE settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
         INSERT INTO words(id,text,normalized_text,learned) VALUES
             (3,'p1','p1',0),(7,'l1','l1',1),(10,'p2','p2',0),(22,'l2','l2',1);
         PRAGMA user_version=1;
@@ -35,7 +41,7 @@ def test_v1_migration_preserves_each_category_order_and_aggregates(tmp_path):
     connection.close()
     repo = Repository(path)
     try:
-        assert repo.connection.execute("PRAGMA user_version").fetchone()[0] == 3
+        assert repo.connection.execute("PRAGMA user_version").fetchone()[0] == 5
         assert [(e.id, e.sort_order) for e in repo.list_entries()] == [(3, 1), (10, 2), (7, 1), (22, 2)]
         assert repo.max_pending_sort_order == repo.max_learned_sort_order == 2
         assert repo.save(word("p3")).sort_order == 3

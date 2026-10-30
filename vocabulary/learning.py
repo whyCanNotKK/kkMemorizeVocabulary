@@ -7,6 +7,7 @@ from .domain import WordEntry
 
 BEIJING = timezone(timedelta(hours=8))
 STAGES = (1, 2, 4, 7, 15)
+STAGE_GAPS = {following: following - previous for previous, following in zip(STAGES, STAGES[1:])}
 
 
 @dataclass(frozen=True)
@@ -36,9 +37,16 @@ class StudyTask:
     group_number: int
 
 
-def next_stage(stage: int, completed_on: date):
+def next_stage(stage: int) -> int:
     index = STAGES.index(stage)
     if index == len(STAGES) - 1:
-        return None, None
-    following = STAGES[index + 1]
-    return following, completed_on + timedelta(days=following - stage)
+        return 0
+    return STAGES[index + 1]
+
+
+def study_due(stage: int, last_completed_on: str | None, today: date) -> bool:
+    if stage == 0:
+        return False
+    if stage == 1:
+        return True
+    return (today - date.fromisoformat(last_completed_on)).days >= STAGE_GAPS[stage]

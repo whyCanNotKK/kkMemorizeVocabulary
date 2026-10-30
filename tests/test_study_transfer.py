@@ -56,8 +56,9 @@ def test_export_only_participants_including_future_done_and_completed(repo):
     assert len(exported.words) == len(exported.records) == 30
     assert len(repo.list_entries()) == len(entries) == 35
     assert {entry.text.casefold() for entry in exported.words} == set(exported.records)
-    assert any(record['completed'] for record in exported.records.values())
-    assert any(record['next_due_on'] > DAY.isoformat() for record in exported.records.values())
+    assert any(record['stage'] == 0 for record in exported.records.values())
+    assert any(record['stage'] == 2 and record['last_completed_on'] == DAY.isoformat()
+               for record in exported.records.values())
     assert any(record['afternoon_done'] for record in exported.records.values())
     assert repo.study_backup() == before
     assert 'word_id' not in content and '"id"' not in content
@@ -120,11 +121,27 @@ def test_empty_snapshot_clears_progress_and_replaces_markers_but_keeps_words(sou
     source.replace_study_progress(empty)
     assert not source.has_study_progress()
     assert source.list_entries() == before_words
-    assert source.study_backup().generated_dates == []
+    assert source.study_backup().study_last_add_new_vocabulary is None
+
+
+@pytest.mark.parametrize('version', [1, 2])
+def test_old_study_file_is_rejected(document, version):
+    document['version'] = version
+    with pytest.raises(ValidationError, match='version: 3'):
+        parse_study_backup(json.dumps(document))
+
+
+def test_empty_draw_date_survives_export_restore_and_prevents_topup(repo, source):
+    repo.prepare_study(AM)  # no entries, but today's draw has run
+    backup = parse_study_backup(serialize_study_backup(repo.study_backup()))
+    assert backup.study_last_add_new_vocabulary == DAY.isoformat()
+    source.replace_study_progress(backup)
+    assert source.prepare_study(AM) == []
+    assert not source.has_study_progress()
 
 
 @pytest.mark.parametrize('corruption', [
-    lambda d: d.update(version=2),
+    lambda d: d.update(version=4),
     lambda d: d.update(format='kkMemorizeVocabulary'),
     lambda d: d.update(word_id=1),
     lambda d: d['words'].append(deepcopy(d['words'][0])),
@@ -140,8 +157,8 @@ def test_empty_snapshot_clears_progress_and_replaces_markers_but_keeps_words(sou
     lambda d: d['study_records']['alpha'].update(next_due_on='20261030'),
     lambda d: d['study_records']['alpha'].update(last_completed_on='2026-10-29'),
     lambda d: d['study_records']['alpha'].update(completed=True),
-    lambda d: d['study_settings'].update(generated_dates=[]),
-    lambda d: d['study_settings'].update(generated_dates=['2026-10-30', '2026-10-30']),
+    lambda d: d['study_settings'].update(study_last_add_new_vocabulary=None),
+    lambda d: d['study_settings'].update(study_last_add_new_vocabulary='2026-02-30'),
     lambda d: d['study_settings'].update(group_counter=0),
 ])
 def test_invalid_backup_rejected_before_import(document, corruption):
@@ -150,16 +167,18 @@ def test_invalid_backup_rejected_before_import(document, corruption):
         parse_study_backup(json.dumps(document))
 
 
-def test_duplicate_json_keys_group_positions_and_bad_stage_dates(document):
+def test_duplicate_json_keys_oversized_groups_and_bad_stage_dates(document):
     content = json.dumps(document)
     with pytest.raises(ValidationError):
-        parse_study_backup(content.replace('"version": 1', '"version": 1, "version": 1'))
-    document['words'].append(dict(deepcopy(document['words'][0]), text='Beta'))
-    document['study_records']['beta'] = deepcopy(document['study_records']['alpha'])
-    with pytest.raises(ValidationError, match='位置'):
-        parse_study_backup(json.dumps(document))
-    document['study_records']['beta']['position'] = 2
-    document['study_records']['beta'].update(stage=2, last_completed_on='2026-10-30', next_due_on='2026-11-02')
+        parse_study_backup(content.replace('"version": 3', '"version": 3, "version": 3'))
+    too_many = deepcopy(document)
+    for i in range(10):
+        name = f'beta{i}'
+        too_many['words'].append(dict(deepcopy(document['words'][0]), text=name))
+        too_many['study_records'][name] = deepcopy(document['study_records']['alpha'])
+    with pytest.raises(ValidationError, match='最多包含10'):
+        parse_study_backup(json.dumps(too_many))
+    document['study_records']['alpha'].update(stage=2, last_completed_on=None)
     with pytest.raises(ValidationError, match='不一致'):
         parse_study_backup(json.dumps(document))
 

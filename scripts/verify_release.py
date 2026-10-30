@@ -8,6 +8,17 @@ from PyInstaller.archive.readers import CArchiveReader
 ROOT = Path(__file__).resolve().parents[1]
 
 
+def verify_migrations(directory, source_root=ROOT):
+    source = source_root / 'vocabulary' / 'migrations'
+    packaged = directory / '_internal' / 'vocabulary' / 'migrations'
+    expected = {path.name for path in source.glob('*.sql')}
+    actual = {path.name for path in packaged.glob('*.sql')}
+    assert expected and actual == expected, 'Missing or stale packaged database migration scripts'
+    for name in sorted(expected):
+        assert (packaged / name).read_bytes() == (source / name).read_bytes(), f'Stale packaged SQL: {name}'
+    return len(expected)
+
+
 def signature(code):
     return (code.co_name, code.co_argcount, code.co_posonlyargcount, code.co_kwonlyargcount,
             code.co_flags, code.co_code, code.co_names, code.co_varnames,
@@ -31,7 +42,8 @@ def main():
         source = compile(path.read_text(encoding="utf-8"), str(path), "exec", dont_inherit=True, optimize=0)
         assert signature(packaged) == signature(source), f"Stale packaged module: {name}"
         checked.append(name)
-    print(f"Verified {len(checked)} packaged modules match source; no foreign ICU/API-set DLLs.")
+    migrations = verify_migrations(directory)
+    print(f"Verified {len(checked)} packaged modules and {migrations} SQL scripts match source; no foreign ICU/API-set DLLs.")
     print(f"EXE SHA256: {hashlib.sha256(executable.read_bytes()).hexdigest()}")
 
 

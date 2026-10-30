@@ -7,8 +7,9 @@ import sqlite3
 
 from .domain import DEFAULT_SHORTCUTS, DuplicateWord, RelatedWord, Sense, WordEntry, clean_entry
 from .transfer import ImportConflict, ImportResult
-from .learning import StudyContext, StudyTask, next_stage
+from .learning import STAGE_GAPS, StudyContext, StudyTask, next_stage, study_due
 from .study_transfer import RECORD_FIELDS, StudyBackup
+from .migration import migrate_database
 
 
 class Repository:
@@ -20,68 +21,11 @@ class Repository:
         self.connection.row_factory = sqlite3.Row
         self.connection.execute("PRAGMA foreign_keys=ON")
         self.connection.execute("PRAGMA journal_mode=WAL")
-        version = self.connection.execute("PRAGMA user_version").fetchone()[0]
-        if version > 3:
-            raise RuntimeError("数据库由更高版本程序创建，请使用新版单词本打开。")
-        self.connection.executescript("""
-            CREATE TABLE IF NOT EXISTS words (
-                id INTEGER PRIMARY KEY,
-                text TEXT NOT NULL,
-                normalized_text TEXT NOT NULL UNIQUE,
-                important INTEGER NOT NULL DEFAULT 1 CHECK(important IN (0,1)),
-                learned INTEGER NOT NULL DEFAULT 0 CHECK(learned IN (0,1)),
-                created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
-                updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
-            );
-            CREATE TABLE IF NOT EXISTS related_words (
-                id INTEGER PRIMARY KEY,
-                word_id INTEGER NOT NULL REFERENCES words(id) ON DELETE CASCADE,
-                text TEXT NOT NULL,
-                position INTEGER NOT NULL
-            );
-            CREATE TABLE IF NOT EXISTS senses (
-                id INTEGER PRIMARY KEY,
-                word_id INTEGER REFERENCES words(id) ON DELETE CASCADE,
-                related_id INTEGER REFERENCES related_words(id) ON DELETE CASCADE,
-                pos TEXT NOT NULL,
-                translation TEXT NOT NULL,
-                position INTEGER NOT NULL,
-                CHECK((word_id IS NOT NULL) != (related_id IS NOT NULL))
-            );
-            CREATE INDEX IF NOT EXISTS related_owner ON related_words(word_id, position);
-            CREATE INDEX IF NOT EXISTS senses_word ON senses(word_id, position);
-            CREATE INDEX IF NOT EXISTS senses_related ON senses(related_id, position);
-            CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
-        """)
-        if version < 2:
-            with self.connection:
-                self.connection.execute("BEGIN")
-                self.connection.execute(
-                    "ALTER TABLE words ADD COLUMN sort_order INTEGER NOT NULL DEFAULT 1 CHECK(sort_order>0)")
-                self.connection.execute("""WITH ranked AS (
-                    SELECT id, ROW_NUMBER() OVER (PARTITION BY learned ORDER BY id) AS position FROM words
-                ) UPDATE words SET sort_order=(SELECT position FROM ranked WHERE ranked.id=words.id)""")
-                self.connection.execute("PRAGMA user_version=2")
-        if version < 3:
-            with self.connection:
-                self.connection.execute("BEGIN")
-                self.connection.execute("""CREATE TABLE memorize_vocabulary_17day (
-                    word_id INTEGER PRIMARY KEY REFERENCES words(id) ON DELETE CASCADE,
-                    group_number INTEGER NOT NULL CHECK(group_number>0),
-                    position INTEGER NOT NULL CHECK(position BETWEEN 1 AND 10),
-                    enrolled_on TEXT NOT NULL,
-                    stage INTEGER NOT NULL DEFAULT 1 CHECK(stage IN (1,2,4,7,15)),
-                    next_due_on TEXT NOT NULL,
-                    morning_done INTEGER NOT NULL DEFAULT 0 CHECK(morning_done IN (0,1)),
-                    afternoon_done INTEGER NOT NULL DEFAULT 0 CHECK(afternoon_done IN (0,1)),
-                    last_completed_on TEXT,
-                    completed INTEGER NOT NULL DEFAULT 0 CHECK(completed IN (0,1)),
-                    UNIQUE(group_number,position)
-                )""")
-                self.connection.execute("""CREATE INDEX study_due
-                    ON memorize_vocabulary_17day(completed,next_due_on)""")
-                self.connection.execute("PRAGMA user_version=3")
-        self.connection.execute("CREATE INDEX IF NOT EXISTS words_order ON words(learned,sort_order,id)")
+        try:
+            migrate_database(self.connection)
+        except Exception:
+            self.connection.close()
+            raise
         maxima = dict(self.connection.execute(
             "SELECT learned,MAX(sort_order) FROM words GROUP BY learned").fetchall())
         self.max_pending_sort_order = maxima.get(0, 0)
@@ -200,9 +144,8 @@ class Repository:
                 self._save_entry(entry, counters, forced_id=new_id)
                 if progress is not None:
                     self.connection.execute("""INSERT INTO memorize_vocabulary_17day
-                        (word_id,group_number,position,enrolled_on,stage,next_due_on,
-                         morning_done,afternoon_done,last_completed_on,completed)
-                        VALUES (?,?,?,?,?,?,?,?,?,?)""", (new_id, *tuple(progress)[1:]))
+                        (word_id,group_number,stage,morning_done,afternoon_done,last_completed_on)
+                        VALUES (?,?,?,?,?,?)""", (new_id, *(progress[field] for field in RECORD_FIELDS)))
                 adopted[normalized] = self.get(entry.id)
         return adopted
 
@@ -281,13 +224,13 @@ class Repository:
                 if row[0] in DEFAULT_SHORTCUTS}
 
     def prepare_study(self, context: StudyContext) -> list[StudyTask]:
-        """Reserve today's batch exactly once, including an empty batch."""
+        """Draw when the morning date differs from the last draw, including empty batches."""
         if not context.afternoon:
-            key = f"study17.generated.{context.day.isoformat()}"
+            key = 'study_last_add_new_vocabulary'
             with self.connection:
                 self.connection.execute("BEGIN IMMEDIATE")
-                generated = self.connection.execute("SELECT 1 FROM settings WHERE key=?", (key,)).fetchone()
-                if generated is None:
+                generated = self.connection.execute("SELECT value FROM settings WHERE key=?", (key,)).fetchone()
+                if generated is None or generated[0] != context.day.isoformat():
                     ids = [row[0] for row in self.connection.execute("""SELECT id FROM words
                         WHERE learned=0 AND NOT EXISTS
                         (SELECT 1 FROM memorize_vocabulary_17day WHERE word_id=words.id)
@@ -296,19 +239,21 @@ class Repository:
                         "SELECT value FROM settings WHERE key='study17.group_counter'").fetchone()
                     maximum = int(counter[0]) if counter else 0
                     self.connection.executemany("""INSERT INTO memorize_vocabulary_17day
-                        (word_id,group_number,position,enrolled_on,next_due_on) VALUES (?,?,?,?,?)""",
-                        [(word_id, maximum + i // 10 + 1, i % 10 + 1,
-                          context.day.isoformat(), context.day.isoformat()) for i, word_id in enumerate(ids)])
+                        (word_id,group_number) VALUES (?,?)""",
+                        [(word_id, maximum + i // 10 + 1) for i, word_id in enumerate(ids)])
                     self.connection.execute("INSERT OR REPLACE INTO settings(key,value) VALUES (?,?)",
                                             ('study17.group_counter', str(maximum + (len(ids) + 9) // 10)))
-                    self.connection.execute("INSERT INTO settings(key,value) VALUES (?,?)", (key, '1'))
+                    self.connection.execute("INSERT OR REPLACE INTO settings(key,value) VALUES (?,?)",
+                                            (key, context.day.isoformat()))
         return self.study_tasks(context)
 
     def study_tasks(self, context: StudyContext) -> list[StudyTask]:
         flag = "afternoon_done" if context.afternoon else "morning_done"
+        wait = 'CASE stage ' + ' '.join(f'WHEN {stage} THEN {gap}' for stage, gap in STAGE_GAPS.items()) + ' END'
         rows = self.connection.execute(f"""SELECT word_id,group_number FROM memorize_vocabulary_17day
-            WHERE completed=0 AND next_due_on<=? AND {flag}=0
-            ORDER BY enrolled_on,group_number,position""", (context.day.isoformat(),)).fetchall()
+            WHERE stage<>0 AND {flag}=0 AND
+                  (stage=1 OR julianday(?)-julianday(last_completed_on)>={wait})
+            ORDER BY group_number,word_id""", (context.day.isoformat(),)).fetchall()
         return [StudyTask(self.get(row["word_id"]), row["group_number"]) for row in rows]
 
     def has_study_progress(self) -> bool:
@@ -319,20 +264,20 @@ class Repository:
         with self.connection:
             self.connection.execute('BEGIN')
             rows = self.connection.execute('''SELECT * FROM memorize_vocabulary_17day
-                ORDER BY group_number,position''').fetchall()
+                ORDER BY group_number,word_id''').fetchall()
             words, records = [], {}
             for row in rows:
                 word = self.get(row['word_id'])
                 words.append(word)
                 record = {field: row[field] for field in RECORD_FIELDS}
-                for flag in ('morning_done', 'afternoon_done', 'completed'):
+                for flag in ('morning_done', 'afternoon_done'):
                     record[flag] = bool(record[flag])
                 records[word.text.strip().casefold()] = record
-            dates = [row[0].removeprefix('study17.generated.') for row in self.connection.execute(
-                "SELECT key FROM settings WHERE key GLOB 'study17.generated.*' ORDER BY key")]
+            last_draw = self.connection.execute(
+                "SELECT value FROM settings WHERE key='study_last_add_new_vocabulary'").fetchone()
             counter = self.connection.execute(
                 "SELECT value FROM settings WHERE key='study17.group_counter'").fetchone()
-            return StudyBackup(words, records, dates, int(counter[0]) if counter else 0)
+            return StudyBackup(words, records, last_draw[0] if last_draw else None, int(counter[0]) if counter else 0)
 
     def replace_study_progress(self, backup: StudyBackup):
         """Resolve final local word IDs, then atomically replace progress and its settings."""
@@ -346,12 +291,12 @@ class Repository:
                 values.append((word[0], *(record[field] for field in RECORD_FIELDS)))
             self.connection.execute('DELETE FROM memorize_vocabulary_17day')
             self.connection.executemany('''INSERT INTO memorize_vocabulary_17day
-                (word_id,group_number,position,enrolled_on,stage,next_due_on,
-                 morning_done,afternoon_done,last_completed_on,completed)
-                VALUES (?,?,?,?,?,?,?,?,?,?)''', values)
-            self.connection.execute("DELETE FROM settings WHERE key GLOB 'study17.generated.*' OR key='study17.group_counter'")
+                (word_id,group_number,stage,morning_done,afternoon_done,last_completed_on)
+                VALUES (?,?,?,?,?,?)''', values)
+            self.connection.execute("DELETE FROM settings WHERE key IN ('study_last_add_new_vocabulary','study17.group_counter')")
             self.connection.executemany('INSERT INTO settings(key,value) VALUES (?,?)',
-                [(f'study17.generated.{day}', '1') for day in backup.generated_dates]
+                ([('study_last_add_new_vocabulary', backup.study_last_add_new_vocabulary)]
+                 if backup.study_last_add_new_vocabulary is not None else [])
                 + [('study17.group_counter', str(backup.group_counter))])
 
     def complete_study(self, word_id: int, context: StudyContext):
@@ -363,7 +308,7 @@ class Repository:
             if row is None:
                 raise ValueError("该单词的学习记录已不存在，请刷新。")
             flag = "afternoon_done" if context.afternoon else "morning_done"
-            if row["completed"] or row["next_due_on"] > context.day.isoformat() or row[flag]:
+            if not study_due(row['stage'], row['last_completed_on'], context.day) or row[flag]:
                 return
             if not context.afternoon:
                 self.connection.execute("""UPDATE memorize_vocabulary_17day
@@ -372,12 +317,10 @@ class Repository:
                 self.connection.execute("""UPDATE memorize_vocabulary_17day
                     SET afternoon_done=1 WHERE word_id=?""", (word_id,))
             else:
-                stage, due = next_stage(row["stage"], context.day)
+                stage = next_stage(row["stage"])
                 self.connection.execute("""UPDATE memorize_vocabulary_17day
                     SET morning_done=0,afternoon_done=0,last_completed_on=?,
-                        stage=?,next_due_on=?,completed=? WHERE word_id=?""",
-                    (context.day.isoformat(), stage if stage is not None else row["stage"],
-                     due.isoformat() if due else context.day.isoformat(), stage is None, word_id))
+                        stage=? WHERE word_id=?""", (context.day.isoformat(), stage, word_id))
 
     def write_shortcuts(self, values: dict[str, str]):
         with self.connection:

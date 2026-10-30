@@ -18,6 +18,9 @@ kk-vocabulary = "vocabulary.app:main"
 [tool.setuptools.packages.find]
 include = ["vocabulary*"]
 
+[tool.setuptools.package-data]
+vocabulary = ["migrations/*.sql"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 qt_api = "pyside6"
