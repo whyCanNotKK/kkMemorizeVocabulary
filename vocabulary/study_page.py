@@ -81,7 +81,11 @@ class StudyPage(QWidget):
 
     def set_global_hidden(self, hidden):
         self.global_hidden = hidden
-        self.revealed = set() if hidden else {task.entry.id for task in self.tasks}
+        ids = {task.entry.id for task in self.tasks}
+        if hidden:
+            self.revealed.difference_update(ids)
+        else:
+            self.revealed.update(ids)
         self.render()
 
     def complete(self, word_id, action):

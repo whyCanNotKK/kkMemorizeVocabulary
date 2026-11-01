@@ -75,7 +75,7 @@ def test_click_word_copies_full_name_with_bottom_notice(window, repo, qtbot):
     window.reveal(saved.id, True)
     rect = window.table.visualRect(window.model.index(2, 1))
     qtbot.mouseClick(window.table.viewport(), Qt.MouseButton.LeftButton,
-                    pos=rect.topLeft() + QPoint(31, 10))
+                    pos=rect.topLeft() + QPoint(31, window.model.rows[2].top_padding + 7))
     assert clipboard.text() == "recorder"
     assert window.toast.label.text() == "已复制：recorder"
     assert window.table.currentIndex() == window.model.index(2, 1)
@@ -771,7 +771,7 @@ def test_saving_from_learned_filter_shows_new_pending_word(window, repo):
     assert not window.model.rows[0].hidden
 
 
-def test_global_toggle_applies_to_all_filters_and_related_words(window, repo, qtbot):
+def test_global_toggle_only_changes_current_category_and_related_words(window, repo, qtbot):
     pending = seed(repo)
     learned = repo.save(WordEntry("known", [Sense("adj.", "已知的")],
                                   [RelatedWord("know", [Sense("v.", "知道")])]))
@@ -780,16 +780,21 @@ def test_global_toggle_applies_to_all_filters_and_related_words(window, repo, qt
     assert all(row.hidden for row in window.model.rows)
     qtbot.mouseClick(window.global_hide_button, Qt.MouseButton.LeftButton)
     assert not window.global_hide_button.isChecked()
-    assert window.revealed == {pending.id, learned.id}
+    assert window.revealed == {pending.id}
     assert not any(row.hidden for row in window.model.rows)
     window.set_filter("learned")
-    assert len(window.model.rows) == 2
+    assert len(window.model.rows) == 1 and window.model.rows[0].hidden
+    assert window.global_hide_button.isChecked()
+    qtbot.mouseClick(window.global_hide_button, Qt.MouseButton.LeftButton)
+    assert not window.global_hide_button.isChecked()
+    assert len(window.model.rows) == 2 and not any(row.hidden for row in window.model.rows)
+    window.set_filter("pending")
+    assert not window.global_hide_button.isChecked()
     assert not any(row.hidden for row in window.model.rows)
     qtbot.mouseClick(window.global_hide_button, Qt.MouseButton.LeftButton)
-    assert window.global_hide_button.isChecked()
     assert window.model.rowCount() == 1 and window.model.rows[0].hidden
-    window.set_filter("pending")
-    assert window.model.rowCount() == 1 and window.model.rows[0].hidden
+    window.set_filter("learned")
+    assert not any(row.hidden for row in window.model.rows)
 
 
 def test_restart_resets_visibility_after_new_word_and_global_show(window, repo, qtbot):

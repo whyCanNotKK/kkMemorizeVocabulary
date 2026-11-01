@@ -34,11 +34,18 @@ class TableRow:
 
     @property
     def top_padding(self):
-        return 7 if self.first else (3 if self.sense == 0 else 1)
+        return 7 if self.first else (11 if self.sense == 0 else 0)
+
+    @property
+    def bottom_padding(self):
+        last = (self.owner == len(self.entry.related) - 1
+                and self.sense == len(self.word.senses) - 1)
+        return 9 if last and not self.hidden else 1
 
     @property
     def minimum_height(self):
-        return 36 if self.first else (26 if self.sense == 0 else 22)
+        # Extra bottom space belongs only to the complete entry group's last row.
+        return 36 if self.hidden else self.top_padding + 20 + self.bottom_padding
 
 
 class WordTableModel(QAbstractTableModel):
@@ -160,7 +167,7 @@ class WordDelegate(QStyledItemDelegate):
         font.setPixelSize(15 if row.owner == -1 else 13)
         font.setWeight(QFont.Weight.DemiBold if row.owner == -1 else QFont.Weight.Normal)
         left = 26 if row.owner >= 0 else 10
-        area = QRectF(rect).adjusted(left, row.top_padding, -10, -row.top_padding)
+        area = QRectF(rect).adjusted(left, row.top_padding, -10, -row.bottom_padding)
         metrics = QFontMetricsF(font)
         text = metrics.elidedText(index.data() or "", Qt.TextElideMode.ElideRight, area.width())
         return font, text, area
@@ -184,10 +191,10 @@ class WordDelegate(QStyledItemDelegate):
         top = row.top_padding
         selected = bool(option.state & QStyle.StateFlag.State_Selected)
         painter.fillRect(rect, QColor("#283440" if selected else "#1e242d"))
+        column = index.column()
         if row.first:
             painter.setPen(QPen(QColor("#343e4a"), 1))
             painter.drawLine(rect.topLeft(), rect.topRight())
-        column = index.column()
         if column == 0 and row.first:
             if self.view.study_mode:
                 painter.setPen(QColor(MUTED))
@@ -205,7 +212,8 @@ class WordDelegate(QStyledItemDelegate):
                 name = ("minus" if row.entry.learned else "circle") if action == "learned" else action
                 if action == "study":
                     name, color = "circle", ACCENT
-                draw_symbol(painter, name, QRectF(target).adjusted(7, 7, -7, -7), color)
+                center = QRectF(target).center()
+                draw_symbol(painter, name, QRectF(center.x() - 9, center.y() - 9, 18, 18), color)
         elif column == 2 and row.hidden:
             painter.setPen(Qt.PenStyle.NoPen)
             painter.setBrush(QColor("#788493"))
@@ -244,7 +252,7 @@ class WordDelegate(QStyledItemDelegate):
         if row and not row.hidden and index.column() == 3:
             document = text_document(index.data() or "", option.font, self.view.columnWidth(3) - 24)
             return QSize(100, max(row.minimum_height,
-                                  math.ceil(document.size().height()) + 2 * row.top_padding))
+                                  math.ceil(document.size().height()) + row.top_padding + row.bottom_padding))
         return QSize(50, row.minimum_height if row else 36)
 
     def createEditor(self, parent, option, index):
@@ -547,7 +555,7 @@ class WordTable(QTableView):
     def action_rects(self, rect):
         names = ("study",) if self.study_mode else (
             ("drag", "learned", "edit", "trash") if self.show_drag_handle else ("learned", "edit", "trash"))
-        return [(name, QRect(rect.left() + 5 + i * 34, rect.top() + 2, 32, 32))
+        return [(name, QRect(rect.left() + 5 + i * 34, rect.top() + 2, 32, min(32, rect.height() - 4)))
                 for i, name in enumerate(names)]
 
     def mousePressEvent(self, event):

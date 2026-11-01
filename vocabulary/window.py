@@ -27,7 +27,8 @@ class MainWindow(QMainWindow):
         super().__init__()
         self.repository = repository
         self.revealed = set()
-        self.global_hidden = True
+        self._global_hidden = {key: True for key in ("pending", "all", "learned")}
+        self._search_hidden = {key: set() for key in self._global_hidden}
         self.filter_name = "pending"
         self._view_filter = "pending"
         self._filter_scroll = {"pending": 0, "all": 0, "learned": 0}
@@ -84,7 +85,7 @@ class MainWindow(QMainWindow):
         self.global_hide_button.setCheckable(True)
         self.global_hide_button.setChecked(True)
         self.global_hide_button.setToolTip("显示所有词条的词性、翻译和关联词")
-        self.global_hide_button.clicked.connect(self.set_global_hidden)
+        self.global_hide_button.clicked.connect(lambda: self.set_global_hidden())
         filters.addWidget(self.global_hide_button)
         self.import_button = button("")
         self.export_button = button("")
@@ -302,6 +303,7 @@ class MainWindow(QMainWindow):
                 control.setProperty("active", key == self.filter_name)
                 control.style().unpolish(control)
                 control.style().polish(control)
+            self.update_visibility_button()
             return
         bar = self.table.verticalScrollBar()
         self._filter_scroll[self._view_filter] = bar.value()
@@ -325,10 +327,12 @@ class MainWindow(QMainWindow):
         self.table.set_page_state(self.filter_name, searching, len(visible))
         with self.table.preserve_view(scroll_position=position):
             # Search expands only the projection, leaving the review state intact.
-            revealed = {entry.id for entry in visible} if searching else self.revealed
+            revealed = ({entry.id for entry in visible} - self._search_hidden[self.filter_name]
+                        if searching else self.revealed)
             self.model.populate(visible, revealed)
             self.table.update_spans()
         self._view_filter = self.filter_name
+        self.update_visibility_button()
 
     def _filter_entries(self, entries):
         keyword = self.search_box.text().strip().casefold()
@@ -347,6 +351,8 @@ class MainWindow(QMainWindow):
             self.search_box.blockSignals(False)
             return
         self._applied_search = self.search_box.text()
+        for hidden in self._search_hidden.values():
+            hidden.clear()
         self._filter_scroll[self.filter_name] = 0
         self.refresh()
         self.table.verticalScrollBar().setValue(0)
@@ -392,19 +398,44 @@ class MainWindow(QMainWindow):
             self.revealed.discard(entry_id)
         self.refresh()
 
-    def set_global_hidden(self, hidden):
+    @property
+    def global_hidden(self):
+        if self.filter_name == "study17":
+            return self.study_page.global_hidden
+        return self._global_hidden[self.filter_name]
+
+    def next_global_hidden(self):
+        model = self.study_page.model if self.filter_name == "study17" else self.model
+        roots = [row for row in model.rows if row.first]
+        if roots and all(not row.hidden for row in roots):
+            return True
+        if roots and all(row.hidden for row in roots):
+            return False
+        return not self.global_hidden
+
+    def set_global_hidden(self, hidden=None):
         if self.table.delegate.submit():
-            self.global_hidden = hidden
-            self.study_page.set_global_hidden(hidden)
-            if hidden:
-                self.revealed.clear()
+            if hidden is None:
+                hidden = self.next_global_hidden()
+            if self.filter_name == "study17":
+                self.study_page.set_global_hidden(hidden)
             else:
-                self.revealed = {entry.id for entry in self.repository.list_entries()}
+                self._global_hidden[self.filter_name] = hidden
+                ids = {row.entry.id for row in self.model.rows if row.first}
+                if hidden:
+                    self.revealed.difference_update(ids)
+                    self._search_hidden[self.filter_name].update(ids)
+                else:
+                    self.revealed.update(ids)
+                    self._search_hidden[self.filter_name].difference_update(ids)
             self.refresh()
+        self.update_visibility_button()
+
+    def update_visibility_button(self):
         self.global_hide_button.setChecked(self.global_hidden)
         self.global_hide_button.setAccessibleName(f"全局隐藏：{'开' if self.global_hidden else '关'}")
         self.global_hide_button.setToolTip(
-            f"{'显示' if self.global_hidden else '隐藏'}所有词条的词性、翻译和关联词")
+            f"{'隐藏' if self.next_global_hidden() else '显示'}当前标签页所有词条的词性、翻译和关联词")
 
     def add_block(self, text="", senses=None, related=False):
         block = WordBlock(text, senses, related)

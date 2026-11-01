@@ -76,13 +76,13 @@ The entry form grows with its content, up to half the window's client height, th
 - The same navigation keys work when a category tab or review toolbar button has focus: navigation goes directly to the active list, and focus stays there. Search, text editors, the entry form and dialogs keep their own keyboard behavior.
 - With the list focused, **Ctrl+Up / Ctrl+Down** scrolls the list without moving the current selection, even if the selected word leaves the viewport. Hold the keys to scroll continuously. This works in all four tabs; text editors retain their usual Ctrl+arrow behavior.
 - Left-click directly on a main or visible related word to copy its full name, including when a long name is shortened on screen. A brief notice appears at the bottom center of the window. This also works on the study page.
-- The global hide toggle at the top right affects all entries, including those outside the current category. Reveal states last only for the current session; newly saved entries still expand automatically.
+- The eye at the top right affects every entry listed in the current tab, including those outside the viewport. It hides all answers when all are visible and reveals them when all are hidden; for a mixed or empty list, it reverses that tab's last eye operation. Each tab keeps its own eye record. Reveal states last only for the current session; newly saved entries still expand automatically.
 - Click the circle to mark an entry as learned, or the red minus in the Learned list to move it back. Table stars save immediately. The trash icon deletes the main word and all attached content after confirmation.
 - All four tabs remember their scroll position during the current session. The study page also restores its selected word/cell when returning, refreshing or changing answer visibility, without scrolling to an offscreen selection. Reentry still reloads the current date, period and tasks; removed selections are cleared. All start at the top after restarting.
 
 ### Search and order
 
-Search matches literal substrings in main words, their translations, related words, and related translations. Matching ignores case and surrounding whitespace in the query. The query remains when switching categories. Matching entries appear as complete groups with all answers temporarily revealed; clearing the search restores their previous reveal states. Individual hiding is disabled during search, while the global toggle can still change the state restored afterward.
+Search matches literal substrings in main words, their translations, related words, and related translations. Matching ignores case and surrounding whitespace in the query. The query remains when switching categories. Matching entries initially appear as complete groups with all answers temporarily revealed; clearing the search restores their review states. Individual hiding is disabled during search. The eye immediately hides or reveals the current results and updates their review states; changing the query temporarily reveals results again. Other entries keep their states. The three ordinary tabs share each word's review state; the study page has separate reveal states.
 
 Drag the handle on the left of an entry's actions to move its entire group within To learn or Learned. Release to save; Esc or releasing outside the table viewport cancels. All does not support dragging. The shuffle button at the top left of To learn randomizes the order and scrolls to the top on success. **Dragging and shuffling are disabled while the search query is nonempty.** Shuffling also requires at least two words to learn.
 
@@ -160,6 +160,18 @@ Import order and duplicate handling:
 - Click the left card to keep the existing entry, or the right card to adopt the complete imported entry and its status. Adopting deletes and recreates the entry in one transaction, with a new ID and a position at the end of its destination category. Each successful choice immediately removes that card pair.
 - Use “全部使用左侧 / 右侧” (Use all left / right) to handle the remaining pairs. Individual choices apply in click order; batch choices follow the remaining candidate order. For repeated names, the last adopted entry wins. A failed batch adoption rolls back the entire batch.
 - Closing the comparison window keeps unresolved existing entries, newly imported words, and all choices already saved.
+
+## Convert old vocabulary practice text
+
+Use the standalone converter for space-separated practice lines (Python 3.12; no extra dependencies):
+
+```powershell
+.\.venv\Scripts\python.exe scripts\extract_practice_words.py "G:\myDoc\study\English\write.txt" -o artifacts\practice-import\write-import.json
+```
+
+Select the generated JSON using **导入单词** on To learn / All / Learned. The converter merges repeated main words, collects unique related words per main word, and preserves first-seen order. Every definition is the placeholder `n.` / `1`; entries start starred and unlearned. It reads the source without changing the database.
+
+Phrase matching and the few excluded example sentences are listed explicitly in `scripts/practice_extraction_rules.json`, based on the original practice file. Update that list for new phrases; spelling variants and typos are preserved. Longer phrases take priority and internal whitespace is normalized. The adjacent `write-import.report.json` records counts, exclusions, punctuation cleanup and source line numbers. `--rules`, `--encoding` and `--report` can override the defaults.
 
 ## Data, backups, and updates
 

@@ -340,14 +340,14 @@ def test_search_temporary_reveal_restores_mixed_states_across_pages(window, repo
     assert all(not row.hidden for row in window.model.rows if row.entry.id == expanded.id)
 
 
-def test_search_keeps_results_expanded_when_global_visibility_changes(window, repo):
+def test_search_eye_changes_results_and_state_restored_after_clearing(window, repo):
     entry = repo.save(word("record"))
     window.refresh()
     window.search_box.setText("record")
     window.set_global_hidden(False)
     assert not window.model.rows[0].hidden and window.revealed == {entry.id}
     window.set_global_hidden(True)
-    assert not window.model.rows[0].hidden and not window.revealed
+    assert window.model.rows[0].hidden and not window.revealed
     window.search_box.clear()
     assert window.model.rows[0].hidden
 
