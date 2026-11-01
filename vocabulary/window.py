@@ -64,7 +64,7 @@ class MainWindow(QMainWindow):
             control.clicked.connect(lambda checked=False, key=key: self.set_filter(key))
             self.filter_buttons[key] = control
             filters.addWidget(control)
-        self.settings_button = button("快捷键设置", quiet=True)
+        self.settings_button = button("设置", quiet=True)
         self.settings_button.setIcon(icon("settings"))
         self.settings_button.clicked.connect(self.open_settings)
         filters.addWidget(self.settings_button)

@@ -149,7 +149,7 @@ class SettingsDialog(QDialog):
     def __init__(self, manager, parent=None):
         super().__init__(parent)
         self.manager = manager
-        self.setWindowTitle("快捷键设置")
+        self.setWindowTitle("设置")
         self.setMinimumWidth(610)
         self._recording = None
         layout = QVBoxLayout(self)
@@ -158,9 +158,6 @@ class SettingsDialog(QDialog):
         title = QLabel("快捷键设置")
         title.setObjectName("title")
         layout.addWidget(title)
-        description = QLabel("修改后自动保存并立即生效")
-        description.setObjectName("muted")
-        layout.addWidget(description)
         self.editors = {}
         self.buttons = {}
         for key, label in SHORTCUT_LABELS.items():

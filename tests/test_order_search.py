@@ -372,7 +372,7 @@ def test_group_drag_preview_then_one_commit(window, repo, qtbot):
     qtbot.mousePress(table.viewport(), Qt.MouseButton.LeftButton, pos=origin)
     qtbot.mouseMove(table.viewport(), end, delay=30)
     assert table._drag_active and table._drag_target == 2
-    qtbot.wait(180)
+    qtbot.waitUntil(lambda: table._drag_positions[entries[1].id] == 0)
     assert repo.list_entries() == before
     assert table._drag_groups[0][2] == 2 and table._drag_groups[0][3] > 70
     assert table._drag_positions[entries[1].id] == 0

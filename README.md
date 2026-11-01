@@ -9,6 +9,7 @@ An offline vocabulary notebook for Windows. Enter English words, organize Chines
 ## Features
 
 - **Organize vocabulary**: multiple parts of speech and definitions, multiline translations, and related words with their own definitions.
+- **Read word groups clearly**: a vertical guide beside each word's translations keeps meanings together. Main and related words share the same background and whole-entry selection color.
 - **Review with hidden answers**: reveal an entire entry with one click, hide entries individually or globally, star important words, and track learned words.
 - **Edit quickly**: edit cells directly or load a complete entry into the bottom form; configure shortcuts for common actions.
 - **Search and reorder**: search words, related words, and translations; drag entire entries or shuffle the words still being learned.
@@ -108,7 +109,7 @@ Successful progress restoration reloads the page's date, period and tasks withou
 
 ## Default shortcuts
 
-Open “快捷键设置” (Shortcut settings) at the top to customize the first six actions. Changes take effect immediately and are saved in the database. Shortcuts are handled within the app's own window and support both English and Chinese input modes.
+Open “设置” (Settings) at the top to customize the first six actions. Changes take effect immediately and are saved in the database. Shortcuts are handled within the app's own window and support both English and Chinese input modes.
 
 | Shortcut | Action |
 | --- | --- |
@@ -219,6 +220,7 @@ Run the same command again to check data and shortcut restoration after restart.
 | `main.py`, `vocabulary/app.py` | Arguments, data directory, logging, and application lifecycle |
 | `vocabulary/domain.py`, `vocabulary/storage.py` | Domain objects, validation, SQLite, and transactions |
 | `vocabulary/window.py`, `vocabulary/table.py`, `vocabulary/widgets.py` | Window coordination, table editing, and input controls |
+| `vocabulary/table_style.py` | Shared list backgrounds, selection colors and translation guides; no persistence or input handling |
 | `vocabulary/shortcuts.py`, `vocabulary/native_shortcuts.py`, `vocabulary/theme.py` | Shortcuts, Windows native key handling, and appearance |
 | `vocabulary/transfer.py`, `vocabulary/import_dialog.py` | JSON format and duplicate comparison |
 | `tests/` | Storage and interface tests |

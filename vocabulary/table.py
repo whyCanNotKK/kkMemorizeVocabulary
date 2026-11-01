@@ -13,6 +13,7 @@ from PySide6.QtWidgets import (
 
 from .domain import POS_OPTIONS, WordEntry
 from .review_navigation import navigation_step
+from .table_style import WordGroupStyle
 from .theme import ACCENT, GOLD, MUTED, TEXT, draw_related_arrow, draw_symbol
 from .widgets import PosCombo
 
@@ -141,6 +142,7 @@ class WordDelegate(QStyledItemDelegate):
     def __init__(self, view, before_edit):
         super().__init__(view)
         self.view = view
+        self.word_style = WordGroupStyle(view)
         self.before_edit = before_edit
         self.editor = None
         self.edit_index = None
@@ -189,12 +191,8 @@ class WordDelegate(QStyledItemDelegate):
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         rect = QRectF(option.rect)
         top = row.top_padding
-        selected = bool(option.state & QStyle.StateFlag.State_Selected)
-        painter.fillRect(rect, QColor("#283440" if selected else "#1e242d"))
+        self.word_style.paint(painter, option, index)
         column = index.column()
-        if row.first:
-            painter.setPen(QPen(QColor("#343e4a"), 1))
-            painter.drawLine(rect.topLeft(), rect.topRight())
         if column == 0 and row.first:
             if self.view.study_mode:
                 painter.setPen(QColor(MUTED))
@@ -231,7 +229,7 @@ class WordDelegate(QStyledItemDelegate):
                     painter.setPen(QColor("#bdc8d5"))
                 painter.drawText(area, Qt.AlignmentFlag.AlignTop, text)
             elif column == 2:
-                badge = QRectF(rect.left() + (rect.width() - self.view.pos_badge_width) / 2,
+                badge = QRectF(rect.left() + self.word_style.POS_MARGIN,
                                rect.top() + top, self.view.pos_badge_width, 20)
                 painter.setPen(QPen(QColor("#465463"), 1))
                 painter.setBrush(QColor("#293440"))
@@ -400,7 +398,9 @@ class WordTable(QTableView):
         header.setDefaultAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
         header.setMinimumSectionSize(34)
         self.pos_badge_width = max(self.fontMetrics().horizontalAdvance(pos) for pos, _ in POS_OPTIONS) + 12
-        for column, width in ((0, 38), (1, 206), (2, self.pos_badge_width + 10), (4, 120)):
+        for column, width in ((0, 38), (1, 206),
+                              (2, self.pos_badge_width + 2 * WordGroupStyle.POS_MARGIN),
+                              (4, 120)):
             header.setSectionResizeMode(column, QHeaderView.ResizeMode.Fixed)
             self.setColumnWidth(column, width)
         header.setSectionResizeMode(3, QHeaderView.ResizeMode.Stretch)
@@ -769,7 +769,7 @@ class WordTable(QTableView):
 
     def _paint_drag(self):
         painter = QPainter(self.viewport())
-        painter.fillRect(self.viewport().rect(), QColor("#1e242d"))
+        painter.fillRect(self.viewport().rect(), QColor(WordGroupStyle.BACKGROUND))
         scroll = self.verticalScrollBar().value()
         for i, group in enumerate(self._drag_groups):
             if i != self._drag_source:
