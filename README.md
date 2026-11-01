@@ -2,40 +2,43 @@
 
 **English** | [简体中文](README.zh-CN.md)
 
-An offline vocabulary notebook for Windows. Enter English words, organize Chinese definitions, and hide answers for review. Built with Python, PySide6 / Qt Widgets, and SQLite, it stores all entries and settings locally.
+An offline vocabulary notebook for Windows, with grouped definitions, hidden-answer review, and a dedicated **seventeen-day study** page. Built with Python, PySide6 / Qt Widgets, and SQLite. All data stays on your computer.
 
-[GitHub repository](https://github.com/whyCanNotKK/kkMemorizeVocabulary) · [Releases](https://github.com/whyCanNotKK/kkMemorizeVocabulary/releases) · [Project design (Chinese)](docs/项目设计说明.md) · [Acceptance record (Chinese)](docs/验收记录.md)
+[Download releases](https://github.com/whyCanNotKK/kkMemorizeVocabulary/releases) · [Project design (Chinese)](docs/项目设计说明.md)
 
 ## Features
 
-- **Organize vocabulary**: multiple parts of speech and definitions, multiline translations, and related words with their own definitions.
-- **Read word groups clearly**: a vertical guide beside each word's translations keeps meanings together. Main and related words share the same background and whole-entry selection color.
-- **Review with hidden answers**: reveal an entire entry with one click, hide entries individually or globally, star important words, and track learned words.
-- **Edit quickly**: edit cells directly or load a complete entry into the bottom form; configure shortcuts for common actions.
-- **Search and reorder**: search words, related words, and translations; drag entire entries or shuffle the words still being learned.
-- **Exchange entries offline**: import and export complete entries as JSON, with side-by-side choices for duplicates.
-- **Keep your progress**: saved entries, learning status, order, and shortcuts persist in a local SQLite database.
-- **Seventeen-day study**: study up to 30 new words daily in fixed groups, with morning and afternoon completion and scheduled reviews.
+- **Seventeen-day study**: daily new words, fixed groups, morning and afternoon sessions, and scheduled reviews.
+- **Organized vocabulary**: multiple definitions, multiline translations, related words, stars, and To learn / Learned categories.
+- **Clearer interface**: a dark theme, aligned definitions with vertical guides, whole-entry selection, and a collapsible entry form.
+- **Quick review**: click to reveal answers or copy a word; navigate by keyboard and keep your scroll position when switching tabs.
+- **Easy editing and ordering**: edit cells directly, search words and translations, drag entries, or shuffle the To learn list.
+- **Local storage and exchange**: saved entries, study progress, order, and custom shortcuts persist locally; JSON import/export includes duplicate comparison.
 
-Designed for Windows 10/11 x64. Packaged builds include Python and Qt, so users need no Python installation or internet connection to install or run them. Setting up the source environment and building for the first time require internet access. The app currently has a Chinese interface and does not include an online dictionary, automatic translation, pronunciation, accounts, or cloud sync.
+Supports Windows 10/11 x64. The interface is currently in Chinese. Packaged builds include Python and Qt and run offline.
+
+## Seventeen-day study
+
+1. Add words to **待记** (To learn), then open **十七天背单词** in the morning. The app randomly draws up to **30 new words per day**, in fixed groups of up to **10**, without redrawing or topping up that day's batch.
+2. Complete each round in the morning, then again in the afternoon. Stages are **days 1, 2, 4, 7, and 15**; later reviews follow gaps of 1, 2, 3, and 8 days from the actual completed round. Missed sessions retain their progress.
+3. With a word selected and the study list focused, press **Enter** to reveal its answers; press again to mark it done and select the next word.
+
+Sessions use **Beijing time (UTC+8), with the afternoon starting at 15:00**. Refresh or reenter the page after a period or date change. Study progress is separate from the ordinary Learned status; finished words are excluded from future draws.
+
+The study page has its own progress import/export, including participating words and their progress. Ordinary word JSON and study files use separate import paths.
 
 ## Get started
 
-### Installer or portable build
+Download a build from [Releases](https://github.com/whyCanNotKK/kkMemorizeVocabulary/releases), when available:
 
-Check [Releases](https://github.com/whyCanNotKK/kkMemorizeVocabulary/releases) for packaged builds. If no release assets are available, run from source or build the app using the instructions below. GitHub's **Download ZIP** contains source code; generated files under `dist/` are not included in the repository.
+- **Installer**: run `kkMemorizeVocabulary-Setup.exe`.
+- **Portable**: extract `kkMemorizeVocabulary-windows-x64.zip` and run `kkMemorizeVocabulary.exe`. Keep the complete folder, including `_internal`.
 
-| File | Usage |
-| --- | --- |
-| `kkMemorizeVocabulary-Setup.exe` | Run the installer. The default location is `%LOCALAPPDATA%\Programs\kkMemorizeVocabulary`, with no administrator access required. A Start menu shortcut is created; a desktop shortcut is optional. |
-| `kkMemorizeVocabulary-windows-x64.zip` | Extract the entire folder and run `kkMemorizeVocabulary.exe`. Keep the adjacent `_internal` directory. |
-| `kkMemorizeVocabulary-Setup.exe.sha256` | Installer SHA256 checksum, which you can compare with `Get-FileHash`. |
-
-**`BuildInstaller.exe` in the repository root is a build tool.** It requires the source code, Python, and a build environment. To use the app, launch the installed application or `kkMemorizeVocabulary.exe` from the portable build.
+GitHub's **Download ZIP** contains source code. The root `BuildInstaller.exe` builds the app from source; it is a developer tool.
 
 ### Run from source
 
-Install Python 3.12 x64 on Windows x64, then run these commands in PowerShell:
+Use Windows x64 and Python 3.12 x64. In PowerShell:
 
 ```powershell
 git clone https://github.com/whyCanNotKK/kkMemorizeVocabulary.git
@@ -45,217 +48,46 @@ py -3.12 -m venv .venv
 .\.venv\Scripts\python.exe main.py --data-dir artifacts\development
 ```
 
-If you have already downloaded the source, start with the environment creation command from the project root. If the `py` launcher is unavailable, use `python -m venv .venv` after confirming that `python` refers to Python 3.12 x64. The lock file includes runtime, testing, and packaging dependencies.
+This uses an isolated development database. For everyday use with the default data directory, omit `--data-dir` or double-click `start.bat` after setup.
 
-These commands use an isolated development data directory. Once the environment is ready, you can also run `.\start.bat --data-dir artifacts\development`. For everyday use with the default data directory, run:
+## Common controls
 
-```powershell
-.\.venv\Scripts\python.exe main.py
-```
+Enter a word, part of speech, and translation in the bottom form, then save with **Ctrl+Enter**. Add more definitions or related words as needed. Double-click a list cell to edit it; click a word's text to copy its full name. The eye button hides or reveals answers in the current tab.
 
-You can also double-click `start.bat`. It launches the app using the existing `.venv` and does not install dependencies automatically.
-
-## Using the app
-
-### Add and edit entries
-
-1. Enter a word, part of speech, and translation in the bottom form, then press **Ctrl+Enter** to save. Each main or related word requires a name and at least one complete definition. Enter inserts a new line in translation fields.
-2. Use “增加释义” (Add definition) for another meaning of the same word, or “新增关联词” (Add related word) for an attached word. Definition actions apply to the word containing the current focus. Each word must retain at least one definition.
-3. New entries are starred by default; use the star beside the Save button to change this. A saved new entry appears at the end of the words to learn, expands automatically, and scrolls into view.
-4. Double-click a name, part of speech, or translation in the table to edit it. Use the save shortcut or leave the editor to commit; Esc cancels. To add or remove related words or definitions, click the pencil to edit the whole entry, then save or cancel.
-
-Main words must be unique after trimming surrounding whitespace and ignoring case. Related words may share names and do not create reciprocal links automatically. Duplicate or invalid entries keep your input; duplicate warnings offer “查看已有词” (View existing word).
-
-The entry form grows with its content, up to half the window's client height, then scrolls internally. The chevron at its top center collapses or expands the form while retaining your draft. Collapsing does not save the draft; unsaved changes still need to be handled before exiting.
-
-### Review and learning status
-
-- The default tab is “待记” (To learn). You can also select “全部” (All) or “已记下” (Learned). Saved entries start with their answers hidden on each launch.
-- Left-click directly inside a gray mask to reveal all definitions and related words and select that entry. Clicking the surrounding blank area does not reveal answers. **Ctrl+click a translation** to hide the entire group when not editing.
-- With an entry selected and the list focused, use **W / Up** and **S / Down** to move between main words, skipping extra definitions and related words. Press **Space** to hide or reveal the selected entry. All four tabs support these controls; typing in editors, the entry form or search keeps its usual behavior. Space does not hide entries while a search is active.
-- When no word is selected, any of **W / S / Up / Down** selects the first main word visible in the current viewport without scrolling. If only extra definitions or related words are visible, it selects their owning main word. Empty lists stay unselected.
-- The same navigation keys work when a category tab or review toolbar button has focus: navigation goes directly to the active list, and focus stays there. Search, text editors, the entry form and dialogs keep their own keyboard behavior.
-- With the list focused, **Ctrl+Up / Ctrl+Down** scrolls the list without moving the current selection, even if the selected word leaves the viewport. Hold the keys to scroll continuously. This works in all four tabs; text editors retain their usual Ctrl+arrow behavior.
-- Left-click directly on a main or visible related word to copy its full name, including when a long name is shortened on screen. A brief notice appears at the bottom center of the window. This also works on the study page.
-- The eye at the top right affects every entry listed in the current tab, including those outside the viewport. It hides all answers when all are visible and reveals them when all are hidden; for a mixed or empty list, it reverses that tab's last eye operation. Each tab keeps its own eye record. Reveal states last only for the current session; newly saved entries still expand automatically.
-- Click the circle to mark an entry as learned, or the red minus in the Learned list to move it back. Table stars save immediately. The trash icon deletes the main word and all attached content after confirmation.
-- All four tabs remember their scroll position during the current session. The study page also restores its selected word/cell when returning, refreshing or changing answer visibility, without scrolling to an offscreen selection. Reentry still reloads the current date, period and tasks; removed selections are cleared. All start at the top after restarting.
-
-### Search and order
-
-Search matches literal substrings in main words, their translations, related words, and related translations. Matching ignores case and surrounding whitespace in the query. The query remains when switching categories. Matching entries initially appear as complete groups with all answers temporarily revealed; clearing the search restores their review states. Individual hiding is disabled during search. The eye immediately hides or reveals the current results and updates their review states; changing the query temporarily reveals results again. Other entries keep their states. The three ordinary tabs share each word's review state; the study page has separate reveal states.
-
-Drag the handle on the left of an entry's actions to move its entire group within To learn or Learned. Release to save; Esc or releasing outside the table viewport cancels. All does not support dragging. The shuffle button at the top left of To learn randomizes the order and scrolls to the top on success. **Dragging and shuffling are disabled while the search query is nonempty.** Shuffling also requires at least two words to learn.
-
-Order is saved in the database. New entries and entries whose learning status changes go to the end of their destination category; ordinary edits preserve position. All shows words to learn first, followed by learned words.
-
-### Seventeen-day study
-
-Open “十七天背单词” to load study tasks. On the first morning visit each day, the app draws up to 30 unselected To learn words into permanent groups of up to 10. The batch stays fixed even after restarting; a short or empty batch is not topped up. The single setting `study_last_add_new_vocabulary` stores the last draw date as `YYYY-MM-DD`; a different morning date allows another draw. Migration merges old daily markers into their latest date and removes the old markers. Older tasks appear first. Group numbers replace stars, and entries only offer a study completion action, with no editing or dragging.
-
-Entering the page or clicking its refresh icon captures the date and period in Beijing time: morning before 15:00, afternoon from 15:00 onward. Actions keep using that captured date and period until you refresh or reenter, including across midnight. Search and the entry form are hidden on this page. Drafts and the form's collapsed state are preserved, and form shortcuts are inactive until returning to another page. Answer masks and the global hide toggle remain available.
-
-With a word selected and the study list focused, press **Enter** (main keyboard or numeric keypad) to reveal hidden answers; when answers are already visible, Enter performs “记下” (study completion), just like clicking its icon. Holding Enter does not repeat the action. After completion, the next main word takes the selection at the same task position; completing the last word selects the preceding word. An empty list clears the selection and shows the existing empty-state message. The newly selected word keeps its reveal state, and focus stays in the list. The icon's hover tip includes “回车” (Enter).
-
-Complete each word in both periods. An afternoon completion settles the round only after its morning completion; completing the morning after an earlier afternoon clears that afternoon mark so another afternoon review is required. Missed sessions retain their progress. The stages are days 1, 2, 4, 7 and 15, with successive gaps of 1, 2, 3 and 8 days counted from the actual settled date. Finished words stay excluded from future draws. Study progress does not change the original Learned status.
-
-Study records contain only the word ID, group number, stage, morning and afternoon flags, and last fully completed date. Stage 0 means the entire cycle has finished. Due dates are calculated when queried. Entries sort by group number and local word ID, placing earlier groups first; order within a group can change after importing into another database.
-
-The import/export icons on this page use a separate study file: UTF-8 JSON with `format: kkMemorizeVocabulary.study17`, `version: 3`. Only the new format is accepted; study versions 1/2 and records containing removed fields are rejected. It includes complete entries for every participating word, five progress fields keyed by normalized word text rather than database IDs, and the last draw date and group counter. Future, already reviewed and fully finished words are all included. Exporting does not change progress.
-
-If local progress exists, importing offers “导入单词和进度” (Words and progress), “仅导入单词” (Words only), or Cancel. Words use the existing duplicate comparison dialog and immediate-save behavior. Unresolved comparisons retain the local entries when closed. Progress is then mapped to the final local IDs and replaces all local study records and draw settings in one transaction, preserving file dates and group numbers. Words-only imports retain local progress, including rebinding it when an adopted entry changes ID. If progress restoration fails, it rolls back that phase while retaining words already saved, and you can retry. Canceling or selecting an invalid file makes no changes.
-
-Successful progress restoration reloads the page's date, period and tasks without drawing new words; the next explicit refresh or page visit compares the captured date with the restored last draw date. Ordinary word JSON remains version 2 and exchanges entries only; the two file formats use separate import paths. Importing over a participating word preserves its progress, and deleting the word deletes it. A database backup preserves all entries, progress and shortcuts. This source update does not rebuild previously packaged releases.
-
-## Default shortcuts
-
-Open “设置” (Settings) at the top to customize the first six actions. Changes take effect immediately and are saved in the database. Shortcuts are handled within the app's own window and support both English and Chinese input modes.
-
-| Shortcut | Action |
+| Key | Action |
 | --- | --- |
-| Ctrl+N | Add a related word and focus its name field |
-| Ctrl+M | Remove the last related word |
-| Ctrl+J | Add a definition to the currently focused word |
-| Ctrl+K | Remove that word's last definition, keeping at least one |
-| Ctrl+Enter | Save the whole entry; when editing a table cell, save that cell first |
-| Ctrl+I | Toggle the important flag for the main word in the bottom form |
-| Tab / Shift+Tab | Move focus forward / backward |
-| Enter | Insert a new line in a translation field |
-| Space | Open a focused part-of-speech selector, or toggle a focused star |
-| 1–9 | Select a part of speech when its selector has focus |
-| n / v / a | Select noun / verb / adjective; repeated a presses alternate between adj. and adv. |
+| W / S or Up / Down | Previous / next main word, with the list focused |
+| Space | Hide / reveal the selected entry, outside search |
+| Enter | Reveal / complete the selected word on the study page |
+| Ctrl+Up / Ctrl+Down | Scroll without moving the selection |
+| Ctrl+Enter | Save the entry or current cell edit |
+| Ctrl+N / Ctrl+J | Add a related word / definition in the entry form |
 
-The number keys map to: 1 noun, 2 verb, 3 adjective, 4 adverb, 5 preposition, 6 pronoun, 7 conjunction, 8 interjection, and 9 other. Letter keys accept either case and work with the selector open or closed.
+Common entry shortcuts can be changed in **设置** (Settings). Search covers main words, related words, and translations; dragging and shuffling are disabled during search.
 
-## JSON import and export
+## Data and backups
 
-The import and export buttons sit to the right of the global hide toggle. Export includes **all saved entries matching both the current category and search query**, including results outside the visible viewport. Hidden answers are exported in full. Save draft entries before exporting them.
+The default database is `%LOCALAPPDATA%\kkMemorizeVocabulary\vocabulary.sqlite3`. **Close the app before copying it** for a complete backup of entries, study progress, and settings. Program updates keep this data directory.
 
-Exports use UTF-8 JSON and include important flags, learning status, order, all definitions, and related words. Array order and line breaks inside translations are preserved. Shortcuts, internal database IDs, and temporary reveal states are excluded. Exports use version 2; imports accept versions 1 and 2:
+Use JSON to exchange entries or study progress. Ordinary tabs export all entries matching the current category and search, including those outside the viewport. Word exports use JSON v2 (imports accept v1/v2); study files use v3 only. Importing study progress replaces existing local study progress; choose **仅导入单词** (Words only) to keep it.
 
-```json
-{
-  "format": "kkMemorizeVocabulary",
-  "version": 2,
-  "words": [
-    {
-      "text": "record",
-      "important": true,
-      "learned": false,
-      "sort_order": 1,
-      "senses": [{"pos": "n.", "translation": "记录；唱片"}],
-      "related": [
-        {"text": "recorder", "senses": [{"pos": "n.", "translation": "录音机"}]}
-      ]
-    }
-  ]
-}
-```
+Use `--data-dir <directory>` to store data elsewhere, including with a portable build.
 
-All fields shown are required except `sort_order`. `related` may be empty; `senses` must contain at least one complete definition. Part-of-speech values are `n.`, `v.`, `adj.`, `adv.`, `prep.`, `pron.`, `conj.`, `interj.`, or `其他` (other). `important` and `learned` must be JSON booleans. When present, `sort_order` must be a positive integer, not a boolean. The entire file is validated first; an invalid format or entry prevents any entries from being written.
+## Development and builds
 
-Import order and duplicate handling:
-
-- If every entry has a sort number, entries are processed in stable ascending order; otherwise, file order is used. The database assigns new sort numbers rather than reusing imported values.
-- Nonduplicate entries are imported in one transaction first. All duplicates then appear for comparison. Only main word names are compared, after trimming whitespace and ignoring case; duplicates within the same file are also detected.
-- Click the left card to keep the existing entry, or the right card to adopt the complete imported entry and its status. Adopting deletes and recreates the entry in one transaction, with a new ID and a position at the end of its destination category. Each successful choice immediately removes that card pair.
-- Use “全部使用左侧 / 右侧” (Use all left / right) to handle the remaining pairs. Individual choices apply in click order; batch choices follow the remaining candidate order. For repeated names, the last adopted entry wins. A failed batch adoption rolls back the entire batch.
-- Closing the comparison window keeps unresolved existing entries, newly imported words, and all choices already saved.
-
-## Convert old vocabulary practice text
-
-Use the standalone converter for space-separated practice lines (Python 3.12; no extra dependencies):
-
-```powershell
-.\.venv\Scripts\python.exe scripts\extract_practice_words.py "G:\myDoc\study\English\write.txt" -o artifacts\practice-import\write-import.json
-```
-
-Select the generated JSON using **导入单词** on To learn / All / Learned. The converter merges repeated main words, collects unique related words per main word, and preserves first-seen order. Every definition is the placeholder `n.` / `1`; entries start starred and unlearned. It reads the source without changing the database.
-
-Phrase matching and the few excluded example sentences are listed explicitly in `scripts/practice_extraction_rules.json`, based on the original practice file. Update that list for new phrases; spelling variants and typos are preserved. Longer phrases take priority and internal whitespace is normalized. The adjacent `write-import.report.json` records counts, exclusions, punctuation cleanup and source line numbers. `--rules`, `--encoding` and `--report` can override the defaults.
-
-## Data, backups, and updates
-
-The default data directory is `%LOCALAPPDATA%\kkMemorizeVocabulary`, separate from the installation directory:
-
-| File | Contents |
-| --- | --- |
-| `vocabulary.sqlite3` | All entries, important flags, learning status, order, and shortcuts |
-| `application.log` and rotated logs | Errors and diagnostic information |
-
-**Back up or restore**: close the app before copying or restoring the database file. While the app is running, `vocabulary.sqlite3-wal` and `vocabulary.sqlite3-shm` may exist; do not move or delete them individually during use. JSON is useful for exchanging entries; a complete backup should use the database to retain shortcut settings.
-
-**Update**: close the app first. For an installed build, run the new installer using the same installation directory. For a portable build, replace the complete application folder. The user data directory is retained, including when uninstalling through Windows Settings → Apps.
-
-**Database upgrades**: the current SQLite schema version is 5. Startup reads `PRAGMA user_version` and runs the remaining numbered SQL files (001 through 005) in `vocabulary/migrations/`, in order. Each step commits its schema version in its own transaction. A failure rolls back that step while retaining previous successful upgrades; restarting after fixing the problem resumes from the last committed version. Entries, study progress, groups, last draw date, group counter and shortcuts are preserved; finished records become stage 0. The app uses only the new schema afterward, and older apps cannot open v5 databases. Study JSON accepts version 3 only. Ordinary word JSON remains version 2 and accepts imports of versions 1/2. Database, interchange and application versions are managed separately.
-
-Schema creation and transformations live in `.sql` files. `vocabulary/migration.py` loads UTF-8 resources and manages ordering, transactions and versions before `Repository` reads business data. Add the next numbered script and register it for future versions; do not rewrite released migration files. Both source packages and frozen bundles include these resources, and release verification compares their contents with the source scripts.
-
-To use another writable data directory, launch with:
-
-```powershell
-.\kkMemorizeVocabulary.exe --data-dir "D:\MyVocabulary"
-```
-
-Portable builds also use the default user data directory unless `--data-dir` is supplied. Set this explicitly if you want to carry data with the application folder.
-
-## Development and verification
-
-Use `--data-dir artifacts\development` for development as shown above. Automated tests use temporary databases and do not write to the default user data directory:
+Tests use temporary databases. The smoke check requires an isolated data directory:
 
 ```powershell
 .\.venv\Scripts\python.exe -m pytest -q
-```
-
-The source smoke check writes demonstration entries, produces `smoke-result.json` and interface screenshots, then exits automatically. **An explicit isolated directory is required**:
-
-```powershell
 .\.venv\Scripts\python.exe main.py --smoke-test --data-dir artifacts\source-smoke
 ```
 
-Run the same command again to check data and shortcut restoration after restart. Inspect `ok` and the individual checks in the report. Historical results and acceptance details are in the [acceptance record (Chinese)](docs/验收记录.md).
-
-| Path | Responsibility |
-| --- | --- |
-| `main.py`, `vocabulary/app.py` | Arguments, data directory, logging, and application lifecycle |
-| `vocabulary/domain.py`, `vocabulary/storage.py` | Domain objects, validation, SQLite, and transactions |
-| `vocabulary/window.py`, `vocabulary/table.py`, `vocabulary/widgets.py` | Window coordination, table editing, and input controls |
-| `vocabulary/table_style.py` | Shared list backgrounds, selection colors and translation guides; no persistence or input handling |
-| `vocabulary/shortcuts.py`, `vocabulary/native_shortcuts.py`, `vocabulary/theme.py` | Shortcuts, Windows native key handling, and appearance |
-| `vocabulary/transfer.py`, `vocabulary/import_dialog.py` | JSON format and duplicate comparison |
-| `tests/` | Storage and interface tests |
-| `build.ps1`, `installer/`, `scripts/` | Building, installer configuration, and release verification |
-
-The [project design (Chinese)](docs/项目设计说明.md) defines requirements, module boundaries, and data version policies. Update it and any affected data version strategy before implementing new features.
-
-## Build a Windows installer
-
-The build machine needs Windows x64 and Python 3.12 x64. Double-click **`BuildInstaller.exe`** in the repository root, or run this command from the project root:
+Double-click **BuildInstaller.exe** or run:
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File build.ps1
 ```
 
-The launcher invokes the adjacent `build.ps1`, displays progress, and keeps its window open until you press Enter. On success, it opens the output directory with the installer selected. Keep the launcher with the source code; each build packages the current source.
+The build prepares dependencies, runs tests, packages and verifies the app, and writes the installer and portable ZIP to `dist/`. Source setup and the first build require internet access.
 
-The script creates `.venv` if missing, installs missing locked dependencies, prepares Inno Setup, runs tests, builds with PyInstaller, verifies bundled source and DLLs, and generates the portable ZIP and installer. The first build downloads the pinned Inno Setup 6.7.3, checks its SHA256, and caches a portable compiler in `build\tools`. No global compiler installation is required; later builds can reuse the prepared environment and cache.
-
-Successful builds produce:
-
-| Path | Contents |
-| --- | --- |
-| `dist\kkMemorizeVocabulary-Setup.exe` | Complete installer that can be distributed on its own |
-| `dist\kkMemorizeVocabulary-Setup.exe.sha256` | Installer SHA256 checksum |
-| `dist\kkMemorizeVocabulary\` | Complete portable application directory, including `_internal` |
-| `dist\kkMemorizeVocabulary-windows-x64.zip` | Portable application archive |
-| `build\installer-build.log` | Build log |
-
-Both README language versions are included in the packaged application. The installer version comes from `pyproject.toml`. A failure prints `BUILD FAILED` and returns a nonzero exit code; old files may remain under `dist/`, so their presence alone does not indicate success. Only one build can run at a time.
-
-After editing the launcher source, `scripts\BuildInstaller.cs`, rebuild it with the .NET Framework compiler included with Windows:
-
-```powershell
-powershell -ExecutionPolicy Bypass -File scripts\build-launcher.ps1
-```
-
-If a packaged app reports a Qt DLL loading error, check that its complete application directory is present, then rebuild and verify it with the build script. The script isolates dependency search paths and checks source consistency and Windows / ICU dependencies to prevent DLLs from other development tools entering the bundle.
+See the [project design](docs/项目设计说明.md) for detailed behavior, architecture, and data formats, and the [acceptance record](docs/验收记录.md) for verification history (both in Chinese).
