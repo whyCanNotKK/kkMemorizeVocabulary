@@ -1,5 +1,5 @@
 """Dedicated study projection; refreshing is the only way to change its clock."""
-from PySide6.QtCore import Signal
+from PySide6.QtCore import QModelIndex, Signal
 from PySide6.QtWidgets import QHBoxLayout, QLabel, QVBoxLayout, QWidget
 
 from .learning import StudyContext
@@ -60,19 +60,17 @@ class StudyPage(QWidget):
         self._known_ids.update(ids)
         self.period_label.setText(f"{context.label} · 待完成 {len(tasks)} 词")
         self.render()
-        self.table.scrollToTop()
         return True
 
     def render(self):
-        position = self.table.verticalScrollBar().value()
-        self.model.study_groups = {task.entry.id: task.group_number for task in self.tasks}
-        # Group numbers can grow beyond the original star column's width.
-        width = max((self.table.fontMetrics().horizontalAdvance(str(task.group_number)) + 20
-                     for task in self.tasks), default=38)
-        self.table.setColumnWidth(0, max(38, width))
-        self.model.populate([task.entry for task in self.tasks], self.revealed)
-        self.table.update_spans()
-        self.table.verticalScrollBar().setValue(position)
+        with self.table.preserve_view():
+            self.model.study_groups = {task.entry.id: task.group_number for task in self.tasks}
+            # Group numbers can grow beyond the original star column's width.
+            width = max((self.table.fontMetrics().horizontalAdvance(str(task.group_number)) + 20
+                         for task in self.tasks), default=38)
+            self.table.setColumnWidth(0, max(38, width))
+            self.model.populate([task.entry for task in self.tasks], self.revealed)
+            self.table.update_spans()
 
     def reveal(self, word_id, expanded):
         if expanded:
@@ -87,8 +85,8 @@ class StudyPage(QWidget):
         self.render()
 
     def complete(self, word_id, action):
-        if action != "study" or self.context is None or not any(
-                task.entry.id == word_id for task in self.tasks):
+        position = next((i for i, task in enumerate(self.tasks) if task.entry.id == word_id), None)
+        if action != "study" or self.context is None or position is None:
             return
         try:
             self.repository.complete_study(word_id, self.context)
@@ -99,3 +97,10 @@ class StudyPage(QWidget):
         self.revealed.discard(word_id)
         self.period_label.setText(f"{self.context.label} · 待完成 {len(self.tasks)} 词")
         self.render()
+        if self.tasks:
+            target = self.tasks[min(position, len(self.tasks) - 1)]
+            self.table.select_entry(target.entry.id, scroll=True)
+        else:
+            self.table.clearSelection()
+            self.table.setCurrentIndex(QModelIndex())
+        self.table.setFocus()

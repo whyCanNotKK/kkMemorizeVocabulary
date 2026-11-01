@@ -70,11 +70,15 @@ The entry form grows with its content, up to half the window's client height, th
 ### Review and learning status
 
 - The default tab is “待记” (To learn). You can also select “全部” (All) or “已记下” (Learned). Saved entries start with their answers hidden on each launch.
-- Click a gray mask to reveal all definitions and related words. **Ctrl+click a translation** to hide the entire group when not editing.
+- Left-click directly inside a gray mask to reveal all definitions and related words and select that entry. Clicking the surrounding blank area does not reveal answers. **Ctrl+click a translation** to hide the entire group when not editing.
+- With an entry selected and the list focused, use **W / Up** and **S / Down** to move between main words, skipping extra definitions and related words. Press **Space** to hide or reveal the selected entry. All four tabs support these controls; typing in editors, the entry form or search keeps its usual behavior. Space does not hide entries while a search is active.
+- When no word is selected, any of **W / S / Up / Down** selects the first main word visible in the current viewport without scrolling. If only extra definitions or related words are visible, it selects their owning main word. Empty lists stay unselected.
+- The same navigation keys work when a category tab or review toolbar button has focus: navigation goes directly to the active list, and focus stays there. Search, text editors, the entry form and dialogs keep their own keyboard behavior.
+- With the list focused, **Ctrl+Up / Ctrl+Down** scrolls the list without moving the current selection, even if the selected word leaves the viewport. Hold the keys to scroll continuously. This works in all four tabs; text editors retain their usual Ctrl+arrow behavior.
 - Left-click directly on a main or visible related word to copy its full name, including when a long name is shortened on screen. A brief notice appears at the bottom center of the window. This also works on the study page.
 - The global hide toggle at the top right affects all entries, including those outside the current category. Reveal states last only for the current session; newly saved entries still expand automatically.
 - Click the circle to mark an entry as learned, or the red minus in the Learned list to move it back. Table stars save immediately. The trash icon deletes the main word and all attached content after confirmation.
-- Each category remembers its scroll position during the current session. All start at the top after restarting.
+- All four tabs remember their scroll position during the current session. The study page also restores its selected word/cell when returning, refreshing or changing answer visibility, without scrolling to an offscreen selection. Reentry still reloads the current date, period and tasks; removed selections are cleared. All start at the top after restarting.
 
 ### Search and order
 
@@ -89,6 +93,8 @@ Order is saved in the database. New entries and entries whose learning status ch
 Open “十七天背单词” to load study tasks. On the first morning visit each day, the app draws up to 30 unselected To learn words into permanent groups of up to 10. The batch stays fixed even after restarting; a short or empty batch is not topped up. The single setting `study_last_add_new_vocabulary` stores the last draw date as `YYYY-MM-DD`; a different morning date allows another draw. Migration merges old daily markers into their latest date and removes the old markers. Older tasks appear first. Group numbers replace stars, and entries only offer a study completion action, with no editing or dragging.
 
 Entering the page or clicking its refresh icon captures the date and period in Beijing time: morning before 15:00, afternoon from 15:00 onward. Actions keep using that captured date and period until you refresh or reenter, including across midnight. Search and the entry form are hidden on this page. Drafts and the form's collapsed state are preserved, and form shortcuts are inactive until returning to another page. Answer masks and the global hide toggle remain available.
+
+With a word selected and the study list focused, press **Enter** (main keyboard or numeric keypad) to reveal hidden answers; when answers are already visible, Enter performs “记下” (study completion), just like clicking its icon. Holding Enter does not repeat the action. After completion, the next main word takes the selection at the same task position; completing the last word selects the preceding word. An empty list clears the selection and shows the existing empty-state message. The newly selected word keeps its reveal state, and focus stays in the list. The icon's hover tip includes “回车” (Enter).
 
 Complete each word in both periods. An afternoon completion settles the round only after its morning completion; completing the morning after an earlier afternoon clears that afternoon mark so another afternoon review is required. Missed sessions retain their progress. The stages are days 1, 2, 4, 7 and 15, with successive gaps of 1, 2, 3 and 8 days counted from the actual settled date. Finished words stay excluded from future draws. Study progress does not change the original Learned status.
 

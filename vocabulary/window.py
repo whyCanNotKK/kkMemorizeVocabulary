@@ -13,6 +13,7 @@ from .domain import DuplicateWord, WordEntry
 from .import_dialog import ImportConflictDialog
 from .shortcuts import SettingsDialog, ShortcutManager
 from .table import WordTable, WordTableModel
+from .review_navigation import ReviewKeyRouter
 from .study_page import StudyPage
 from .learning import StudyContext
 from .study_transfer import read_study_backup, write_study_backup
@@ -113,6 +114,8 @@ class MainWindow(QMainWindow):
         self.study_page.hide()
         list_layout.addWidget(self.study_page, 1)
         layout.addWidget(list_panel, 1)
+        self.review_keys = ReviewKeyRouter(
+            list_panel, lambda: self.study_page.table if self.filter_name == "study17" else self.table)
 
         editor_panel = QFrame()
         self.editor_panel = editor_panel
@@ -303,9 +306,6 @@ class MainWindow(QMainWindow):
         bar = self.table.verticalScrollBar()
         self._filter_scroll[self._view_filter] = bar.value()
         position = self._filter_scroll[self.filter_name]
-        current = self.table.currentIndex().data(Qt.ItemDataRole.UserRole)
-        selected_id = current.entry.id if current else None
-        selected_part = (current.owner, current.sense, self.table.currentIndex().column()) if current else None
         entries = self.repository.list_entries()
         counts = {"all": len(entries), "pending": sum(not e.learned for e in entries),
                   "learned": sum(e.learned for e in entries)}
@@ -323,28 +323,12 @@ class MainWindow(QMainWindow):
         visible = self._filter_entries(entries)
         searching = bool(self.search_box.text().strip())
         self.table.set_page_state(self.filter_name, searching, len(visible))
-        auto_scroll = self.table.hasAutoScroll()
-        self.table.setUpdatesEnabled(False)
-        self.table.setAutoScroll(False)
-        try:
+        with self.table.preserve_view(scroll_position=position):
             # Search expands only the projection, leaving the review state intact.
             revealed = {entry.id for entry in visible} if searching else self.revealed
             self.model.populate(visible, revealed)
             self.table.update_spans()
-            if selected_id is not None:
-                matching = [i for i, row in enumerate(self.model.rows) if row.entry.id == selected_id]
-                if matching:
-                    number = next((i for i in matching if
-                                   (self.model.rows[i].owner, self.model.rows[i].sense) == selected_part[:2]),
-                                  matching[0])
-                    self.table.setCurrentIndex(self.model.index(number, selected_part[2]))
-            # Restoring currentIndex with auto-scroll enabled jumps to the old selection.
-            self.table.doItemsLayout()
-            bar.setValue(position)
-            self._view_filter = self.filter_name
-        finally:
-            self.table.setAutoScroll(auto_scroll)
-            self.table.setUpdatesEnabled(True)
+        self._view_filter = self.filter_name
 
     def _filter_entries(self, entries):
         keyword = self.search_box.text().strip().casefold()

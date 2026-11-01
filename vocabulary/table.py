@@ -1,16 +1,18 @@
 from dataclasses import dataclass
+from contextlib import contextmanager
 import math
 import time
 
 import shiboken6
 from PySide6.QtCore import QAbstractTableModel, QEasingCurve, QEvent, QItemSelection, QItemSelectionModel, QModelIndex, QPoint, QPersistentModelIndex, QRect, QRectF, QSize, Qt, QTimer, QVariantAnimation, Signal
-from PySide6.QtGui import QColor, QFont, QFontMetricsF, QPainter, QPen, QTextDocument, QTextOption
+from PySide6.QtGui import QColor, QFont, QFontMetricsF, QPainter, QPainterPath, QPen, QTextDocument, QTextOption
 from PySide6.QtWidgets import (
-    QAbstractItemView, QApplication, QHeaderView, QLineEdit, QPlainTextEdit,
+    QAbstractItemView, QAbstractSlider, QApplication, QHeaderView, QLineEdit, QPlainTextEdit,
     QPushButton, QStyle, QStyledItemDelegate, QStyleOptionViewItem, QTableView,
 )
 
 from .domain import POS_OPTIONS, WordEntry
+from .review_navigation import navigation_step
 from .theme import ACCENT, GOLD, MUTED, TEXT, draw_related_arrow, draw_symbol
 from .widgets import PosCombo
 
@@ -83,6 +85,8 @@ class WordTableModel(QAbstractTableModel):
                 return "记下"
         if role == Qt.ItemDataRole.UserRole:
             return row
+        if role == Qt.ItemDataRole.ToolTipRole and column == 3:
+            return None
         if role in (Qt.ItemDataRole.DisplayRole, Qt.ItemDataRole.EditRole, Qt.ItemDataRole.ToolTipRole):
             if column == 1:
                 return row.word.text if row.sense == 0 else ""
@@ -93,7 +97,7 @@ class WordTableModel(QAbstractTableModel):
             if column == 0 and row.first:
                 return "重点" if row.entry.important else "非重点"
             if row.hidden and column == 2:
-                return "答案已隐藏，点击查看词性、翻译和关联词"
+                return "答案已隐藏，点击灰色遮罩查看词性、翻译和关联词"
             if column == 4 and row.first:
                 return ("恢复待记" if row.entry.learned else "标记已记下") + "；编辑整组；删除单词"
         return None
@@ -134,6 +138,20 @@ class WordDelegate(QStyledItemDelegate):
         self.editor = None
         self.edit_index = None
         self._committing = False
+
+    @staticmethod
+    def mask_path(rect):
+        """The painted capsule is also the exact mouse target."""
+        rect = QRectF(rect)
+        mask = QRectF(rect.left() + 12, rect.top() + 11, min(360, rect.width() - 28), 14)
+        path = QPainterPath()
+        path.addRoundedRect(mask, 7, 7)
+        return path
+
+    def mask_hit(self, index, point):
+        row = index.data(Qt.ItemDataRole.UserRole)
+        return (row is not None and row.hidden and index.column() in (2, 3)
+                and self.mask_path(self.view.visualRect(index)).contains(point))
 
     def word_layout(self, index, rect, base_font):
         """Use the same word geometry for painting and pointer hit testing."""
@@ -189,10 +207,9 @@ class WordDelegate(QStyledItemDelegate):
                     name, color = "circle", ACCENT
                 draw_symbol(painter, name, QRectF(target).adjusted(7, 7, -7, -7), color)
         elif column == 2 and row.hidden:
-            mask = QRectF(rect.left() + 12, rect.top() + 11, min(360, rect.width() - 28), 14)
             painter.setPen(Qt.PenStyle.NoPen)
             painter.setBrush(QColor("#788493"))
-            painter.drawRoundedRect(mask, 7, 7)
+            painter.drawPath(self.mask_path(rect))
         elif column in (1, 2, 3):
             text = index.data() or ""
             font = QFont(option.font)
@@ -440,6 +457,93 @@ class WordTable(QTableView):
                 self.setSpan(i, 2, 1, 2)
         self.resizeRowsToContents()
 
+    def _entry_index(self, entry_id, owner=-1, sense=0, column=1):
+        matching = [i for i, row in enumerate(self.model().rows) if row.entry.id == entry_id]
+        if not matching:
+            return QModelIndex()
+        number = next((i for i in matching if
+                       (self.model().rows[i].owner, self.model().rows[i].sense) == (owner, sense)), matching[0])
+        return self.model().index(number, column)
+
+    @contextmanager
+    def preserve_view(self, *, scroll_position=None):
+        """Rebuild rows while retaining logical selection and pixel scroll position."""
+        current = self.currentIndex()
+        row = current.data(Qt.ItemDataRole.UserRole)
+        part = (row.entry.id, row.owner, row.sense, current.column()) if row else None
+        selected = self.selectionModel().isSelected(current)
+        position = self.verticalScrollBar().value() if scroll_position is None else scroll_position
+        auto_scroll, updates = self.hasAutoScroll(), self.updatesEnabled()
+        self.setAutoScroll(False)
+        self.setUpdatesEnabled(False)
+        try:
+            yield
+            self.setCurrentIndex(self._entry_index(*part) if part else QModelIndex())
+            if not selected:
+                self.clearSelection()
+            self.doItemsLayout()
+            self.verticalScrollBar().setValue(position)
+        finally:
+            self.setAutoScroll(auto_scroll)
+            self.setUpdatesEnabled(updates)
+
+    def select_entry(self, entry_id, *, scroll=False):
+        """Select a whole entry via its main row, including after a model reset."""
+        index = self._entry_index(entry_id)
+        if not index.isValid():
+            return
+        position = self.verticalScrollBar().value()
+        auto_scroll = self.hasAutoScroll()
+        self.setAutoScroll(False)
+        try:
+            self.setCurrentIndex(index)
+            self.verticalScrollBar().setValue(position)
+        finally:
+            self.setAutoScroll(auto_scroll)
+        if scroll:
+            self.scrollTo(index, QAbstractItemView.ScrollHint.EnsureVisible)
+
+    def set_entry_revealed(self, entry_id, expanded):
+        """The page owns reveal state; restore selection after its projection resets."""
+        if self.search_active:
+            return
+        self.revealRequested.emit(entry_id, expanded)
+        self.select_entry(entry_id)
+
+    def navigate_entries(self, step):
+        """One navigation entry point for table keys and surrounding controls."""
+        if (not self.isVisible() or not self.isEnabled() or self.delegate.editor is not None
+                or self.state() == QAbstractItemView.State.EditingState or self._drag_candidate):
+            return False
+        # Choose before focusing: Qt's default focus handling may create a current cell.
+        self._move_entry_selection(step)
+        self.setFocus(Qt.FocusReason.ShortcutFocusReason)
+        return True
+
+    def _move_entry_selection(self, step):
+        rows = self.model().rows
+        if not rows:
+            return
+        current = self.currentIndex()
+        row = current.data(Qt.ItemDataRole.UserRole)
+        if row is None or not self.selectionModel().isSelected(current):
+            viewport = self.viewport().rect()
+            visible = next((item.entry.id for i, item in enumerate(rows)
+                            if item.first and self.visualRect(self.model().index(i, 1)).intersects(viewport)), None)
+            if visible is not None:
+                self.select_entry(visible)
+            else:
+                top = self.rowAt(0)
+                if top >= 0:
+                    self.select_entry(rows[top].entry.id)
+                else:
+                    self.scrollToTop()
+                    self.select_entry(rows[0].entry.id)
+            return
+        entries = [item.entry.id for item in rows if item.first]
+        target = max(0, min(len(entries) - 1, entries.index(row.entry.id) + step))
+        self.select_entry(entries[target], scroll=True)
+
     def action_rects(self, rect):
         names = ("study",) if self.study_mode else (
             ("drag", "learned", "edit", "trash") if self.show_drag_handle else ("learned", "edit", "trash"))
@@ -473,13 +577,15 @@ class WordTable(QTableView):
                         self.actionRequested.emit(row.entry.id, action)
                         event.accept()
                         return
-            if row.hidden and column in (2, 3):
+            if self.delegate.mask_hit(index, event.position()):
                 self._just_revealed = (row.entry.id, time.monotonic())
-                self.revealRequested.emit(row.entry.id, True)
+                self.setFocus(Qt.FocusReason.MouseFocusReason)
+                self.set_entry_revealed(row.entry.id, True)
                 event.accept()
                 return
-            if column == 3 and event.modifiers() & Qt.KeyboardModifier.ControlModifier:
-                self.revealRequested.emit(row.entry.id, False)
+            if not row.hidden and column == 3 and event.modifiers() & Qt.KeyboardModifier.ControlModifier:
+                self.setFocus(Qt.FocusReason.MouseFocusReason)
+                self.set_entry_revealed(row.entry.id, False)
                 event.accept()
                 return
             if self.delegate.word_hit(index, event.position()):
@@ -594,6 +700,39 @@ class WordTable(QTableView):
         if self._drag_active:
             event.accept()
             return
+        if (self.hasFocus() and self.delegate.editor is None
+                and self.state() != QAbstractItemView.State.EditingState):
+            key = event.key()
+            modifiers = event.modifiers()
+            if key == Qt.Key.Key_Enter:
+                modifiers &= ~Qt.KeyboardModifier.KeypadModifier
+            if (event.modifiers() == Qt.KeyboardModifier.ControlModifier
+                    and key in (Qt.Key.Key_Up, Qt.Key.Key_Down)):
+                action = (QAbstractSlider.SliderAction.SliderSingleStepSub if key == Qt.Key.Key_Up
+                          else QAbstractSlider.SliderAction.SliderSingleStepAdd)
+                self.verticalScrollBar().triggerAction(action)
+                event.accept()
+                return
+            if modifiers != Qt.KeyboardModifier.NoModifier:
+                super().keyPressEvent(event)
+                return
+            step = navigation_step(event)
+            if step is not None:
+                self.navigate_entries(step)
+                event.accept()
+                return
+            study_enter = self.study_mode and key in (Qt.Key.Key_Return, Qt.Key.Key_Enter)
+            if key == Qt.Key.Key_Space or study_enter:
+                current = self.currentIndex()
+                row = current.data(Qt.ItemDataRole.UserRole)
+                if (not event.isAutoRepeat() and row is not None
+                        and self.selectionModel().isSelected(current)):
+                    if study_enter and not row.hidden:
+                        self.actionRequested.emit(row.entry.id, "study")
+                    else:
+                        self.set_entry_revealed(row.entry.id, row.hidden)
+                event.accept()
+                return
         super().keyPressEvent(event)
 
     def focusOutEvent(self, event):
@@ -673,7 +812,7 @@ class WordTable(QTableView):
                 text = ""
                 if index.column() == 4 and row.first:
                     labels = {"learned": "恢复待记" if row.entry.learned else "标记已记下",
-                              "study": "记下",
+                              "study": "记下（回车）",
                               "edit": "编辑整组", "trash": "删除单词",
                               "drag": "按住拖动整个词条" if self.reorder_enabled else "搜索时不可调整排序"}
                     for name, rect in self.action_rects(self.visualRect(index)):
@@ -683,12 +822,15 @@ class WordTable(QTableView):
                     text = (f"第 {index.data()} 组" if self.study_mode else
                             ("取消重点" if row.entry.important else "设为重点"))
                 elif row.hidden and index.column() in (2, 3):
-                    text = "点击查看词性、翻译和关联词"
+                    if self.delegate.mask_hit(index, event.pos()):
+                        text = "点击查看词性、翻译和关联词"
                 else:
                     text = index.data(Qt.ItemDataRole.ToolTipRole) or ""
                 if text:
                     QToolTip.showText(event.globalPos(), text, self)
-                    return True
+                else:
+                    QToolTip.hideText()
+                return True
         return super().viewportEvent(event)
 
     def resizeEvent(self, event):
