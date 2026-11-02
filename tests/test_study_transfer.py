@@ -167,17 +167,16 @@ def test_invalid_backup_rejected_before_import(document, corruption):
         parse_study_backup(json.dumps(document))
 
 
-def test_duplicate_json_keys_oversized_groups_and_bad_stage_dates(document):
+def test_duplicate_json_keys_custom_groups_and_bad_stage_dates(document):
     content = json.dumps(document)
     with pytest.raises(ValidationError):
         parse_study_backup(content.replace('"version": 3', '"version": 3, "version": 3'))
-    too_many = deepcopy(document)
+    large_group = deepcopy(document)
     for i in range(10):
         name = f'beta{i}'
-        too_many['words'].append(dict(deepcopy(document['words'][0]), text=name))
-        too_many['study_records'][name] = deepcopy(document['study_records']['alpha'])
-    with pytest.raises(ValidationError, match='最多包含10'):
-        parse_study_backup(json.dumps(too_many))
+        large_group['words'].append(dict(deepcopy(document['words'][0]), text=name))
+        large_group['study_records'][name] = deepcopy(document['study_records']['alpha'])
+    assert len(parse_study_backup(json.dumps(large_group)).records) == 11
     document['study_records']['alpha'].update(stage=2, last_completed_on=None)
     with pytest.raises(ValidationError, match='不一致'):
         parse_study_backup(json.dumps(document))
@@ -268,9 +267,11 @@ def test_ui_import_modes(source, window, monkeypatch, tmp_path, mode):
 
 
 @pytest.mark.parametrize('incoming', [True, False, None])
-def test_study_import_reuses_duplicate_dialog_and_final_local_id(source, window, monkeypatch, tmp_path, incoming):
+@pytest.mark.parametrize('page', ['study17', 'pending'])
+def test_study_import_reuses_duplicate_dialog_and_final_local_id(source, window, monkeypatch, tmp_path, incoming, page):
     old = add(window.repository, 'ALPHA', '本机内容')
-    enter(window, monkeypatch)
+    if page == 'study17':
+        enter(window, monkeypatch)
     info, errors = import_ui(window, monkeypatch, tmp_path, source.study_backup())
     seen = []
     def resolve(dialog):
@@ -329,6 +330,21 @@ def test_ui_progress_failure_reports_saved_words_and_keeps_prior_progress(source
     assert len(window.repository.list_entries()) == 2
 
 
+def test_routed_progress_failure_before_study_page_was_opened_keeps_words_and_reports_error(
+        source, window, monkeypatch, tmp_path):
+    add(window.repository, 'local')
+    info, errors = import_ui(window, monkeypatch, tmp_path, source.study_backup())
+    window.repository.connection.execute('''CREATE TRIGGER fail_restore BEFORE INSERT ON memorize_vocabulary_17day
+        BEGIN SELECT RAISE(ABORT,'restore failed'); END''')
+    assert window.study_page.context is None
+    window.import_words()
+    assert not info and len(errors) == 1 and '词条已保留' in errors[0]
+    assert not window.repository.has_study_progress()
+    assert window.repository.study_backup().study_last_add_new_vocabulary is None
+    assert len(window.repository.list_entries()) == 2
+    assert window.filter_name == 'pending'
+
+
 def test_invalid_file_and_cancellation_never_save_hidden_draft(source, window, monkeypatch, tmp_path):
     add(window.repository, 'local')
     window.blocks[0].word.setText('草稿')
@@ -346,14 +362,93 @@ def test_invalid_file_and_cancellation_never_save_hidden_draft(source, window, m
 
 
 @pytest.mark.parametrize('choice,expected', [('导入单词和进度', 'full'), ('仅导入单词', 'words'), ('取消', 'cancel')])
-def test_actual_three_button_choice(window, choice, expected):
+@pytest.mark.parametrize('has_progress', [False, True])
+def test_actual_three_button_choice(window, choice, expected, has_progress):
+    if has_progress:
+        add(window.repository, 'local')
+        window.repository.prepare_study(AM)
     def select():
         dialog = QApplication.activeModalWidget()
         assert isinstance(dialog, QMessageBox)
-        assert '覆盖本机全部学习进度' in dialog.text()
+        assert '请选择导入方式' in dialog.text()
+        assert ('覆盖本机全部学习进度' in dialog.text()) == has_progress
         next(button for button in dialog.buttons() if button.text() == choice).click()
     QTimer.singleShot(0, select)
     assert window.choose_study_import_mode() == expected
+
+
+@pytest.mark.parametrize('page', ['pending', 'all', 'learned'])
+@pytest.mark.parametrize('mode', ['full', 'words', 'cancel'])
+@pytest.mark.parametrize('has_progress', [False, True])
+def test_ordinary_page_routes_study_file_to_same_flow_with_choice_before_writes(
+        source, window, monkeypatch, tmp_path, page, mode, has_progress):
+    add(window.repository, 'local')
+    if has_progress:
+        window.repository.prepare_study(AM)
+    window.set_filter(page)
+    before = window.repository.study_backup()
+    info, errors = import_ui(window, monkeypatch, tmp_path, source.study_backup(), mode)
+    selected, pickers = [], []
+    def choose():
+        assert window.filter_name == page
+        assert window.repository.study_backup() == before
+        assert len(window.repository.list_entries()) == 1
+        selected.append(mode)
+        return mode
+    def picker(*args):
+        pickers.append(args)
+        return str(tmp_path / 'study.json'), ''
+    monkeypatch.setattr(window, 'choose_study_import_mode', choose)
+    monkeypatch.setattr(QFileDialog, 'getOpenFileName', picker)
+    window.import_words()
+    assert selected == [mode] and len(pickers) == 1
+    assert not errors and window.filter_name == page
+    if mode == 'full':
+        assert window.repository.study_backup().records == source.study_backup().records
+        assert window.repository.study_backup().words[0].id != source.study_backup().words[0].id
+        assert len(window.repository.list_entries()) == 2 and info
+    elif mode == 'words':
+        assert window.repository.study_backup() == before
+        assert len(window.repository.list_entries()) == 2 and info
+    else:
+        assert window.repository.study_backup() == before
+        assert len(window.repository.list_entries()) == 1 and not info
+        assert window.study_page.context is None
+
+
+@pytest.mark.parametrize('problem', ['broken', 'array', 'old_words', 'bad_word', 'old_study', 'bad_record', 'encoding'])
+def test_ordinary_page_invalid_structure_has_exact_message_and_never_routes_or_writes(
+        source, window, monkeypatch, tmp_path, problem):
+    backup = source.study_backup()
+    content = json.loads(serialize_study_backup(backup))
+    if problem in ('old_words', 'bad_word'):
+        content = json.loads(serialize_entries(backup.words))
+        if problem == 'old_words':
+            content['version'] = 1
+        else:
+            content['words'][0]['senses'] = []
+    elif problem == 'old_study':
+        content['version'] = 2
+    elif problem == 'bad_record':
+        content['study_records']['alpha']['position'] = 1
+    raw = (b'\xff\xfe' if problem == 'encoding' else
+           b'{' if problem == 'broken' else b'[]' if problem == 'array' else
+           json.dumps(content).encode('utf-8'))
+    path = tmp_path / 'invalid.json'
+    path.write_bytes(raw)
+    window.blocks[0].word.setText('未保存草稿')
+    before = window.form_value()
+    errors = []
+    with monkeypatch.context() as patch:
+        patch.setattr(QFileDialog, 'getOpenFileName', lambda *args: (str(path), ''))
+        patch.setattr(QMessageBox, 'critical', lambda *args: errors.append(args[-1]))
+        patch.setattr(window, 'choose_study_import_mode', lambda: pytest.fail('invalid file must not route'))
+        patch.setattr(window, 'resolve_dirty', lambda: pytest.fail('invalid file must not touch draft'))
+        window.import_words()
+    assert errors == ['数据结构不合法，导入失败']
+    assert window.form_value() == before and window.repository.list_entries() == []
+    assert not window.repository.has_study_progress()
+    assert window.repository.study_backup().study_last_add_new_vocabulary is None
 
 
 @pytest.mark.parametrize('collapsed', [False, True])

@@ -242,7 +242,7 @@ def enter(window, monkeypatch, context=AM):
     return window.study_page
 
 
-def test_study_ui_masks_groups_reveal_no_edit_or_master_actions(window, qtbot, monkeypatch):
+def test_study_ui_masks_groups_reveal_inline_edit_without_master_actions(window, qtbot, monkeypatch):
     entries = add(window.repository, 2)
     window.search_box.setText('unmatched')
     page = enter(window, monkeypatch)
@@ -259,8 +259,10 @@ def test_study_ui_masks_groups_reveal_no_edit_or_master_actions(window, qtbot, m
     index = page.model.index(0, 1)
     qtbot.mouseDClick(page.table.viewport(), Qt.MouseButton.LeftButton,
                      pos=page.table.visualRect(index).center())
-    assert page.table.delegate.editor is None
-    assert not page.model.flags(index) & Qt.ItemFlag.ItemIsEditable
+    assert page.table.delegate.editor is not None
+    assert page.model.flags(index) & Qt.ItemFlag.ItemIsEditable
+    page.table.delegate.cancel()
+    assert not page.model.flags(page.model.index(0, 2)) & Qt.ItemFlag.ItemIsEditable
     first = page.model.rows[0].entry
     qtbot.mouseClick(page.table.viewport(), Qt.MouseButton.LeftButton,
                      pos=page.table.visualRect(page.model.index(0, 0)).center())

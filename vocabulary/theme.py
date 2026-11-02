@@ -28,7 +28,7 @@ QFrame#floatingNotice QLabel { color: #c9a4a7; background: transparent; border: 
 QPushButton { background: #2a323f; border: 1px solid #384352; border-radius: 7px; padding: 7px 12px; }
 QPushButton:hover { background: #364150; border-color: #738798; }
 QPushButton:pressed { background: #202832; }
-QPushButton:focus, QComboBox:focus, QLineEdit:focus, QPlainTextEdit:focus, QKeySequenceEdit:focus {
+QPushButton:focus, QComboBox:focus, QLineEdit:focus, QPlainTextEdit:focus, QKeySequenceEdit:focus, QSpinBox:focus {
     border: 1px solid #a4ddc5;
 }
 QPushButton:disabled { color: #626d7c; border-color: #2d3540; background: #222933; }
@@ -38,7 +38,7 @@ QPushButton#quiet { background: transparent; border-color: transparent; color: #
 QPushButton#quiet:hover { background: #303a47; }
 QPushButton#quiet:focus { border-color: #a4ddc5; }
 QPushButton[active="true"] { color: #a4ddc5; background: #2b3b39; border-color: #52796b; }
-QLineEdit, QPlainTextEdit, QComboBox, QKeySequenceEdit {
+QLineEdit, QPlainTextEdit, QComboBox, QKeySequenceEdit, QSpinBox {
     background: #171d26; border: 1px solid #3c4654; border-radius: 7px; padding: 7px 9px;
     selection-background-color: #3b625b; selection-color: #ffffff;
 }

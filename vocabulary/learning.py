@@ -2,12 +2,27 @@
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
 
-from .domain import WordEntry
+from .domain import ValidationError, WordEntry
 
 
 BEIJING = timezone(timedelta(hours=8))
 STAGES = (1, 2, 4, 7, 15)
 STAGE_GAPS = {following: following - previous for previous, following in zip(STAGES, STAGES[1:])}
+
+
+@dataclass(frozen=True)
+class StudyDrawSettings:
+    words_per_group: int = 10
+    groups_per_day: int = 3
+
+    def __post_init__(self):
+        for label, value in (("每组单词数", self.words_per_group), ("每日新增组数", self.groups_per_day)):
+            if type(value) is not int or not 1 <= value <= 1000:
+                raise ValidationError(f"{label}必须是1至1000的整数。")
+
+    @property
+    def daily_word_count(self):
+        return self.words_per_group * self.groups_per_day
 
 
 @dataclass(frozen=True)

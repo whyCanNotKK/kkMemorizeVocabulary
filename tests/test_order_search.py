@@ -178,12 +178,10 @@ def test_import_order_is_only_a_sort_key_even_for_large_values(repo):
     assert [(e.text, e.sort_order) for e in repo.list_entries()] == [("earlier", 1), ("later", 2)]
 
 
-@pytest.mark.parametrize("version", [1, 2])
 @pytest.mark.parametrize("mixed", [False, True])
-def test_import_stable_order_and_optional_legacy_field(repo, version, mixed):
+def test_import_stable_order_and_optional_sort_field(repo, mixed):
     source = [word("a", order=20), word("b", order=10), word("c", order=10)]
     document = json.loads(serialize_entries(source))
-    document["version"] = version
     if mixed:
         document["words"][1].pop("sort_order")
     repo.import_entries(parse_entries(json.dumps(document)))

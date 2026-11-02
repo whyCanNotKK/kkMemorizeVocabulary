@@ -1,6 +1,5 @@
 """Independent, ID-free interchange for complete seventeen-day study snapshots."""
 from dataclasses import dataclass
-from collections import Counter
 from datetime import date
 import json
 from pathlib import Path
@@ -60,7 +59,7 @@ def parse_study_backup(content: str) -> StudyBackup:
         raise ValidationError(f'学习进度文件不是有效的JSON：{error}') from error
     _fields(document, ('format', 'version', 'words', 'study_records', 'study_settings'), '学习进度文件')
     if document['format'] != FORMAT or type(document['version']) is not int or document['version'] != VERSION:
-        raise ValidationError('这不是支持的学习进度文件，请使用学习进度version: 3。')
+        raise ValidationError(f'这不是支持的学习进度文件，请使用学习进度version: {VERSION}。')
     words = parse_entries(json.dumps({'format': WORD_FORMAT, 'version': WORD_VERSION, 'words': document['words']}))
     names = [word.text.strip().casefold() for word in words]
     if len(set(names)) != len(names):
@@ -68,7 +67,6 @@ def parse_study_backup(content: str) -> StudyBackup:
     records = document['study_records']
     if not isinstance(records, dict) or set(records) != set(names):
         raise ValidationError('学习记录必须与主词一一对应，并以去首尾空格、忽略大小写的单词为键。')
-    groups = Counter()
     for name, record in records.items():
         _fields(record, RECORD_FIELDS, name)
         _integer(record['group_number'], 1, 9223372036854775807, f'{name} 组号')
@@ -86,9 +84,6 @@ def parse_study_backup(content: str) -> StudyBackup:
             valid = valid and not record['morning_done'] and not record['afternoon_done']
         if not valid:
             raise ValidationError(f'{name}：学习阶段、日期或完成标记不一致。')
-        groups[record['group_number']] += 1
-        if groups[record['group_number']] > 10:
-            raise ValidationError('同一分组最多包含10个单词。')
     settings = document['study_settings']
     _fields(settings, ('study_last_add_new_vocabulary', 'group_counter'), '学习设置')
     last_draw = settings['study_last_add_new_vocabulary']
@@ -115,6 +110,18 @@ def serialize_study_backup(backup: StudyBackup) -> str:
 
 def read_study_backup(path: str | Path) -> StudyBackup:
     return parse_study_backup(Path(path).read_text(encoding='utf-8-sig'))
+
+
+def read_word_or_study_file(path: str | Path) -> list[WordEntry] | StudyBackup:
+    """Classify only to select a parser; a format label alone never bypasses validation."""
+    content = Path(path).read_text(encoding='utf-8-sig')
+    try:
+        document = json.loads(content)
+    except (ValueError, RecursionError) as error:
+        raise ValidationError('文件不是有效的JSON。') from error
+    if isinstance(document, dict) and document.get('format') == FORMAT:
+        return parse_study_backup(content)
+    return parse_entries(content)
 
 
 def write_study_backup(path: str | Path, backup: StudyBackup):

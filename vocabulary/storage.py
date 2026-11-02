@@ -7,7 +7,7 @@ import sqlite3
 
 from .domain import DEFAULT_SHORTCUTS, DuplicateWord, RelatedWord, Sense, WordEntry, clean_entry
 from .transfer import ImportConflict, ImportResult
-from .learning import STAGE_GAPS, StudyContext, StudyTask, next_stage, study_due
+from .learning import STAGE_GAPS, StudyContext, StudyDrawSettings, StudyTask, next_stage, study_due
 from .study_transfer import RECORD_FIELDS, StudyBackup
 from .migration import migrate_database
 
@@ -223,6 +223,21 @@ class Repository:
         return {row[0]: row[1] for row in self.connection.execute("SELECT key,value FROM settings")
                 if row[0] in DEFAULT_SHORTCUTS}
 
+    def study_draw_settings(self) -> StudyDrawSettings:
+        values = dict(self.connection.execute("""SELECT key,value FROM settings
+            WHERE key IN ('study17.words_per_group','study17.groups_per_day')"""))
+        defaults = StudyDrawSettings()
+        return StudyDrawSettings(
+            int(values.get('study17.words_per_group', defaults.words_per_group)),
+            int(values.get('study17.groups_per_day', defaults.groups_per_day)))
+
+    def write_study_draw_settings(self, settings: StudyDrawSettings):
+        with self.connection:
+            self.connection.executemany("INSERT OR REPLACE INTO settings(key,value) VALUES (?,?)", [
+                ('study17.words_per_group', str(settings.words_per_group)),
+                ('study17.groups_per_day', str(settings.groups_per_day)),
+            ])
+
     def prepare_study(self, context: StudyContext) -> list[StudyTask]:
         """Draw when the morning date differs from the last draw, including empty batches."""
         if not context.afternoon:
@@ -231,18 +246,20 @@ class Repository:
                 self.connection.execute("BEGIN IMMEDIATE")
                 generated = self.connection.execute("SELECT value FROM settings WHERE key=?", (key,)).fetchone()
                 if generated is None or generated[0] != context.day.isoformat():
+                    settings = self.study_draw_settings()
                     ids = [row[0] for row in self.connection.execute("""SELECT id FROM words
                         WHERE learned=0 AND NOT EXISTS
                         (SELECT 1 FROM memorize_vocabulary_17day WHERE word_id=words.id)
-                        ORDER BY random() LIMIT 30""")]
+                        ORDER BY random() LIMIT ?""", (settings.daily_word_count,))]
                     counter = self.connection.execute(
                         "SELECT value FROM settings WHERE key='study17.group_counter'").fetchone()
                     maximum = int(counter[0]) if counter else 0
                     self.connection.executemany("""INSERT INTO memorize_vocabulary_17day
                         (word_id,group_number) VALUES (?,?)""",
-                        [(word_id, maximum + i // 10 + 1) for i, word_id in enumerate(ids)])
+                        [(word_id, maximum + i // settings.words_per_group + 1) for i, word_id in enumerate(ids)])
                     self.connection.execute("INSERT OR REPLACE INTO settings(key,value) VALUES (?,?)",
-                                            ('study17.group_counter', str(maximum + (len(ids) + 9) // 10)))
+                                            ('study17.group_counter', str(maximum + (
+                                                len(ids) + settings.words_per_group - 1) // settings.words_per_group)))
                     self.connection.execute("INSERT OR REPLACE INTO settings(key,value) VALUES (?,?)",
                                             (key, context.day.isoformat()))
         return self.study_tasks(context)

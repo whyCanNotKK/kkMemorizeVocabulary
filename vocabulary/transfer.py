@@ -74,8 +74,8 @@ def parse_entries(content: str) -> list[WordEntry]:
     _object(document, ("format", "version", "words"), "JSON 文件")
     if document["format"] != FORMAT:
         raise ValidationError("这不是 kkMemorizeVocabulary 的单词文件。")
-    if type(document["version"]) is not int or document["version"] not in (1, VERSION):
-        raise ValidationError("不支持的 JSON 格式版本，请使用 version: 1 或 2。")
+    if type(document["version"]) is not int or document["version"] != VERSION:
+        raise ValidationError(f"不支持的 JSON 格式版本，请使用 version: {VERSION}。")
     entries = []
     for number, word in enumerate(_array(document["words"], "words"), 1):
         label = f"主词 {number}"

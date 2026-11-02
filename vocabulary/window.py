@@ -5,20 +5,20 @@ from pathlib import Path
 import shiboken6
 from PySide6.QtCore import QPoint, QSize, Qt, QTimer
 from PySide6.QtWidgets import (
-    QApplication, QFileDialog, QFrame, QGridLayout, QHBoxLayout, QLabel, QLineEdit, QMainWindow, QMessageBox,
-    QScrollArea, QVBoxLayout, QWidget,
+    QApplication, QDialogButtonBox, QFileDialog, QFrame, QGridLayout, QHBoxLayout, QLabel, QLineEdit, QMainWindow, QMessageBox,
+    QPlainTextEdit, QScrollArea, QVBoxLayout, QWidget,
 )
 
-from .domain import DuplicateWord, WordEntry
+from .domain import DuplicateWord, ValidationError, WordEntry
 from .import_dialog import ImportConflictDialog
 from .shortcuts import SettingsDialog, ShortcutManager
 from .table import WordTable, WordTableModel
 from .review_navigation import ReviewKeyRouter
 from .study_page import StudyPage
 from .learning import StudyContext
-from .study_transfer import read_study_backup, write_study_backup
+from .study_transfer import StudyBackup, read_study_backup, read_word_or_study_file, write_study_backup
 from .theme import ACCENT, GOLD, MUTED, icon
-from .transfer import read_entries, write_entries
+from .transfer import write_entries
 from .widgets import INPUT_SPACING, POS_WIDTH, WORD_WIDTH, FloatingNotice, WordBlock, button, confirm_remove
 
 
@@ -108,8 +108,11 @@ class MainWindow(QMainWindow):
         self.table.moveRequested.connect(self.move_word)
         self.table.shuffleRequested.connect(self.shuffle_words)
         self.table.delegate.editingChanged.connect(self.inline_changed)
+        self.table.editPreparationRequested.connect(self.prepare_list_edit)
         list_layout.addWidget(self.table, 1)
-        self.study_page = StudyPage(repository)
+        self.study_page = StudyPage(repository, self.commit_cell)
+        self.study_page.table.delegate.editingChanged.connect(self.inline_changed)
+        self.study_page.table.editPreparationRequested.connect(self.prepare_list_edit)
         self.study_page.table.wordClicked.connect(self.copy_word)
         self.study_page.error.connect(lambda text: self.show_notice(text, True))
         self.study_page.hide()
@@ -344,7 +347,7 @@ class MainWindow(QMainWindow):
                      for text in [word.text, *(sense.translation for sense in word.senses)]))]
 
     def search_changed(self):
-        if not self.table.delegate.submit():
+        if not self.current_table().delegate.submit():
             # Keep the existing projection and query aligned when an invalid editor blocks filtering.
             self.search_box.blockSignals(True)
             self.search_box.setText(getattr(self, "_applied_search", ""))
@@ -369,7 +372,7 @@ class MainWindow(QMainWindow):
     def shuffle_words(self):
         if self.filter_name != "pending" or self.search_box.text().strip():
             return
-        if not self.table.delegate.submit():
+        if not self.current_table().delegate.submit():
             return
         try:
             self.repository.shuffle_pending()
@@ -381,7 +384,7 @@ class MainWindow(QMainWindow):
         self._filter_scroll["pending"] = 0
 
     def set_filter(self, key):
-        if not self.table.delegate.submit():
+        if not self.current_table().delegate.submit():
             return
         if key == "study17" and not self.study_page.reload():
             return
@@ -414,7 +417,7 @@ class MainWindow(QMainWindow):
         return not self.global_hidden
 
     def set_global_hidden(self, hidden=None):
-        if self.table.delegate.submit():
+        if self.current_table().delegate.submit():
             if hidden is None:
                 hidden = self.next_global_hidden()
             if self.filter_name == "study17":
@@ -442,6 +445,8 @@ class MainWindow(QMainWindow):
         block.removeRequested.connect(self.remove_related)
         block.changed.connect(self.form_changed)
         block.structureChanged.connect(self.update_tab_order)
+        block.heightChanged.connect(self.schedule_editor_resize)
+        block.cursorMoved.connect(self.ensure_current_input_visible)
         self.form_layout.addWidget(block)
         self.blocks.append(block)
         self.update_related_actions()
@@ -501,8 +506,11 @@ class MainWindow(QMainWindow):
             self.star_button.toggle()
 
     def run_form_action(self, action):
-        if self.filter_name != 'study17':
+        if self.filter_name != 'study17' or action == self.save_current:
             return action()
+
+    def current_table(self):
+        return self.study_page.table if self.filter_name == 'study17' else self.table
 
     def update_tab_order(self):
         self.schedule_editor_resize()
@@ -540,7 +548,11 @@ class MainWindow(QMainWindow):
             bar = self.form_scroll.verticalScrollBar()
             height = self.form_scroll.viewport().height()
             block = next((item for item in self.blocks if item.isAncestorOf(widget)), None)
-            if block and block.height() + 12 <= height:
+            if isinstance(widget, QPlainTextEdit) and widget.height() > height:
+                cursor = widget.cursorRect()
+                top = widget.viewport().mapTo(self.form_content, cursor.topLeft()).y()
+                bottom = top + cursor.height()
+            elif block and block.height() + 12 <= height:
                 top = block.mapTo(self.form_content, QPoint(0, 0)).y()
                 bottom = top + block.height()
             if bottom + 12 > bar.value() + height:
@@ -651,9 +663,9 @@ class MainWindow(QMainWindow):
 
     def save_current(self):
         if self.filter_name == 'study17':
-            return False
+            return self.study_page.table.delegate.submit()
         if self.table.delegate.editor:
-            return self.table.delegate.submit()
+            return self.current_table().delegate.submit()
         self.set_form_collapsed(False)
         return self._save_form()
 
@@ -690,7 +702,28 @@ class MainWindow(QMainWindow):
 
     def inline_changed(self, editing):
         if not editing and not self._closing:
-            QTimer.singleShot(0, self.refresh)
+            QTimer.singleShot(0, self.refresh_after_inline)
+
+    def refresh_after_inline(self):
+        if self._closing or self.current_table().delegate.editor is not None:
+            return
+        if self.filter_name == 'study17':
+            self.study_page.load(self.study_page.context)
+        else:
+            self.refresh()
+
+    def prepare_list_edit(self, entry_id):
+        self.refresh_after_inline()
+        row = next((row for row in self.current_table().model().rows if row.entry.id == entry_id), None)
+        if row is None or not row.hidden:
+            return
+        if self.filter_name == 'study17':
+            self.study_page.reveal(entry_id, True)
+        elif self.search_box.text().strip():
+            self._search_hidden[self.filter_name].discard(entry_id)
+            self.refresh()
+        else:
+            self.reveal(entry_id, True)
 
     def commit_cell(self, row, column, value):
         try:
@@ -714,7 +747,7 @@ class MainWindow(QMainWindow):
         return True
 
     def list_action(self, entry_id, action):
-        if not self.table.delegate.submit():
+        if not self.current_table().delegate.submit():
             return
         if action == "edit":
             if not self.resolve_dirty():
@@ -745,7 +778,7 @@ class MainWindow(QMainWindow):
 
     def locate_duplicate(self):
         if self.duplicate_id is not None:
-            if not self.table.delegate.submit():
+            if not self.current_table().delegate.submit():
                 return
             self.search_box.clear()
             self.set_filter("all")
@@ -757,7 +790,7 @@ class MainWindow(QMainWindow):
                     break
 
     def open_settings(self):
-        if not self.table.delegate.submit():
+        if not self.current_table().delegate.submit():
             return
         previous = (self._last_form_focus if not self.form_collapsed else None) or QApplication.focusWidget()
         self.shortcuts.set_suspended(True)
@@ -777,7 +810,7 @@ class MainWindow(QMainWindow):
     def export_words(self):
         if self.filter_name == 'study17':
             return self.export_study_progress()
-        if not self.table.delegate.submit():
+        if not self.current_table().delegate.submit():
             return
         self.shortcuts.set_suspended(True)
         try:
@@ -805,8 +838,14 @@ class MainWindow(QMainWindow):
             path, _ = QFileDialog.getOpenFileName(self, "导入单词", "", "JSON 文件 (*.json)")
             if not path:
                 return
-            entries = read_entries(path)
-            if not self.table.delegate.submit() or not self.resolve_dirty():
+            try:
+                entries = read_word_or_study_file(path)
+            except (ValidationError, UnicodeError):
+                QMessageBox.critical(self, '导入失败', '数据结构不合法，导入失败')
+                return
+            if isinstance(entries, StudyBackup):
+                return self.import_study_progress(entries, require_choice=True)
+            if not self.current_table().delegate.submit() or not self.resolve_dirty():
                 return
             result = self.repository.import_entries(entries)
             if self.edit_id is not None:
@@ -835,6 +874,8 @@ class MainWindow(QMainWindow):
             dialog.deleteLater()
 
     def export_study_progress(self):
+        if not self.current_table().delegate.submit():
+            return
         self.shortcuts.set_suspended(True)
         try:
             path, _ = QFileDialog.getSaveFileName(
@@ -855,10 +896,12 @@ class MainWindow(QMainWindow):
     def choose_study_import_mode(self):
         dialog = QMessageBox(self)
         dialog.setWindowTitle('导入学习进度')
-        dialog.setText('导入学习进度将覆盖本机全部学习进度，请选择导入方式。')
+        dialog.setText('导入学习进度将覆盖本机全部学习进度，请选择导入方式。'
+                       if self.repository.has_study_progress() else '文件包含学习进度，请选择导入方式。')
         full = dialog.addButton('导入单词和进度', QMessageBox.ButtonRole.AcceptRole)
         words = dialog.addButton('仅导入单词', QMessageBox.ButtonRole.ActionRole)
         cancel = dialog.addButton('取消', QMessageBox.ButtonRole.RejectRole)
+        dialog.findChild(QDialogButtonBox).setCenterButtons(True)
         dialog.setDefaultButton(cancel)
         dialog.setEscapeButton(cancel)
         dialog.exec()
@@ -868,18 +911,20 @@ class MainWindow(QMainWindow):
             return 'words'
         return 'cancel'
 
-    def import_study_progress(self):
+    def import_study_progress(self, backup=None, *, require_choice=False):
         self.shortcuts.set_suspended(True)
         result = None
         try:
-            path, _ = QFileDialog.getOpenFileName(self, '导入学习进度', '', 'JSON 文件 (*.json)')
-            if not path:
-                return
-            backup = read_study_backup(path)
-            mode = self.choose_study_import_mode() if self.repository.has_study_progress() else 'full'
+            if backup is None:
+                path, _ = QFileDialog.getOpenFileName(self, '导入学习进度', '', 'JSON 文件 (*.json)')
+                if not path:
+                    return
+                backup = read_study_backup(path)
+            mode = (self.choose_study_import_mode()
+                    if require_choice or self.repository.has_study_progress() else 'full')
             if mode == 'cancel':
                 return
-            if not self.table.delegate.submit() or not self.resolve_dirty():
+            if not self.current_table().delegate.submit() or not self.resolve_dirty():
                 return
             result = self.repository.import_entries(backup.words)
             if self.edit_id is not None:
@@ -891,7 +936,7 @@ class MainWindow(QMainWindow):
                 self.study_page.load(StudyContext.now())
                 status = f'已恢复 {len(backup.records)} 条学习进度。'
             else:
-                self.study_page.load(self.study_page.context)
+                self.study_page.load(self.study_page.context or StudyContext.now())
                 status = '本机学习进度已保留。'
             self.refresh()
             QMessageBox.information(self, '导入完成',
@@ -901,7 +946,7 @@ class MainWindow(QMainWindow):
             logging.exception('Could not import study progress')
             detail = str(error)
             if result is not None:
-                self.study_page.load(self.study_page.context)
+                self.study_page.load(self.study_page.context or StudyContext.now())
                 self.refresh()
                 detail += '\n已导入或确认的词条已保留，本机学习进度未被整体替换，可重新导入。'
             QMessageBox.critical(self, '导入失败', detail)
@@ -921,7 +966,7 @@ class MainWindow(QMainWindow):
             self.schedule_editor_resize()
 
     def closeEvent(self, event):
-        if not self.table.delegate.submit() or not self.resolve_dirty():
+        if not self.current_table().delegate.submit() or not self.resolve_dirty():
             event.ignore()
             return
         self._closing = True

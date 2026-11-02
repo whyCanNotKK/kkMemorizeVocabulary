@@ -1,3 +1,5 @@
+import math
+
 from PySide6.QtCore import (
     QEasingCurve, QEvent, QParallelAnimationGroup, QPauseAnimation, QPoint,
     QPropertyAnimation, QSequentialAnimationGroup, Qt, Signal, QTimer,
@@ -202,8 +204,51 @@ class PosCombo(QComboBox):
             event.ignore()
 
 
+class ExpandingTextEdit(QPlainTextEdit):
+    contentHeightChanged = Signal(int)
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.content_height = INPUT_HEIGHT
+        self.document().setDocumentMargin(0)
+        self.setTabChangesFocus(True)
+        self.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self._height_timer = QTimer(self)
+        self._height_timer.setSingleShot(True)
+        self._height_timer.timeout.connect(self._measure_height)
+        self.textChanged.connect(self._schedule_height)
+        self.document().documentLayout().documentSizeChanged.connect(self._schedule_height)
+
+    def _schedule_height(self, *args):
+        self._height_timer.start(0)
+
+    def _measure_height(self):
+        # QPlainTextDocumentLayout.documentSize().height() counts lines, not pixels.
+        layout = self.document().documentLayout()
+        block = self.document().begin()
+        height = 0
+        while block.isValid():
+            height += layout.blockBoundingRect(block).height()
+            block = block.next()
+        chrome = self.height() - self.viewport().height()
+        required = max(INPUT_HEIGHT, math.ceil(height + chrome) + 2)
+        if required != self.content_height:
+            self.content_height = required
+            self.contentHeightChanged.emit(required)
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self._schedule_height()
+
+    def changeEvent(self, event):
+        super().changeEvent(event)
+        if event.type() in (QEvent.Type.FontChange, QEvent.Type.StyleChange):
+            self._schedule_height()
+
+
 class SenseRow(QWidget):
     changed = Signal()
+    heightChanged = Signal()
 
     def __init__(self, sense=None, parent=None):
         super().__init__(parent)
@@ -214,8 +259,8 @@ class SenseRow(QWidget):
         layout.setSpacing(INPUT_SPACING)
         self.pos = PosCombo()
         self.pos.set_pos(sense.pos)
-        self.translation = QPlainTextEdit()
-        self.translation.document().setDocumentMargin(0)
+        self.translation = ExpandingTextEdit()
+        self.translation.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.translation.setPlaceholderText("输入翻译，Enter 换行")
         self.translation.setPlainText(sense.translation)
         self.translation.setTabChangesFocus(True)
@@ -225,6 +270,13 @@ class SenseRow(QWidget):
         layout.addWidget(self.translation, 1)
         self.pos.currentIndexChanged.connect(self.changed)
         self.translation.textChanged.connect(self.changed)
+        self.translation.contentHeightChanged.connect(self._resize_translation)
+
+    def _resize_translation(self, height):
+        self.translation.setFixedHeight(height)
+        self.setFixedHeight(height)
+        self.updateGeometry()
+        self.heightChanged.emit()
 
     def value(self):
         return Sense(self.pos.currentData() or "", self.translation.toPlainText())
@@ -252,6 +304,8 @@ class WordBlock(QFrame):
     focused = Signal(object)
     removeRequested = Signal(object)
     structureChanged = Signal()
+    heightChanged = Signal()
+    cursorMoved = Signal()
 
     def __init__(self, text="", senses=None, related=False, parent=None):
         super().__init__(parent)
@@ -320,6 +374,8 @@ class WordBlock(QFrame):
     def _append_sense(self, sense):
         row = SenseRow(sense)
         row.changed.connect(self.changed)
+        row.heightChanged.connect(self.heightChanged)
+        row.translation.cursorPositionChanged.connect(self.cursorMoved)
         self.rows.append(row)
         self.sense_layout.addWidget(row)
         return row

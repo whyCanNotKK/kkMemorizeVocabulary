@@ -11,7 +11,7 @@ from .widgets import button
 class StudyPage(QWidget):
     error = Signal(str)
 
-    def __init__(self, repository, parent=None):
+    def __init__(self, repository, edit_callback, parent=None):
         super().__init__(parent)
         self.repository = repository
         self.context = None
@@ -34,9 +34,9 @@ class StudyPage(QWidget):
         toolbar.addWidget(self.period_label)
         toolbar.addStretch()
         layout.addLayout(toolbar)
-        self.model = WordTableModel(lambda *args: False, self)
+        self.model = WordTableModel(edit_callback, self)
         self.model.study_groups = {}
-        self.table = WordTable(self.model, lambda: False)
+        self.table = WordTable(self.model, lambda: True)
         self.table.set_page_state("study17", False, 0)
         self.table.empty_text = "当前时段没有待完成的单词\n切换日期或时段后，请点击刷新"
         self.table.revealRequested.connect(self.reveal)
@@ -47,6 +47,8 @@ class StudyPage(QWidget):
         return self.load(StudyContext.now(), generate=True)
 
     def load(self, context, *, generate=False):
+        if not self.table.delegate.submit():
+            return False
         try:
             tasks = (self.repository.prepare_study(context) if generate else
                      self.repository.study_tasks(context))
@@ -91,6 +93,8 @@ class StudyPage(QWidget):
     def complete(self, word_id, action):
         position = next((i for i, task in enumerate(self.tasks) if task.entry.id == word_id), None)
         if action != "study" or self.context is None or position is None:
+            return
+        if not self.table.delegate.submit():
             return
         try:
             self.repository.complete_study(word_id, self.context)

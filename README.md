@@ -19,13 +19,17 @@ Supports Windows 10/11 x64. The interface is currently in Chinese. Packaged buil
 
 ## Seventeen-day study
 
-1. Add words to **待记** (To learn), then open **十七天背单词** in the morning. The app randomly draws up to **30 new words per day**, in fixed groups of up to **10**, without redrawing or topping up that day's batch.
+1. Add words to **待记** (To learn), then open **十七天背单词** in the morning. By default, the app randomly draws up to **30 new words per day**, in **3 groups of up to 10**, without redrawing or topping up that day's batch.
 2. Complete each round in the morning, then again in the afternoon. Stages are **days 1, 2, 4, 7, and 15**; later reviews follow gaps of 1, 2, 3, and 8 days from the actual completed round. Missed sessions retain their progress.
 3. With a word selected and the study list focused, press **Enter** to reveal its answers; press again to mark it done and select the next word.
 
+Double-click a word name, a revealed part of speech, or a definition to edit it directly, including related words. Press Enter, leave the cell, or use the save shortcut to save to the same vocabulary entry used by ordinary tabs; Shift+Enter adds a newline in definitions and Esc cancels. These editing keys work in all four lists. Learning groups and progress are preserved.
+
 Sessions use **Beijing time (UTC+8), with the afternoon starting at 15:00**. Refresh or reenter the page after a period or date change. Study progress is separate from the ordinary Learned status; finished words are excluded from future draws.
 
-The study page has its own progress import/export, including participating words and their progress. Ordinary word JSON and study files use separate import paths.
+In **设置 → 十七天背单词设置**, customize words per group (default 10) and new groups per day (default 3), each from 1 to 1000. The daily new-word limit is their product. Click **完成** to save; changes persist after restart and apply to future daily draws. Existing groups, today's batch, and review progress stay as they are. Study imports retain local draw preferences.
+
+The study page imports and exports participating words and their progress. Ordinary tabs also recognize valid study files and offer Words and progress, Words only, or Cancel, even when no local progress exists. The study page accepts study files only.
 
 ## Get started
 
@@ -52,6 +56,8 @@ This uses an isolated development database. For everyday use with the default da
 
 ## Common controls
 
+Definition editors grow with explicit newlines or wrapped text and shrink when content is removed, both in lists and in the entry form. List editors keep within the visible table area and scroll internally for very long text; the entry form grows up to half the window and then scrolls its input area.
+
 Enter a word, part of speech, and translation in the bottom form, then save with **Ctrl+Enter**. Add more definitions or related words as needed. Double-click a list cell to edit it; click a word's text to copy its full name. The eye button hides or reveals answers in the current tab.
 
 | Key | Action |
@@ -59,6 +65,8 @@ Enter a word, part of speech, and translation in the bottom form, then save with
 | W / S or Up / Down | Previous / next main word, with the list focused |
 | Space | Hide / reveal the selected entry, outside search |
 | Enter | Reveal / complete the selected word on the study page |
+| F2 | Edit the selected row's definition; reveal it first if hidden |
+| Tab / Shift+Tab while editing | Save and edit the next / previous word, part of speech, or definition |
 | Ctrl+Up / Ctrl+Down | Scroll without moving the selection |
 | Ctrl+Enter | Save the entry or current cell edit |
 | Ctrl+N / Ctrl+J | Add a related word / definition in the entry form |
@@ -69,7 +77,9 @@ Common entry shortcuts can be changed in **设置** (Settings). Search covers ma
 
 The default database is `%LOCALAPPDATA%\kkMemorizeVocabulary\vocabulary.sqlite3`. **Close the app before copying it** for a complete backup of entries, study progress, and settings. Program updates keep this data directory.
 
-Use JSON to exchange entries or study progress. Ordinary tabs export all entries matching the current category and search, including those outside the viewport. Word exports use JSON v2 (imports accept v1/v2); study files use v3 only. Importing study progress replaces existing local study progress; choose **仅导入单词** (Words only) to keep it.
+Use JSON to exchange entries or study progress. Ordinary tabs export all entries matching the current category and search, including those outside the viewport. Each file type accepts only the latest format implemented by this app (currently word v2 and study v3); older and unknown newer formats are rejected. Importing study progress replaces existing local study progress; choose **仅导入单词** (Words only) to keep it.
+
+Ordinary tabs validate the complete file before processing drafts or writing data. Invalid structures, content, encoding, or versions display “数据结构不合法，导入失败”. Valid study files reuse the selected file without a second picker; recognition and cancellation do not switch tabs, draw words, or change drafts or data. Restoring progress reloads tasks without drawing new words.
 
 Use `--data-dir <directory>` to store data elsewhere, including with a portable build.
 

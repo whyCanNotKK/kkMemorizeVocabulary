@@ -1,8 +1,9 @@
 from PySide6.QtCore import QEvent, QObject, Qt, Signal
 from PySide6.QtGui import QKeySequence, QShortcut
-from PySide6.QtWidgets import QApplication, QDialog, QHBoxLayout, QLabel, QLineEdit, QVBoxLayout, QWidget
+from PySide6.QtWidgets import QAbstractButton, QApplication, QDialog, QHBoxLayout, QLabel, QLineEdit, QMessageBox, QSpinBox, QVBoxLayout, QWidget
 
 from .domain import DEFAULT_SHORTCUTS, SHORTCUT_LABELS, ValidationError
+from .learning import StudyDrawSettings
 from .native_shortcuts import WindowHotkeys
 from .widgets import button
 
@@ -155,6 +156,33 @@ class SettingsDialog(QDialog):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(26, 24, 26, 24)
         layout.setSpacing(15)
+        study_title = QLabel("十七天背单词设置")
+        study_title.setObjectName("title")
+        layout.addWidget(study_title)
+        settings = manager.repository.study_draw_settings()
+        self.words_per_group = QSpinBox()
+        self.groups_per_day = QSpinBox()
+        row = QHBoxLayout()
+        row.setSpacing(8)
+        for label, editor, value, prefix in (
+            ("每日新增组数", self.groups_per_day, settings.groups_per_day, "每日新背"),
+            ("每组单词数", self.words_per_group, settings.words_per_group, "组，每组"),
+        ):
+            name = QLabel(prefix)
+            editor.setRange(1, 1000)
+            editor.setValue(value)
+            editor.setFixedWidth(30)
+            editor.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            editor.setStyleSheet(
+                "QSpinBox { padding: 7px 0px; font-size: 11px; }"
+                "QSpinBox::up-button, QSpinBox::down-button { width: 0px; height: 0px; }")
+            editor.setAccessibleName(label)
+            name.setBuddy(editor)
+            row.addWidget(name)
+            row.addWidget(editor)
+        row.addWidget(QLabel("个新单词"))
+        row.addStretch()
+        layout.addLayout(row)
         title = QLabel("快捷键设置")
         title.setObjectName("title")
         layout.addWidget(title)
@@ -176,21 +204,56 @@ class SettingsDialog(QDialog):
             row.addWidget(editor, 1)
             row.addWidget(modify)
             layout.addLayout(row)
-        self.notice = QLabel("Ctrl+A 等文字编辑按键，以及 Tab 等导航按键保持不变。")
-        self.notice.setObjectName("muted")
-        self.notice.setWordWrap(True)
-        layout.addWidget(self.notice)
         footer = QHBoxLayout()
-        restore = button("恢复默认")
+        restore = button("恢复默认快捷键")
         restore.clicked.connect(self.restore)
         done = button("完成")
         done.setObjectName("primary")
+        done.setDefault(True)
         done.clicked.connect(self.accept)
         footer.addWidget(restore)
         footer.addStretch()
         footer.addWidget(done)
         layout.addLayout(footer)
         manager.changed.connect(self.refresh)
+        self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+        self.setFocus()
+        self.installEventFilter(self)
+        for widget in self.findChildren(QWidget):
+            widget.installEventFilter(self)
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        self.setFocus()
+
+    def eventFilter(self, target, event):
+        if event.type() == QEvent.Type.MouseButtonPress:
+            if target is self:
+                target = self.childAt(event.position().toPoint()) or self
+            recording = self.editors.get(self._recording)
+            if recording is not None and target is not recording:
+                self.cancel_recording(restore_focus=False)
+            widget = target
+            while isinstance(widget, QWidget) and widget is not self:
+                if (isinstance(widget, (QSpinBox, QLineEdit, QAbstractButton))
+                        and widget.focusPolicy() != Qt.FocusPolicy.NoFocus):
+                    widget.setFocus(Qt.FocusReason.MouseFocusReason)
+                    break
+                widget = widget.parentWidget()
+            else:
+                self.setFocus(Qt.FocusReason.MouseFocusReason)
+        return super().eventFilter(target, event)
+
+    def accept(self):
+        self.words_per_group.interpretText()
+        self.groups_per_day.interpretText()
+        try:
+            self.manager.repository.write_study_draw_settings(StudyDrawSettings(
+                self.words_per_group.value(), self.groups_per_day.value()))
+        except Exception as error:
+            QMessageBox.critical(self, "保存失败", f"学习设置保存失败：{error}")
+            return
+        super().accept()
 
     def refresh(self):
         for key, text in self.manager.labels().items():
@@ -202,13 +265,13 @@ class SettingsDialog(QDialog):
         self.editors[key].clear()
         self.editors[key].setFocusPolicy(Qt.FocusPolicy.StrongFocus)
         self.editors[key].setFocus()
-        self.notice.setText("请按下新组合键；Esc 取消本次修改。")
 
-    def cancel_recording(self):
+    def cancel_recording(self, *, restore_focus=True):
         if self._recording:
             key = self._recording
             self.editors[key].setFocusPolicy(Qt.FocusPolicy.NoFocus)
-            self.buttons[key].setFocus()
+            if restore_focus:
+                self.buttons[key].setFocus()
             self._recording = None
         self.refresh()
 
@@ -220,16 +283,14 @@ class SettingsDialog(QDialog):
         try:
             self.manager.update(values)
         except Exception as error:
-            self.notice.setText(str(error))
+            QMessageBox.critical(self, "快捷键修改失败", str(error))
             return
         self.cancel_recording()
-        self.notice.setText("已保存并立即生效。")
 
     def restore(self):
         try:
             self.manager.update(DEFAULT_SHORTCUTS)
         except Exception as error:
-            self.notice.setText(str(error))
+            QMessageBox.critical(self, "恢复默认失败", str(error))
             return
         self.cancel_recording()
-        self.notice.setText("已恢复默认，并立即生效。")

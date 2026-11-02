@@ -15,7 +15,7 @@ from .domain import POS_OPTIONS, WordEntry
 from .review_navigation import navigation_step
 from .table_style import WordGroupStyle
 from .theme import ACCENT, GOLD, MUTED, TEXT, draw_related_arrow, draw_symbol
-from .widgets import PosCombo
+from .widgets import ExpandingTextEdit, PosCombo
 
 
 @dataclass
@@ -112,14 +112,14 @@ class WordTableModel(QAbstractTableModel):
 
     def flags(self, index):
         flags = Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable
-        if index.isValid() and self.study_groups is None:
+        if index.isValid():
             row, column = self.rows[index.row()], index.column()
             if (column == 1 and row.sense == 0) or (column in (2, 3) and not row.hidden):
                 flags |= Qt.ItemFlag.ItemIsEditable
         return flags
 
     def setData(self, index, value, role=Qt.ItemDataRole.EditRole):
-        if self.study_groups is not None or role != Qt.ItemDataRole.EditRole or not index.isValid():
+        if role != Qt.ItemDataRole.EditRole or not self.flags(index) & Qt.ItemFlag.ItemIsEditable:
             return False
         return self.edit_callback(self.rows[index.row()], index.column(), value)
 
@@ -247,6 +247,9 @@ class WordDelegate(QStyledItemDelegate):
 
     def sizeHint(self, option, index):
         row = index.data(Qt.ItemDataRole.UserRole)
+        if (index.column() == 3 and isinstance(self.editor, ExpandingTextEdit)
+                and self.edit_index == index):
+            return QSize(100, min(self.editor.content_height, max(36, self.view.viewport().height())))
         if row and not row.hidden and index.column() == 3:
             document = text_document(index.data() or "", option.font, self.view.columnWidth(3) - 24)
             return QSize(100, max(row.minimum_height,
@@ -258,11 +261,12 @@ class WordDelegate(QStyledItemDelegate):
             return None
         if index.column() == 2:
             editor = PosCombo(parent)
+            editor.view().installEventFilter(self)
             editor.setMinimumWidth(0)
             editor.setMaximumWidth(16777215)
         elif index.column() == 3:
-            editor = QPlainTextEdit(parent)
-            editor.setTabChangesFocus(True)
+            editor = ExpandingTextEdit(parent)
+            editor.contentHeightChanged.connect(lambda height: self._resize_text_editor(editor))
         else:
             editor = QLineEdit(parent)
         self.editor = editor
@@ -293,6 +297,17 @@ class WordDelegate(QStyledItemDelegate):
             rect.moveBottom(self.view.viewport().height())
         editor.setGeometry(rect)
 
+    def _resize_text_editor(self, editor):
+        if editor is not self.editor or self.edit_index is None or not self.edit_index.isValid():
+            return
+        index = QModelIndex(self.edit_index)
+        self.view.resizeRowToContents(index.row())
+        self.view.scrollTo(index, QAbstractItemView.ScrollHint.EnsureVisible)
+        option = QStyleOptionViewItem()
+        option.rect = self.view.visualRect(index)
+        self.updateEditorGeometry(editor, option, index)
+        editor.ensureCursorVisible()
+
     def setModelData(self, editor, model, index):
         # Our event filter controls commit/close so validation failures retain the editor.
         pass
@@ -317,6 +332,8 @@ class WordDelegate(QStyledItemDelegate):
                 QTimer.singleShot(0, editor.setFocus)
                 return False
             self.editor, self.edit_index = None, None
+            if index.isValid():
+                self.view.resizeRowToContents(index.row())
             self.editingChanged.emit(False)
             self.closeEditor.emit(editor, QStyledItemDelegate.EndEditHint.NoHint)
             return True
@@ -326,7 +343,10 @@ class WordDelegate(QStyledItemDelegate):
     def cancel(self):
         editor = self.editor
         if editor and shiboken6.isValid(editor):
+            index = QModelIndex(self.edit_index)
             self.editor, self.edit_index = None, None
+            if index.isValid():
+                self.view.resizeRowToContents(index.row())
             self.editingChanged.emit(False)
             self.closeEditor.emit(editor, QStyledItemDelegate.EndEditHint.RevertModelCache)
 
@@ -341,6 +361,13 @@ class WordDelegate(QStyledItemDelegate):
         self.submit()
 
     def eventFilter(self, editor, event):
+        if (isinstance(self.editor, PosCombo) and editor is self.editor.view()
+                and event.type() == QEvent.Type.KeyPress
+                and event.key() in (Qt.Key.Key_Tab, Qt.Key.Key_Backtab)):
+            backwards = event.key() == Qt.Key.Key_Backtab or bool(event.modifiers() & Qt.KeyboardModifier.ShiftModifier)
+            self.editor.hidePopup()
+            self.view.move_editor(-1 if backwards else 1)
+            return True
         if editor is self.editor:
             if event.type() == QEvent.Type.KeyPress:
                 key = event.key()
@@ -350,11 +377,19 @@ class WordDelegate(QStyledItemDelegate):
                     self.cancel()
                     return True
                 if key in (Qt.Key.Key_Tab, Qt.Key.Key_Backtab):
-                    if self.submit():
-                        self.view.setFocus()
-                        self.view.focusNextPrevChild(key == Qt.Key.Key_Tab)
+                    backwards = key == Qt.Key.Key_Backtab or bool(event.modifiers() & Qt.KeyboardModifier.ShiftModifier)
+                    self.view.move_editor(-1 if backwards else 1)
                     return True
-                # Let plain text handle Enter/newlines and the combo handle digits/popup.
+                if key in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
+                    modifiers = event.modifiers() & ~Qt.KeyboardModifier.KeypadModifier
+                    if modifiers == Qt.KeyboardModifier.NoModifier:
+                        if not event.isAutoRepeat() and self.submit():
+                            self.view.setFocus()
+                        return True
+                    if modifiers == Qt.KeyboardModifier.ShiftModifier and isinstance(editor, QPlainTextEdit):
+                        editor.insertPlainText("\n")
+                        return True
+                # Keep configured shortcuts and the combo's digit/popup handling.
                 return False
             if event.type() == QEvent.Type.FocusOut:
                 QTimer.singleShot(0, lambda: self._focus_out(editor))
@@ -363,6 +398,7 @@ class WordDelegate(QStyledItemDelegate):
 
 
 class WordTable(QTableView):
+    editPreparationRequested = Signal(int)
     wordClicked = Signal(str)
     revealRequested = Signal(int, bool)
     actionRequested = Signal(int, str)
@@ -517,6 +553,45 @@ class WordTable(QTableView):
             return
         self.revealRequested.emit(entry_id, expanded)
         self.select_entry(entry_id)
+
+    def edit_field(self, target):
+        """Resolve a logical field again after draft handling or a saved-data refresh."""
+        if not self.delegate.before_edit():
+            return
+        self.editPreparationRequested.emit(target[0])
+        entry_id, owner, sense, column = target
+        number = next((i for i, row in enumerate(self.model().rows)
+                       if (row.entry.id, row.owner, row.sense) == target[:3]), None)
+        if number is None:
+            self.setFocus()
+            return
+        index = self.model().index(number, column)
+        if self.model().flags(index) & Qt.ItemFlag.ItemIsEditable:
+            self.setCurrentIndex(index)
+            self.scrollTo(index, QAbstractItemView.ScrollHint.EnsureVisible)
+            self.edit(index)
+
+    def move_editor(self, step):
+        index = QModelIndex(self.delegate.edit_index)
+        if not index.isValid():
+            return
+        current = index.data(Qt.ItemDataRole.UserRole)
+        target = (current.entry.id, current.owner, current.sense, index.column())
+        fields = []
+        for row in self.model().rows:
+            if not row.first:
+                continue
+            for owner, word in [(-1, row.entry), *enumerate(row.entry.related)]:
+                fields.append((row.entry.id, owner, 0, 1))
+                for sense in range(len(word.senses)):
+                    fields.extend((row.entry.id, owner, sense, column) for column in (2, 3))
+        position = fields.index(target) + step
+        if not self.delegate.submit():
+            return
+        if 0 <= position < len(fields):
+            self.edit_field(fields[position])
+        else:
+            self.setFocus()
 
     def navigate_entries(self, step):
         """One navigation entry point for table keys and surrounding controls."""
@@ -724,6 +799,14 @@ class WordTable(QTableView):
             if modifiers != Qt.KeyboardModifier.NoModifier:
                 super().keyPressEvent(event)
                 return
+            if key == Qt.Key.Key_F2:
+                current = self.currentIndex()
+                row = current.data(Qt.ItemDataRole.UserRole)
+                if (not event.isAutoRepeat() and row is not None
+                        and self.selectionModel().isSelected(current)):
+                    self.edit_field((row.entry.id, row.owner, row.sense, 3))
+                event.accept()
+                return
             step = navigation_step(event)
             if step is not None:
                 self.navigate_entries(step)
@@ -781,9 +864,6 @@ class WordTable(QTableView):
         painter.drawRect(QRectF(1, top + 1, self.viewport().width() - 2, source[3] - 2))
 
     def mouseDoubleClickEvent(self, event):
-        if self.study_mode:
-            event.accept()
-            return
         index = self.indexAt(event.position().toPoint())
         if index.isValid():
             row = index.data(Qt.ItemDataRole.UserRole)

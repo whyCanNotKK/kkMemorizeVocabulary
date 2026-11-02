@@ -1,4 +1,5 @@
 from dataclasses import replace
+from datetime import date
 import json
 import sqlite3
 
@@ -8,6 +9,8 @@ from PySide6.QtWidgets import QDialog, QFileDialog, QLabel, QMessageBox
 
 from vocabulary.domain import RelatedWord, Sense, ValidationError, WordEntry
 from vocabulary.import_dialog import ImportConflictDialog
+from vocabulary.learning import StudyContext
+from vocabulary.study_transfer import serialize_study_backup
 from vocabulary.storage import Repository
 from vocabulary.transfer import parse_entries, read_entries, serialize_entries, write_entries
 
@@ -44,6 +47,7 @@ def test_json_roundtrip_complete_entries_and_restart(repo, tmp_path):
 
 
 @pytest.mark.parametrize("change", [
+    lambda d: d.update(version=1),
     lambda d: d.update(version=3),
     lambda d: d.update(version=True),
     lambda d: d.update(format="unknown"),
@@ -303,3 +307,35 @@ def test_cancel_file_pickers_does_not_change_form(window, repo, monkeypatch):
     window.import_words()
     window.export_words()
     assert window.form_value() == draft and repo.list_entries() == []
+
+
+@pytest.mark.parametrize('page,kind,version', [
+    ('pending', 'words', 1),
+    ('study17', 'study', 1),
+    ('study17', 'study', 2),
+    ('study17', 'words', 2),
+])
+def test_import_entrypoints_reject_old_or_wrong_files_before_touching_draft_or_data(
+        window, repo, tmp_path, monkeypatch, page, kind, version):
+    repo.save(complete(learned=False))
+    repo.prepare_study(StudyContext(date(2026, 10, 30), False))
+    monkeypatch.setattr(StudyContext, 'now', classmethod(lambda cls: StudyContext(date(2026, 10, 30), True)))
+    window.set_filter(page)
+    window.blocks[0].word.setText('未保存的草稿')
+    before_words, before_progress, before_draft = repo.list_entries(), repo.study_backup(), window.form_value()
+    content = (serialize_entries(before_words) if kind == 'words' else serialize_study_backup(before_progress))
+    document = json.loads(content)
+    document['version'] = version
+    path = tmp_path / 'unsupported.json'
+    path.write_text(json.dumps(document, ensure_ascii=False), encoding='utf-8')
+    errors = []
+    with monkeypatch.context() as patch:
+        patch.setattr(QFileDialog, 'getOpenFileName', lambda *args: (str(path), ''))
+        patch.setattr(QMessageBox, 'critical', lambda *args: errors.append(args[-1]))
+        patch.setattr(window, 'resolve_dirty', lambda: pytest.fail('invalid files must not process drafts'))
+        patch.setattr(window, 'choose_study_import_mode', lambda: pytest.fail('invalid files must not request overwrite'))
+        window.import_words()
+    assert len(errors) == 1
+    assert repo.list_entries() == before_words
+    assert repo.study_backup() == before_progress
+    assert window.form_value() == before_draft
