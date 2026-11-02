@@ -81,6 +81,10 @@ Use JSON to exchange entries or study progress. Ordinary tabs export all entries
 
 Ordinary tabs validate the complete file before processing drafts or writing data. Invalid structures, content, encoding, or versions display “数据结构不合法，导入失败”. Valid study files reuse the selected file without a second picker; recognition and cancellation do not switch tabs, draw words, or change drafts or data. Restoring progress reloads tasks without drawing new words.
 
+Import skips an existing entry when its spelling, ordered definitions and related words, important flag, and learned status all match after trimming surrounding whitespace. These entries do not appear in the duplicate comparison list or count as conflicts. Case, internal whitespace and list order remain significant; IDs and sort numbers are ignored. Study progress can still be restored when the words themselves match.
+
+Import and export display a translucent window-wide overlay with a rotating indicator and a short status message while processing files or data. Controls and closing are blocked during each task; file pickers, import choices and results remain interactive between tasks. This also applies to adopting duplicate entries and exchanging study progress.
+
 Use `--data-dir <directory>` to store data elsewhere, including with a portable build.
 
 ## Development and builds

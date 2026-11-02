@@ -115,6 +115,23 @@ def test_cross_database_roundtrip_and_repeat_replace_maps_final_ids(source, repo
         reopened.close()
 
 
+def test_identical_words_are_skipped_while_study_progress_is_restored(source, repo):
+    backup = parse_study_backup(serialize_study_backup(source.study_backup()))
+    assert repo.import_entries(backup.words).inserted == 1
+    original = repo.list_entries()[0]
+    repo.prepare_study(AM)
+    assert repo.study_backup().records != backup.records
+    changes = repo.connection.total_changes
+
+    result = repo.import_entries(backup.words)
+    assert result.inserted == 0 and not result.conflicts
+    assert repo.connection.total_changes == changes
+    repo.replace_study_progress(backup)
+
+    assert repo.study_backup().records == backup.records
+    assert repo.get(original.id) == original
+
+
 def test_empty_snapshot_clears_progress_and_replaces_markers_but_keeps_words(source, repo):
     empty = repo.study_backup()
     before_words = source.list_entries()

@@ -10,6 +10,7 @@ from PySide6.QtWidgets import (
 )
 
 from .domain import DuplicateWord, ValidationError, WordEntry
+from .busy_overlay import BusyOverlay
 from .import_dialog import ImportConflictDialog
 from .shortcuts import SettingsDialog, ShortcutManager
 from .table import WordTable, WordTableModel
@@ -19,6 +20,7 @@ from .learning import StudyContext
 from .study_transfer import StudyBackup, read_study_backup, read_word_or_study_file, write_study_backup
 from .theme import ACCENT, GOLD, MUTED, icon
 from .transfer import write_entries
+from .transfer_jobs import run_repository_task
 from .widgets import INPUT_SPACING, POS_WIDTH, WORD_WIDTH, FloatingNotice, WordBlock, button, confirm_remove
 
 
@@ -223,6 +225,7 @@ class MainWindow(QMainWindow):
         self.refresh()
         QApplication.instance().focusChanged.connect(self.focus_changed)
         QTimer.singleShot(0, self.blocks[0].word.setFocus)
+        self.busy_overlay = BusyOverlay(self)
 
     def copy_word(self, text):
         QApplication.clipboard().setText(text)
@@ -290,7 +293,7 @@ class MainWindow(QMainWindow):
         self.centralWidget().layout().activate()
         QTimer.singleShot(0, self.ensure_current_input_visible)
 
-    def refresh(self):
+    def refresh(self, entries=None):
         studying = self.filter_name == "study17"
         self.search_box.setVisible(not studying)
         self.editor_panel.setVisible(not studying)
@@ -311,7 +314,8 @@ class MainWindow(QMainWindow):
         bar = self.table.verticalScrollBar()
         self._filter_scroll[self._view_filter] = bar.value()
         position = self._filter_scroll[self.filter_name]
-        entries = self.repository.list_entries()
+        if entries is None:
+            entries = self.repository.list_entries()
         counts = {"all": len(entries), "pending": sum(not e.learned for e in entries),
                   "learned": sum(e.learned for e in entries)}
         labels = {"all": "全部", "pending": "待记", "learned": "已记下"}
@@ -808,6 +812,8 @@ class MainWindow(QMainWindow):
                 QTimer.singleShot(0, lambda: self.restore_input_focus(previous))
 
     def export_words(self):
+        if self.busy_overlay.active:
+            return
         if self.filter_name == 'study17':
             return self.export_study_progress()
         if not self.current_table().delegate.submit():
@@ -820,8 +826,10 @@ class MainWindow(QMainWindow):
                 return
             if not Path(path).suffix:
                 path += ".json"
-            entries = self._filter_entries(self.repository.list_entries())
-            write_entries(path, entries)
+            entries = run_repository_task(self.repository, self.busy_overlay,
+                                          '正在导出单词…', 'list_entries')
+            entries = self._filter_entries(entries)
+            self.busy_overlay.run('正在导出单词…', lambda: write_entries(path, entries))
             page = {"pending": "待记", "learned": "已记下", "all": "全部"}[self.filter_name]
             QMessageBox.information(self, "导出完成", f"已导出“{page}”页面当前筛选结果的 {len(entries)} 个主词。")
         except Exception as error:
@@ -831,6 +839,8 @@ class MainWindow(QMainWindow):
             self.shortcuts.set_suspended(False)
 
     def import_words(self):
+        if self.busy_overlay.active:
+            return
         if self.filter_name == 'study17':
             return self.import_study_progress()
         self.shortcuts.set_suspended(True)
@@ -839,7 +849,7 @@ class MainWindow(QMainWindow):
             if not path:
                 return
             try:
-                entries = read_word_or_study_file(path)
+                entries = self.busy_overlay.run('正在读取导入文件…', lambda: read_word_or_study_file(path))
             except (ValidationError, UnicodeError):
                 QMessageBox.critical(self, '导入失败', '数据结构不合法，导入失败')
                 return
@@ -847,12 +857,13 @@ class MainWindow(QMainWindow):
                 return self.import_study_progress(entries, require_choice=True)
             if not self.current_table().delegate.submit() or not self.resolve_dirty():
                 return
-            result = self.repository.import_entries(entries)
+            result = run_repository_task(self.repository, self.busy_overlay,
+                                         '正在导入单词…', 'import_entries', entries)
             if self.edit_id is not None:
                 self.reset_form()
-            self.refresh()
+            self.refresh_after_transfer()
             replaced_ids = self.resolve_word_conflicts(result)
-            self.refresh()
+            self.refresh_after_transfer()
             QMessageBox.information(
                 self, "导入完成", f"新增 {result.inserted} 个主词，发现 {len(result.conflicts)} 条重复记录，"
                 f"覆盖 {len(replaced_ids)} 个主词。")
@@ -862,11 +873,18 @@ class MainWindow(QMainWindow):
         finally:
             self.shortcuts.set_suspended(False)
 
+    def refresh_after_transfer(self, overlay=None):
+        overlay = overlay or self.busy_overlay
+        entries = (run_repository_task(self.repository, overlay, '正在更新单词列表…', 'list_entries')
+                   if self.filter_name != 'study17' else None)
+        with overlay.display('正在更新单词列表…'):
+            self.refresh(entries)
+
     def resolve_word_conflicts(self, result):
         if not result.conflicts:
             return set()
         dialog = ImportConflictDialog(self.repository, result, self)
-        dialog.resolved.connect(self.refresh)
+        dialog.resolved.connect(lambda: self.refresh_after_transfer(dialog.busy_overlay))
         try:
             dialog.exec()
             return dialog.replaced_names
@@ -874,6 +892,8 @@ class MainWindow(QMainWindow):
             dialog.deleteLater()
 
     def export_study_progress(self):
+        if self.busy_overlay.active:
+            return
         if not self.current_table().delegate.submit():
             return
         self.shortcuts.set_suspended(True)
@@ -884,8 +904,9 @@ class MainWindow(QMainWindow):
                 return
             if not Path(path).suffix:
                 path += '.json'
-            backup = self.repository.study_backup()
-            write_study_backup(path, backup)
+            backup = run_repository_task(self.repository, self.busy_overlay,
+                                         '正在导出学习进度…', 'study_backup')
+            self.busy_overlay.run('正在导出学习进度…', lambda: write_study_backup(path, backup))
             QMessageBox.information(self, '导出完成', f'已导出 {len(backup.words)} 个主词及全部学习进度。')
         except Exception as error:
             logging.exception('Could not export study progress')
@@ -912,6 +933,8 @@ class MainWindow(QMainWindow):
         return 'cancel'
 
     def import_study_progress(self, backup=None, *, require_choice=False):
+        if self.busy_overlay.active:
+            return
         self.shortcuts.set_suspended(True)
         result = None
         try:
@@ -919,26 +942,28 @@ class MainWindow(QMainWindow):
                 path, _ = QFileDialog.getOpenFileName(self, '导入学习进度', '', 'JSON 文件 (*.json)')
                 if not path:
                     return
-                backup = read_study_backup(path)
+                backup = self.busy_overlay.run('正在读取学习进度…', lambda: read_study_backup(path))
             mode = (self.choose_study_import_mode()
                     if require_choice or self.repository.has_study_progress() else 'full')
             if mode == 'cancel':
                 return
             if not self.current_table().delegate.submit() or not self.resolve_dirty():
                 return
-            result = self.repository.import_entries(backup.words)
+            result = run_repository_task(self.repository, self.busy_overlay,
+                                         '正在导入单词…', 'import_entries', backup.words)
             if self.edit_id is not None:
                 self.reset_form()
             replaced = self.resolve_word_conflicts(result)
             if mode == 'full':
-                self.repository.replace_study_progress(backup)
+                run_repository_task(self.repository, self.busy_overlay,
+                                    '正在恢复学习进度…', 'replace_study_progress', backup)
                 self.study_page.revealed.clear()
                 self.study_page.load(StudyContext.now())
                 status = f'已恢复 {len(backup.records)} 条学习进度。'
             else:
                 self.study_page.load(self.study_page.context or StudyContext.now())
                 status = '本机学习进度已保留。'
-            self.refresh()
+            self.refresh_after_transfer()
             QMessageBox.information(self, '导入完成',
                 f'新增 {result.inserted} 个主词，发现 {len(result.conflicts)} 条重复记录，'
                 f'覆盖 {len(replaced)} 个主词。\n{status}')
@@ -947,7 +972,7 @@ class MainWindow(QMainWindow):
             detail = str(error)
             if result is not None:
                 self.study_page.load(self.study_page.context or StudyContext.now())
-                self.refresh()
+                self.refresh_after_transfer()
                 detail += '\n已导入或确认的词条已保留，本机学习进度未被整体替换，可重新导入。'
             QMessageBox.critical(self, '导入失败', detail)
         finally:

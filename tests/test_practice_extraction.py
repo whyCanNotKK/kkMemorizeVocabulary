@@ -65,7 +65,8 @@ def test_generated_entries_import_and_duplicate_detection(repo):
         assert entry.important and not entry.learned
         for word in [entry, *entry.related]:
             assert [(s.pos, s.translation) for s in word.senses] == [("n.", "1")]
-    assert len(repo.import_entries(parsed).conflicts) == 2
+    repeated = repo.import_entries(parsed)
+    assert repeated.inserted == 0 and not repeated.conflicts
 
 
 def test_cli_rejects_overwriting_source(tmp_path, monkeypatch):

@@ -102,9 +102,71 @@ def test_import_skips_all_main_duplicates_and_continues(repo):
     result = repo.import_entries(incoming)
     assert result.inserted == 3
     assert [entry.text for entry in repo.list_entries()] == ["record", "new", "recorder", "last"]
-    assert [item.incoming.text for item in result.conflicts] == ["RECORD", "NEW", "record"]
+    assert [item.incoming.text for item in result.conflicts] == ["RECORD", "NEW"]
     assert repo.get(original.id) == original
     assert all(entry.id is None for entry in incoming)
+
+
+def test_identical_import_ignores_metadata_and_trimmed_edges_without_writing(repo):
+    original = repo.save(complete(learned=False))
+    context = StudyContext(date(2026, 11, 2), False)
+    repo.prepare_study(context)
+    repo.complete_study(original.id, context)
+    progress = repo.study_backup()
+    incoming = parse_entries(serialize_entries([original]))[0]
+    incoming.id, incoming.sort_order = 999, 9000
+    incoming.text = '\t record \n'
+    incoming.senses[0].pos = ' n. '
+    incoming.senses[0].translation = '\n记录\n第二行\t'
+    incoming.related[0].text = ' recorder '
+    incoming.related[0].senses[0].translation = ' 录音机\n'
+    changes = repo.connection.total_changes
+    counters = repo.max_pending_sort_order, repo.max_learned_sort_order
+
+    result = repo.import_entries([incoming])
+
+    assert result.inserted == 0 and not result.conflicts
+    assert repo.connection.total_changes == changes
+    assert (repo.max_pending_sort_order, repo.max_learned_sort_order) == counters
+    assert repo.get(original.id) == original
+    assert repo.study_backup() == progress
+    assert incoming.id == 999 and incoming.sort_order == 9000
+
+
+@pytest.mark.parametrize('change', [
+    lambda w: w.update(text='Record'),
+    lambda w: w['senses'][0].update(pos='adj.'),
+    lambda w: w['senses'][0].update(translation='记录\n\n第二行'),
+    lambda w: w['senses'].reverse(),
+    lambda w: w['senses'].append({'pos': 'adv.', 'translation': '新增释义'}),
+    lambda w: w['senses'].pop(),
+    lambda w: w['related'][0].update(text='Recorder'),
+    lambda w: w['related'][0]['senses'][0].update(pos='v.'),
+    lambda w: w['related'][0]['senses'][0].update(translation='录音  机'),
+    lambda w: w['related'][0]['senses'].reverse(),
+    lambda w: w['related'][0]['senses'].pop(),
+    lambda w: w['related'].reverse(),
+    lambda w: w['related'].append({'text': 'new', 'senses': [{'pos': 'n.', 'translation': '新'}]}),
+    lambda w: w['related'].pop(),
+    lambda w: w.update(important=True),
+    lambda w: w.update(learned=False),
+])
+def test_any_content_or_status_difference_still_requires_comparison(repo, change):
+    original = repo.save(complete())
+    document = json.loads(serialize_entries([original]))
+    change(document['words'][0])
+    result = repo.import_entries(parse_entries(json.dumps(document)))
+    assert result.inserted == 0 and len(result.conflicts) == 1
+    assert result.conflicts[0].current == repo.get(original.id) == original
+
+
+def test_identical_records_inside_file_are_skipped_but_changed_candidates_remain(repo):
+    incoming = [complete('same'), complete('same'), complete('same', important=True),
+                complete('same'), complete('other')]
+    result = repo.import_entries(incoming)
+    assert result.inserted == 2
+    assert len(result.conflicts) == 1 and result.conflicts[0].incoming.important
+    assert [entry.text for entry in repo.list_entries()] == ['same', 'other']
 
 
 def test_import_insert_transaction_rolls_back(repo):
@@ -198,17 +260,17 @@ def test_conflict_dialog_failed_apply_stays_open_for_retry(repo, qtbot, monkeypa
     dialog = ImportConflictDialog(repo, result)
     qtbot.addWidget(dialog)
     dialog.show()
-    original_replace = repo.replace_imports
-    def fail(choices):
+    original_replace = Repository.replace_imports
+    def fail(self, choices):
         raise OSError("locked")
-    monkeypatch.setattr(repo, "replace_imports", fail)
+    monkeypatch.setattr(Repository, "replace_imports", fail)
     messages = []
     monkeypatch.setattr(QMessageBox, "critical", lambda *args: messages.append(args[2]))
     qtbot.mouseClick(dialog.cards[0][1], Qt.MouseButton.LeftButton)
     assert dialog.isVisible() and len(dialog.cards) == 1
     assert repo.get(original.id) == original
     assert "locked" in messages[0]
-    monkeypatch.setattr(repo, "replace_imports", original_replace)
+    monkeypatch.setattr(Repository, "replace_imports", original_replace)
     qtbot.mouseClick(dialog.cards[0][1], Qt.MouseButton.LeftButton)
     assert not dialog.isVisible() and not by_text(repo, "record").learned
 
@@ -253,6 +315,31 @@ def test_window_import_new_first_then_review_and_clear_stale_editor(window, repo
     assert not by_text(repo, "record").learned and by_text(repo, "record").important
     assert "新增 1" in messages[0] and "覆盖 1" in messages[0]
     assert window.filter_buttons["all"].text() == "全部  2"
+
+
+@pytest.mark.parametrize('with_changes', [False, True])
+def test_identical_imports_do_not_appear_in_comparison(window, repo, tmp_path, monkeypatch, with_changes):
+    original = repo.save(complete())
+    path = tmp_path / 'import.json'
+    incoming = [replace(original, sort_order=800)]
+    if with_changes:
+        repo.save(complete('changed'))
+        incoming.extend([complete('changed', important=True), complete('new')])
+    write_entries(path, incoming)
+    monkeypatch.setattr(QFileDialog, 'getOpenFileName', lambda *args: (str(path), ''))
+    reviewed = []
+    def review(dialog):
+        reviewed.append([item.incoming.text for item in dialog.conflicts])
+        assert reviewed[-1] == ['changed']
+        dialog.choose_all(False)
+        return dialog.result()
+    monkeypatch.setattr(ImportConflictDialog, 'exec', review)
+    messages = []
+    monkeypatch.setattr(QMessageBox, 'information', lambda *args: messages.append(args[2]))
+    window.import_words()
+    assert reviewed == ([['changed']] if with_changes else [])
+    assert repo.get(original.id) == original
+    assert f'发现 {int(with_changes)} 条重复记录' in messages[0]
 
 
 def test_window_invalid_file_keeps_draft_and_data(window, repo, tmp_path, monkeypatch):

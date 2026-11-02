@@ -5,6 +5,8 @@ from PySide6.QtWidgets import (
 )
 
 from .domain import POS_OPTIONS
+from .busy_overlay import BusyOverlay
+from .transfer_jobs import run_repository_task
 from .theme import ACCENT, GOLD, icon
 from .widgets import button
 
@@ -214,6 +216,7 @@ class ImportConflictDialog(QDialog):
         footer.addWidget(self.cancel_button)
         layout.addLayout(footer)
         self._update_summary()
+        self.busy_overlay = BusyOverlay(self)
 
     def _update_summary(self):
         self.summary.setText(f"已导入 {self.inserted} 个新主词，剩余 {len(self.conflicts)} 条重复记录。点击卡片立即采用。")
@@ -227,9 +230,12 @@ class ImportConflictDialog(QDialog):
         self._resolve(list(self.conflicts), incoming)
 
     def _resolve(self, selected, incoming):
+        if self.busy_overlay.active:
+            return
         try:
             if incoming:
-                adopted = self.repository.replace_imports(selected)
+                adopted = run_repository_task(self.repository, self.busy_overlay,
+                                              '正在导入所选单词…', 'replace_imports', selected)
         except Exception as error:
             QMessageBox.critical(self, "覆盖失败", f"本次覆盖已回滚，卡片已保留，可重试。\n{error}")
             return

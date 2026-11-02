@@ -41,6 +41,12 @@ class WordEntry:
     sort_order: int | None = None
 
 
+def same_entry_content(left: WordEntry, right: WordEntry) -> bool:
+    """Compare cleaned entry content, including ordered senses and related words."""
+    return (left.text, left.senses, left.related, left.important, left.learned) == (
+        right.text, right.senses, right.related, right.important, right.learned)
+
+
 class ValidationError(ValueError):
     pass
 

@@ -5,7 +5,8 @@ import json
 import random
 import sqlite3
 
-from .domain import DEFAULT_SHORTCUTS, DuplicateWord, RelatedWord, Sense, WordEntry, clean_entry
+from .domain import (DEFAULT_SHORTCUTS, DuplicateWord, RelatedWord, Sense, WordEntry,
+                     clean_entry, same_entry_content)
 from .transfer import ImportConflict, ImportResult
 from .learning import STAGE_GAPS, StudyContext, StudyDrawSettings, StudyTask, next_stage, study_due
 from .study_transfer import RECORD_FIELDS, StudyBackup
@@ -118,7 +119,9 @@ class Repository:
                 existing = self.connection.execute(
                     "SELECT id FROM words WHERE normalized_text=?", (entry.text.casefold(),)).fetchone()
                 if existing:
-                    result.conflicts.append(ImportConflict(self.get(existing[0]), entry))
+                    current = self.get(existing[0])
+                    if not same_entry_content(current, entry):
+                        result.conflicts.append(ImportConflict(current, entry))
                 else:
                     self._save_entry(entry, counters)
                     result.inserted += 1
