@@ -97,6 +97,8 @@ class StudyPage(QWidget):
         else:
             self.revealed.discard(word_id)
         self.render()
+        if expanded:
+            self.table.ensure_entry_visible(word_id)
 
     def set_global_hidden(self, hidden):
         self.global_hidden = hidden

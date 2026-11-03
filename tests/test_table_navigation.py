@@ -250,10 +250,11 @@ def test_empty_list_review_keys_are_noops(window, qtbot):
     assert not table.currentIndex().isValid()
 
 
-def test_navigation_scrolls_to_main_word_and_space_keeps_position(window, repo, qtbot):
+def test_navigation_scrolls_to_main_word_and_space_reveals_whole_group(window, repo, qtbot):
     entries = [repo.save(WordEntry(f"word-{i}", [Sense("n.", "释义")],
                                    [RelatedWord("child", [Sense("n.", "关联")])]))
                for i in range(50)]
+    window.refresh()
     window.set_global_hidden(False)
     table = window.table
     table.setCurrentIndex(index_for(table, entries[0]))
@@ -267,9 +268,61 @@ def test_navigation_scrolls_to_main_word_and_space_keeps_position(window, repo, 
     qtbot.keyClick(table, Qt.Key.Key_Space)
     assert_selected(table, entries[25])
     assert table.verticalScrollBar().value() == position
+    assert table.currentIndex().data(Qt.ItemDataRole.UserRole).hidden
     qtbot.keyClick(table, Qt.Key.Key_Space)
     assert_selected(table, entries[25])
-    assert table.verticalScrollBar().value() == position
+    assert table.verticalScrollBar().value() >= position
+    assert table.viewport().rect().contains(table.visualRect(table.currentIndex()))
+    assert table.viewport().rect().contains(table.visualRect(index_for(table, entries[25], owner=0)))
+
+
+@pytest.mark.parametrize("review_list", [(page, 40) for page in
+                         ("pending", "all", "learned", "study17")], indirect=True)
+@pytest.mark.parametrize("trigger", ["left", "right", "keyboard"])
+@pytest.mark.parametrize("layout", ["fits", "bottom_overflow", "tall_main", "tall_related"])
+def test_single_reveal_prioritizes_complete_entry(review_list, window, repo, qtbot, trigger, layout):
+    table, _ = review_list
+    entry = table.model().rows[22].entry
+    if layout.startswith("tall"):
+        word = entry if layout == "tall_main" else entry.related[0]
+        word.senses[0].translation = "\n".join(["很长的释义"] * 80)
+        repo.save(entry)
+        window.refresh_after_inline()
+    index = index_for(table, entry)
+    table.select_entry(entry.id)
+    table.setFocus()
+    bar = table.verticalScrollBar()
+    height = table.viewport().height()
+    top = 40 if layout == "fits" else height - 40
+    bar.setValue(table.rowViewportPosition(index.row()) + bar.value() - top)
+    top = table.rowViewportPosition(index.row())
+    position = bar.value()
+    assert position > 0
+    if trigger == "keyboard":
+        qtbot.keyClick(table, Qt.Key.Key_Return if table.study_mode else Qt.Key.Key_Space)
+    else:
+        mask = table.visualRect(index_for(table, entry, column=2))
+        qtbot.mouseClick(table.viewport(), Qt.MouseButton.LeftButton if trigger == "left"
+                         else Qt.MouseButton.RightButton, pos=mask.topLeft() + QPoint(40, 18))
+    qtbot.wait(20)  # Include queued Qt layout/focus work in the visibility check.
+    rows = [i for i, row in enumerate(table.model().rows) if row.entry.id == entry.id]
+    first_top = table.rowViewportPosition(rows[0])
+    bottom = table.rowViewportPosition(rows[-1]) + table.rowHeight(rows[-1])
+    assert_selected(table, entry)
+    assert table.hasFocus() and table.delegate.editor is None
+    if layout == "fits":
+        assert bar.value() == position
+        assert first_top == top and bottom <= height
+    elif layout == "bottom_overflow":
+        assert bar.value() > position
+        assert first_top > 0 and bottom == height
+    else:
+        assert first_top == 0 and bottom > height
+    # Hiding only clamps to the new scroll range.
+    position = bar.value()
+    table.set_entry_revealed(entry.id, False)
+    qtbot.wait(20)
+    assert bar.value() == min(position, bar.maximum())
 
 
 @pytest.mark.parametrize("review_list", ["study17"], indirect=True)

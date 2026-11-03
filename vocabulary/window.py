@@ -455,6 +455,8 @@ class MainWindow(QMainWindow):
         else:
             self.revealed.discard(entry_id)
         self.refresh()
+        if expanded:
+            self.table.ensure_entry_visible(entry_id)
 
     @property
     def global_hidden(self):

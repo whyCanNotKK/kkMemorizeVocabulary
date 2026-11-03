@@ -68,6 +68,8 @@ Enter a word, part of speech, and translation in the bottom form, then save with
 
 When answers are hidden, either left-click or right-click the gray answer mask or the space directly above or below it within the same row to reveal the whole entry. The target keeps the mask's horizontal width. This click only reveals, without editing or copying.
 
+Revealing one entry keeps the list still when its main word, definitions, and related words fit in view. If they extend below the list, it scrolls just enough to show the whole entry. Entries taller than the list start at the top, keeping the main word visible while you scroll through the rest. Keyboard reveals follow the same rule.
+
 Newly focused inputs place the cursor at the end of their content. Double-click a part of speech in any list to open a popup centered on its label, with all choices visible. Click a choice, press 1–9 or n/v/a, or use arrow keys and Enter to save immediately and close the popup; Esc cancels.
 
 Hold a related word's bent-arrow icon to drag that word and all its definitions within the same parent. This works in all four lists (including search results) and in the entry form. Lists save the order immediately; the form saves it with the entry. Press Esc or release outside the related-word area to cancel.

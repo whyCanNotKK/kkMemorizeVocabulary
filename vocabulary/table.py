@@ -641,6 +641,21 @@ class WordTable(QTableView):
         self.revealRequested.emit(entry_id, expanded)
         self.select_entry(entry_id)
 
+    def ensure_entry_visible(self, entry_id):
+        """Fit a revealed group with minimal scrolling, keeping oversized groups at their start."""
+        rows = [i for i, row in enumerate(self.model().rows) if row.entry.id == entry_id]
+        if not rows:
+            return
+        top = self.rowViewportPosition(rows[0])
+        bottom = self.rowViewportPosition(rows[-1]) + self.rowHeight(rows[-1])
+        height = self.viewport().height()
+        if bottom - top > height or top < 0:
+            delta = top
+        else:
+            delta = max(0, bottom - height)
+        bar = self.verticalScrollBar()
+        bar.setValue(bar.value() + delta)
+
     def edit_field(self, target):
         """Resolve a logical field again after draft handling or a saved-data refresh."""
         if not self.delegate.before_edit():
