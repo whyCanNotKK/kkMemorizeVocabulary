@@ -2,16 +2,17 @@ import math
 
 from PySide6.QtCore import (
     QEasingCurve, QEvent, QParallelAnimationGroup, QPauseAnimation, QPoint,
-    QPropertyAnimation, QSequentialAnimationGroup, Qt, Signal, QTimer,
+    QPropertyAnimation, QSequentialAnimationGroup, QRectF, QSize, Qt, Signal, QTimer,
 )
 from PySide6.QtGui import QColor, QKeyEvent, QPainter, QPen
 from PySide6.QtWidgets import (
-    QComboBox, QFrame, QGraphicsOpacityEffect, QHBoxLayout, QLabel, QLineEdit, QMessageBox,
-    QPlainTextEdit, QPushButton, QSizePolicy, QStyle, QStyleOptionComboBox, QVBoxLayout, QWidget,
+    QApplication, QComboBox, QFrame, QGraphicsOpacityEffect, QHBoxLayout, QLabel, QLineEdit, QMessageBox,
+    QPlainTextEdit, QPushButton, QSizePolicy, QStyle, QStyledItemDelegate, QStyleOptionComboBox, QVBoxLayout, QWidget,
 )
 
-from .domain import POS_OPTIONS, RelatedWord, Sense
-from .theme import draw_related_arrow
+from .domain import POS_OPTIONS, SHORTCUT_LABELS, RelatedWord, Sense
+from .theme import MUTED, draw_related_arrow, draw_symbol, icon
+from .pos_picker import pos_shortcut
 
 INPUT_HEIGHT = 36
 WORD_WIDTH = 192
@@ -131,7 +132,9 @@ class PosCombo(QComboBox):
             self.addItem(f"{number}    {code}    {label}", code)
         self.setFixedWidth(POS_WIDTH)
         self.setFixedHeight(INPUT_HEIGHT)
-        self.view().setMinimumWidth(200)
+        self.view().setWordWrap(False)
+        self.view().setTextElideMode(Qt.TextElideMode.ElideNone)
+        self.view().setItemDelegate(QStyledItemDelegate(self.view()))
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
         self.setMaxVisibleItems(10)
         self.view().installEventFilter(self)
@@ -159,23 +162,13 @@ class PosCombo(QComboBox):
         super().showPopup()
 
     def _digit(self, event: QKeyEvent) -> bool:
-        if not (event.modifiers() & (Qt.KeyboardModifier.ControlModifier | Qt.KeyboardModifier.AltModifier)):
-            if Qt.Key.Key_1 <= event.key() <= Qt.Key.Key_9:
-                self.setCurrentIndex(event.key() - Qt.Key.Key_0)
-                self.hidePopup()
-                self.setFocus()
-                return True
-            index = {Qt.Key.Key_N: 1, Qt.Key.Key_V: 2, Qt.Key.Key_A: 3}.get(event.key())
-            if index is not None:
-                if event.key() == Qt.Key.Key_A:
-                    if event.isAutoRepeat():
-                        return True
-                    index = 4 if self.currentData() == "adj." else 3
-                self.setCurrentIndex(index)
-                self.hidePopup()
-                self.setFocus()
-                return True
-        return False
+        value = pos_shortcut(event, self.currentData())
+        if value is None:
+            return False
+        self.set_pos(value)
+        self.hidePopup()
+        self.setFocus()
+        return True
 
     def keyPressEvent(self, event):
         if self._digit(event):
@@ -246,9 +239,24 @@ class ExpandingTextEdit(QPlainTextEdit):
             self._schedule_height()
 
 
+class SenseDragHandle(QWidget):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setFixedSize(24, INPUT_HEIGHT)
+        self.setCursor(Qt.CursorShape.OpenHandCursor)
+        self.setToolTip("按住拖动排序")
+        self.setAccessibleName("拖动调整释义顺序")
+
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        draw_symbol(painter, "drag", QRectF(3, 9, 18, 18), MUTED if self.isEnabled() else "#46505c")
+
+
 class SenseRow(QWidget):
     changed = Signal()
     heightChanged = Signal()
+    addRequested = Signal()
+    removeRequested = Signal()
 
     def __init__(self, sense=None, parent=None):
         super().__init__(parent)
@@ -268,6 +276,26 @@ class SenseRow(QWidget):
         self.translation.setAccessibleName("翻译")
         layout.addWidget(self.pos, 0, Qt.AlignmentFlag.AlignTop)
         layout.addWidget(self.translation, 1)
+        self.drag_handle = SenseDragHandle()
+        self.add_button = button("", quiet=True)
+        self.remove_button = button("", quiet=True)
+        tools = QHBoxLayout()
+        tools.setContentsMargins(0, 0, 0, 0)
+        tools.setSpacing(2)
+        tools.addWidget(self.drag_handle)
+        for control, symbol, name, callback in (
+                (self.add_button, "plus_circle", SHORTCUT_LABELS["add_sense"], self.addRequested.emit),
+                (self.remove_button, "trash", SHORTCUT_LABELS["remove_sense"], self.removeRequested.emit)):
+            control.setFixedSize(28, INPUT_HEIGHT)
+            control.setIconSize(QSize(20, 20))
+            control.setIcon(icon(symbol, disabled_color="#46505c" if symbol == "trash" else None))
+            control.setStyleSheet("QPushButton { padding: 0; }")
+            control.setAccessibleName(name)
+            control.setFocusPolicy(Qt.FocusPolicy.ClickFocus)
+            control.clicked.connect(lambda checked=False, callback=callback: callback())
+            tools.addWidget(control)
+        layout.addLayout(tools)
+        tools.setAlignment(Qt.AlignmentFlag.AlignTop)
         self.pos.currentIndexChanged.connect(self.changed)
         self.translation.textChanged.connect(self.changed)
         self.translation.contentHeightChanged.connect(self._resize_translation)
@@ -290,8 +318,9 @@ class RelatedIndicator(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setFixedSize(16, INPUT_HEIGHT)
-        self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
-        self.setAccessibleName("关联词")
+        self.setCursor(Qt.CursorShape.OpenHandCursor)
+        self.setToolTip("按住拖动调整顺序")
+        self.setAccessibleName("拖动调整关联词顺序")
 
     def paintEvent(self, event):
         painter = QPainter(self)
@@ -302,7 +331,6 @@ class RelatedIndicator(QWidget):
 class WordBlock(QFrame):
     changed = Signal()
     focused = Signal(object)
-    removeRequested = Signal(object)
     structureChanged = Signal()
     heightChanged = Signal()
     cursorMoved = Signal()
@@ -314,7 +342,6 @@ class WordBlock(QFrame):
         self.related = related
         self.rows = []
         self._keys = {}
-        self._active = False
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
         outer.setSpacing(8)
@@ -336,7 +363,8 @@ class WordBlock(QFrame):
             word_layout = QHBoxLayout(word_column)
             word_layout.setContentsMargins(0, 0, 0, 0)
             word_layout.setSpacing(6)
-            word_layout.addWidget(RelatedIndicator())
+            self.indicator = RelatedIndicator()
+            word_layout.addWidget(self.indicator)
             self.word.setFixedWidth(WORD_WIDTH - 22)
             word_layout.addWidget(self.word)
             inputs.addWidget(word_column, 0, Qt.AlignmentFlag.AlignTop)
@@ -348,22 +376,6 @@ class WordBlock(QFrame):
         self.sense_layout = QVBoxLayout()
         self.sense_layout.setSpacing(8)
         right.addLayout(self.sense_layout)
-        actions = QHBoxLayout()
-        actions.setContentsMargins(0, 0, 0, 0)
-        self.add_button = button("增加释义", quiet=True)
-        self.remove_button = button("删除释义", quiet=True)
-        self.add_button.clicked.connect(self.add_sense)
-        self.remove_button.clicked.connect(self.remove_last_sense)
-        actions.addWidget(self.add_button)
-        actions.addWidget(self.remove_button)
-        actions.addStretch()
-        self.remove_related_button = None
-        if related:
-            self.remove_related_button = button("移除", quiet=True)
-            self.remove_related_button.setAccessibleName("移除这个关联词")
-            self.remove_related_button.clicked.connect(lambda: self.removeRequested.emit(self))
-            actions.addWidget(self.remove_related_button)
-        right.addLayout(actions)
         inputs.addLayout(right, 1)
         outer.addLayout(inputs)
         for sense in senses or [Sense()]:
@@ -376,43 +388,65 @@ class WordBlock(QFrame):
         row.changed.connect(self.changed)
         row.heightChanged.connect(self.heightChanged)
         row.translation.cursorPositionChanged.connect(self.cursorMoved)
+        row.addRequested.connect(lambda: self.add_sense(after=row))
+        row.removeRequested.connect(lambda: self.remove_sense(row))
         self.rows.append(row)
         self.sense_layout.addWidget(row)
         return row
 
-    def add_sense(self):
+    def add_sense(self, *, after=None):
         row = self._append_sense(Sense())
+        if after is not None:
+            self.rows.remove(row)
+            index = self.rows.index(after) + 1
+            self.rows.insert(index, row)
+            self.sense_layout.removeWidget(row)
+            self.sense_layout.insertWidget(index, row)
         self._refresh_actions()
         self.changed.emit()
         self.structureChanged.emit()
         QTimer.singleShot(0, row.pos.setFocus)
 
     def remove_last_sense(self):
+        self.remove_sense(self.rows[-1])
+
+    def remove_sense(self, row):
         if len(self.rows) <= 1:
             return
-        row = self.rows[-1]
-        if row.has_content() and not confirm_remove(self, "移除这个词的最后一条释义？"):
+        if row.has_content() and not confirm_remove(self, "移除这条释义？"):
             return
-        self.rows.pop()
+        index = self.rows.index(row)
+        self.rows.remove(row)
         self.sense_layout.removeWidget(row)
         row.hide()
         row.deleteLater()
         self._refresh_actions()
         self.changed.emit()
         self.structureChanged.emit()
-        self.rows[-1].translation.setFocus()
+        self.rows[min(index, len(self.rows) - 1)].translation.setFocus()
 
-    def set_active(self, active, keys):
-        self._active, self._keys = active, keys
+    def set_shortcuts(self, keys):
+        self._keys = keys
         self._refresh_actions()
 
     def _refresh_actions(self):
-        add_key = f"  {self._keys.get('add_sense', '')}" if self._active else ""
-        remove_key = f"  {self._keys.get('remove_sense', '')}" if self._active else ""
-        self.add_button.setText("增加释义" + add_key)
-        self.remove_button.setText("删除释义" + remove_key)
-        self.remove_button.setEnabled(len(self.rows) > 1)
-        self.remove_button.setVisible(len(self.rows) > 1)
+        for row in self.rows:
+            row.add_button.setToolTip(SHORTCUT_LABELS["add_sense"] + (f" · {self._keys['add_sense']}" if self._keys else ""))
+            row.remove_button.setToolTip(SHORTCUT_LABELS["remove_sense"] + (f" · {self._keys['remove_sense']}" if self._keys else ""))
+            row.remove_button.setEnabled(len(self.rows) > 1)
+            row.drag_handle.setEnabled(len(self.rows) > 1)
+
+    def focused_row(self):
+        focus = QApplication.focusWidget()
+        return next((row for row in self.rows if focus is row or focus and row.isAncestorOf(focus)), None)
+
+    def move_sense(self, source, target):
+        self.rows.insert(target, self.rows.pop(source))
+        for index, row in enumerate(self.rows):
+            self.sense_layout.removeWidget(row)
+            self.sense_layout.insertWidget(index, row)
+        self.changed.emit()
+        self.structureChanged.emit()
 
     def value(self):
         return RelatedWord(self.word.text(), [row.value() for row in self.rows])
@@ -424,7 +458,4 @@ class WordBlock(QFrame):
         result = [self.word]
         for row in self.rows:
             result.extend([row.pos, row.translation])
-        result.extend([self.add_button, self.remove_button])
-        if self.remove_related_button:
-            result.append(self.remove_related_button)
         return result

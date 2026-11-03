@@ -119,7 +119,7 @@ class WindowHotkeys(QObject):
         if not self.active():
             self.clear()
             return
-        self.registrations = {combination: action for action, value in self.manager.values.items()
+        self.registrations = {combination: action for value, action in self.manager.active_bindings.items()
                               if (combination := native_combination(value)) is not None}
         if not self.handle:
             self.modifiers = self.api.modifiers()

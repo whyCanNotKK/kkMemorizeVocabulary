@@ -4,7 +4,7 @@ import math
 import time
 
 import shiboken6
-from PySide6.QtCore import QAbstractTableModel, QEasingCurve, QEvent, QItemSelection, QItemSelectionModel, QModelIndex, QPoint, QPersistentModelIndex, QRect, QRectF, QSize, Qt, QTimer, QVariantAnimation, Signal
+from PySide6.QtCore import QAbstractTableModel, QEasingCurve, QEvent, QItemSelection, QItemSelectionModel, QModelIndex, QPoint, QPointF, QPersistentModelIndex, QRect, QRectF, QSize, Qt, QTimer, QVariantAnimation, Signal
 from PySide6.QtGui import QColor, QFont, QFontMetricsF, QPainter, QPainterPath, QPen, QTextDocument, QTextOption
 from PySide6.QtWidgets import (
     QAbstractItemView, QAbstractSlider, QApplication, QHeaderView, QLineEdit, QPlainTextEdit,
@@ -12,10 +12,12 @@ from PySide6.QtWidgets import (
 )
 
 from .domain import POS_OPTIONS, WordEntry
+from .drag_reorder import ANIMATION_MS, edge_scroll_delta, group_positions, insertion_index
 from .review_navigation import navigation_step
 from .table_style import WordGroupStyle
 from .theme import ACCENT, GOLD, MUTED, TEXT, draw_related_arrow, draw_symbol
-from .widgets import ExpandingTextEdit, PosCombo
+from .widgets import ExpandingTextEdit
+from .pos_picker import PosPicker
 
 
 @dataclass
@@ -93,7 +95,7 @@ class WordTableModel(QAbstractTableModel):
                 return "记下"
         if role == Qt.ItemDataRole.UserRole:
             return row
-        if role == Qt.ItemDataRole.ToolTipRole and column == 3:
+        if role == Qt.ItemDataRole.ToolTipRole and column in (1, 2, 3):
             return None
         if role in (Qt.ItemDataRole.DisplayRole, Qt.ItemDataRole.EditRole, Qt.ItemDataRole.ToolTipRole):
             if column == 1:
@@ -149,18 +151,23 @@ class WordDelegate(QStyledItemDelegate):
         self._committing = False
 
     @staticmethod
-    def mask_path(rect):
-        """The painted capsule is also the exact mouse target."""
+    def mask_rect(rect):
         rect = QRectF(rect)
-        mask = QRectF(rect.left() + 12, rect.top() + 11, min(360, rect.width() - 28), 14)
+        return QRectF(rect.left() + 12, rect.top() + 11, min(360, rect.width() - 28), 14)
+
+    @classmethod
+    def mask_path(cls, rect):
         path = QPainterPath()
-        path.addRoundedRect(mask, 7, 7)
+        path.addRoundedRect(cls.mask_rect(rect), 7, 7)
         return path
 
     def mask_hit(self, index, point):
         row = index.data(Qt.ItemDataRole.UserRole)
-        return (row is not None and row.hidden and index.column() in (2, 3)
-                and self.mask_path(self.view.visualRect(index)).contains(point))
+        if row is None or not row.hidden or index.column() not in (2, 3):
+            return False
+        cell = QRectF(self.view.visualRect(index))
+        mask = self.mask_rect(cell)
+        return QRectF(mask.left(), cell.top(), mask.width(), cell.height()).contains(point)
 
     def word_layout(self, index, rect, base_font):
         """Use the same word geometry for painting and pointer hit testing."""
@@ -182,6 +189,29 @@ class WordDelegate(QStyledItemDelegate):
         font, text, area = self.word_layout(index, rect, self.view.font())
         bounds = QFontMetricsF(font).boundingRect(area, Qt.AlignmentFlag.AlignTop, text)
         return bool(text) and bounds.intersected(area).intersected(QRectF(rect)).contains(point)
+
+    def pos_rect(self, index, rect):
+        row = index.data(Qt.ItemDataRole.UserRole)
+        return QRectF(rect.left() + self.word_style.POS_MARGIN,
+                      rect.top() + row.top_padding, self.view.pos_badge_width, 20)
+
+    def copy_hit(self, index, point):
+        if self.word_hit(index, point):
+            return True
+        row = index.data(Qt.ItemDataRole.UserRole)
+        if row is None or row.hidden or index.column() != 3 or not index.data():
+            return False
+        rect = self.view.visualRect(index)
+        if not rect.contains(point.toPoint() if isinstance(point, QPointF) else point):
+            return False
+        document = text_document(index.data(), self.view.font(), rect.width() - 24)
+        local = QPointF(point) - QPointF(rect.left() + 12, rect.top() + row.top_padding)
+        return document.documentLayout().hitTest(local, Qt.HitTestAccuracy.ExactHit) >= 0
+
+    def pos_hit(self, index, point):
+        row = index.data(Qt.ItemDataRole.UserRole)
+        return (row is not None and not row.hidden and index.column() == 2
+                and self.pos_rect(index, self.view.visualRect(index)).contains(point))
 
     def paint(self, painter, option, index):
         row = index.data(Qt.ItemDataRole.UserRole)
@@ -229,8 +259,7 @@ class WordDelegate(QStyledItemDelegate):
                     painter.setPen(QColor("#bdc8d5"))
                 painter.drawText(area, Qt.AlignmentFlag.AlignTop, text)
             elif column == 2:
-                badge = QRectF(rect.left() + self.word_style.POS_MARGIN,
-                               rect.top() + top, self.view.pos_badge_width, 20)
+                badge = self.pos_rect(index, rect)
                 painter.setPen(QPen(QColor("#465463"), 1))
                 painter.setBrush(QColor("#293440"))
                 painter.drawRoundedRect(badge.adjusted(0.5, 0.5, -0.5, -0.5), 5, 5)
@@ -260,15 +289,18 @@ class WordDelegate(QStyledItemDelegate):
         if not self.before_edit():
             return None
         if index.column() == 2:
-            editor = PosCombo(parent)
+            editor = PosPicker(parent)
             editor.view().installEventFilter(self)
-            editor.setMinimumWidth(0)
-            editor.setMaximumWidth(16777215)
+            editor.chosen.connect(lambda: self._choose_pos(editor))
+            editor.cancelled.connect(lambda: self._cancel_pos(editor))
         elif index.column() == 3:
             editor = ExpandingTextEdit(parent)
             editor.contentHeightChanged.connect(lambda height: self._resize_text_editor(editor))
         else:
             editor = QLineEdit(parent)
+        editor.setContextMenuPolicy(Qt.ContextMenuPolicy.PreventContextMenu)
+        if isinstance(editor, QPlainTextEdit):
+            editor.viewport().setContextMenuPolicy(Qt.ContextMenuPolicy.PreventContextMenu)
         self.editor = editor
         self.edit_index = QPersistentModelIndex(index)
         self.editingChanged.emit(True)
@@ -281,16 +313,35 @@ class WordDelegate(QStyledItemDelegate):
             self.edit_index = None
             self.editingChanged.emit(False)
 
+    def _show_pos(self, editor):
+        if self.editor is editor and shiboken6.isValid(editor):
+            editor.showPopup()
+
+    def _choose_pos(self, editor):
+        if self.editor is editor and self.submit():
+            self.view.setFocus()
+
+    def _cancel_pos(self, editor):
+        if self.editor is editor:
+            self.cancel()
+            self.view.setFocus()
+
     def setEditorData(self, editor, index):
         value = index.data(Qt.ItemDataRole.EditRole) or ""
-        if isinstance(editor, PosCombo):
+        if isinstance(editor, PosPicker):
             editor.set_pos(value)
+            QTimer.singleShot(0, lambda: self._show_pos(editor))
         elif isinstance(editor, QPlainTextEdit):
             editor.setPlainText(value)
         else:
             editor.setText(value)
 
     def updateEditorGeometry(self, editor, option, index):
+        if isinstance(editor, PosPicker):
+            rect = self.pos_rect(index, option.rect).toRect()
+            editor.setGeometry(rect)
+            editor.set_anchor(QRect(self.view.viewport().mapToGlobal(rect.topLeft()), rect.size()))
+            return
         rect = option.rect.adjusted(3, 0, -3, 0)
         rect.setHeight(max(36, rect.height()))
         if rect.bottom() > self.view.viewport().height():
@@ -313,7 +364,7 @@ class WordDelegate(QStyledItemDelegate):
         pass
 
     def _value(self, editor):
-        if isinstance(editor, PosCombo):
+        if isinstance(editor, PosPicker):
             return editor.currentData() or ""
         if isinstance(editor, QPlainTextEdit):
             return editor.toPlainText()
@@ -329,8 +380,13 @@ class WordDelegate(QStyledItemDelegate):
         try:
             index = QModelIndex(self.edit_index)
             if index.isValid() and not self.view.model().setData(index, self._value(editor)):
-                QTimer.singleShot(0, editor.setFocus)
+                if isinstance(editor, PosPicker):
+                    QTimer.singleShot(0, lambda: self._show_pos(editor))
+                else:
+                    QTimer.singleShot(0, editor.setFocus)
                 return False
+            if isinstance(editor, PosPicker):
+                editor.hidePopup()
             self.editor, self.edit_index = None, None
             if index.isValid():
                 self.view.resizeRowToContents(index.row())
@@ -343,6 +399,8 @@ class WordDelegate(QStyledItemDelegate):
     def cancel(self):
         editor = self.editor
         if editor and shiboken6.isValid(editor):
+            if isinstance(editor, PosPicker):
+                editor.hidePopup()
             index = QModelIndex(self.edit_index)
             self.editor, self.edit_index = None, None
             if index.isValid():
@@ -361,7 +419,7 @@ class WordDelegate(QStyledItemDelegate):
         self.submit()
 
     def eventFilter(self, editor, event):
-        if (isinstance(self.editor, PosCombo) and editor is self.editor.view()
+        if (isinstance(self.editor, PosPicker) and editor is self.editor.view()
                 and event.type() == QEvent.Type.KeyPress
                 and event.key() in (Qt.Key.Key_Tab, Qt.Key.Key_Backtab)):
             backwards = event.key() == Qt.Key.Key_Backtab or bool(event.modifiers() & Qt.KeyboardModifier.ShiftModifier)
@@ -372,7 +430,7 @@ class WordDelegate(QStyledItemDelegate):
             if event.type() == QEvent.Type.KeyPress:
                 key = event.key()
                 if key == Qt.Key.Key_Escape:
-                    if isinstance(editor, PosCombo) and editor.view().isVisible():
+                    if isinstance(editor, PosPicker) and editor.view().isVisible():
                         return False
                     self.cancel()
                     return True
@@ -399,10 +457,12 @@ class WordDelegate(QStyledItemDelegate):
 
 class WordTable(QTableView):
     editPreparationRequested = Signal(int)
-    wordClicked = Signal(str)
+    copyRequested = Signal(str)
     revealRequested = Signal(int, bool)
     actionRequested = Signal(int, str)
     moveRequested = Signal(int, int)
+    relatedMoveRequested = Signal(int, int, int)
+    senseMoveRequested = Signal(int, int, int, int)
     shuffleRequested = Signal()
 
     def __init__(self, model, before_edit, parent=None):
@@ -414,13 +474,23 @@ class WordTable(QTableView):
         self.study_mode = False
         self.empty_text = None
         self._drag_candidate = None
+        self._related_drag = None
+        self._sense_drag = None
         self._drag_active = False
+        self._copy_press = None
+        self._pending_copy = QPersistentModelIndex()
+        self._copy_timer = QTimer(self)
+        self._copy_timer.setSingleShot(True)
+        self._copy_timer.setTimerType(Qt.TimerType.PreciseTimer)
+        self._copy_timer.timeout.connect(self._emit_pending_copy)
         self.setModel(model)
         self.delegate = WordDelegate(self, before_edit)
         self.setItemDelegate(self.delegate)
         self.setShowGrid(False)
         self.setWordWrap(True)
         self.setMouseTracking(True)
+        self.setContextMenuPolicy(Qt.ContextMenuPolicy.PreventContextMenu)
+        self.viewport().setContextMenuPolicy(Qt.ContextMenuPolicy.PreventContextMenu)
         self.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
         self.setEditTriggers(QAbstractItemView.EditTrigger.DoubleClicked)
@@ -446,13 +516,13 @@ class WordTable(QTableView):
         self.shuffle_button.setIcon(icon("shuffle"))
         self.shuffle_button.setFixedSize(30, 30)
         self.shuffle_button.setObjectName("quiet")
-        self.shuffle_button.setToolTip("随机排列当前待记单词；搜索时不可用")
+        self.shuffle_button.setToolTip("随机排列当前待记单词")
         self.shuffle_button.setAccessibleName("随机排列待记单词")
         self.shuffle_button.clicked.connect(self.shuffleRequested)
         self._layout_shuffle_button()
         header.geometriesChanged.connect(self._layout_shuffle_button)
         self._drag_animation = QVariantAnimation(self)
-        self._drag_animation.setDuration(150)
+        self._drag_animation.setDuration(ANIMATION_MS)
         self._drag_animation.setEasingCurve(QEasingCurve.Type.OutCubic)
         self._drag_animation.setStartValue(0.0)
         self._drag_animation.setEndValue(1.0)
@@ -461,6 +531,23 @@ class WordTable(QTableView):
         self._drag_scroll.setInterval(16)
         self._drag_scroll.timeout.connect(self._auto_scroll_drag)
         self.model().modelAboutToBeReset.connect(self.cancel_drag)
+        self.model().modelAboutToBeReset.connect(self._cancel_pending_copy)
+
+    def _cancel_pending_copy(self):
+        self._copy_timer.stop()
+        self._pending_copy = QPersistentModelIndex()
+        self._copy_press = None
+
+    def _emit_pending_copy(self):
+        index = self._pending_copy
+        self._pending_copy = QPersistentModelIndex()
+        if index.isValid() and self.isVisible() and self.delegate.editor is None:
+            self.copyRequested.emit(index.data())
+
+    def hideEvent(self, event):
+        self._cancel_pending_copy()
+        self.cancel_drag()
+        super().hideEvent(event)
 
     def _layout_shuffle_button(self):
         self.shuffle_button.move(4, max(0, (self.horizontalHeader().height() - 30) // 2))
@@ -471,7 +558,7 @@ class WordTable(QTableView):
         self.reorder_enabled = self.show_drag_handle and not searching
         self.search_active = searching
         self.setColumnWidth(4, 54 if self.study_mode else (154 if self.show_drag_handle else 120))
-        self.shuffle_button.setVisible(page == "pending")
+        self.shuffle_button.setVisible(page == "pending" and not searching)
         self.shuffle_button.setEnabled(not searching and count >= 2)
         self.viewport().update()
 
@@ -593,13 +680,25 @@ class WordTable(QTableView):
         else:
             self.setFocus()
 
-    def navigate_entries(self, step):
+    def can_navigate_entries(self):
+        return (self.isVisible() and self.isEnabled() and self.delegate.editor is None
+                and self.state() != QAbstractItemView.State.EditingState and not self._drag_candidate)
+
+    @property
+    def dragging(self):
+        return self._drag_candidate is not None
+
+    def navigate_entries(self, step, *, first=False):
         """One navigation entry point for table keys and surrounding controls."""
-        if (not self.isVisible() or not self.isEnabled() or self.delegate.editor is not None
-                or self.state() == QAbstractItemView.State.EditingState or self._drag_candidate):
+        if not self.can_navigate_entries():
             return False
         # Choose before focusing: Qt's default focus handling may create a current cell.
-        self._move_entry_selection(step)
+        if first:
+            if not self.model().rows:
+                return False
+            self.select_entry(self.model().rows[0].entry.id, scroll=True)
+        else:
+            self._move_entry_selection(step)
         self.setFocus(Qt.FocusReason.ShortcutFocusReason)
         return True
 
@@ -634,14 +733,61 @@ class WordTable(QTableView):
                 for i, name in enumerate(names)]
 
     def mousePressEvent(self, event):
+        self._copy_press = None
         index = self.indexAt(event.position().toPoint())
+        if event.button() == Qt.MouseButton.RightButton:
+            self._cancel_pending_copy()
+            self.cancel_drag()
+        if (event.button() in (Qt.MouseButton.LeftButton, Qt.MouseButton.RightButton)
+                and self._reveal_mask(index, event.position())):
+            event.accept()
+            return
+        if event.button() == Qt.MouseButton.RightButton:
+            if index.isValid() and not self.related_handle_hit(index, event.position().toPoint()):
+                self._edit_pointer_field(index)
+            event.accept()
+            return
         if index.isValid() and event.button() == Qt.MouseButton.LeftButton:
             row = index.data(Qt.ItemDataRole.UserRole)
             column = index.column()
+            related_hit = self.related_handle_hit(index, event.position().toPoint())
+            sense_hit = self.delegate.pos_hit(index, event.position())
             if self.delegate.editor:
                 if not self.delegate.submit():
                     event.accept()
                     return
+                if related_hit or sense_hit:
+                    self.editPreparationRequested.emit(row.entry.id)
+                    matching = next((i for i, item in enumerate(self.model().rows)
+                                     if (item.entry.id, item.owner, item.sense)
+                                     == (row.entry.id, row.owner, row.sense)), None)
+                    if matching is None:
+                        event.accept()
+                        return
+                    index = self.model().index(matching, column)
+                    row = index.data(Qt.ItemDataRole.UserRole)
+            if related_hit or sense_hit:
+                event.accept()
+                self.setCurrentIndex(index)
+                self.setFocus()
+                count = len(row.word.senses) if sense_hit else len(row.entry.related)
+                if count < 2 or not self.delegate.before_edit():
+                    return
+                # Draft handling can replace the model; never drag a different child by accident.
+                matching = next((i for i, item in enumerate(self.model().rows)
+                                 if item.entry.id == row.entry.id and item.owner == row.owner
+                                 and item.sense == row.sense and item.word == row.word), None)
+                if matching is None:
+                    return
+                self.setCurrentIndex(self.model().index(matching, column))
+                self.setFocus()
+                if sense_hit:
+                    self._sense_drag = (row.entry.id, row.owner, row.sense)
+                else:
+                    self._related_drag = (row.entry.id, row.owner)
+                self._drag_candidate = (row.entry.id, event.position().toPoint())
+                self.viewport().setCursor(Qt.CursorShape.OpenHandCursor)
+                return
             if column == 0 and row.first and not self.study_mode:
                 self.actionRequested.emit(row.entry.id, "important")
                 event.accept()
@@ -660,45 +806,68 @@ class WordTable(QTableView):
                         self.actionRequested.emit(row.entry.id, action)
                         event.accept()
                         return
-            if self.delegate.mask_hit(index, event.position()):
-                self._just_revealed = (row.entry.id, time.monotonic())
-                self.setFocus(Qt.FocusReason.MouseFocusReason)
-                self.set_entry_revealed(row.entry.id, True)
-                event.accept()
-                return
             if not row.hidden and column == 3 and event.modifiers() & Qt.KeyboardModifier.ControlModifier:
                 self.setFocus(Qt.FocusReason.MouseFocusReason)
                 self.set_entry_revealed(row.entry.id, False)
                 event.accept()
                 return
-            if self.delegate.word_hit(index, event.position()):
-                self.wordClicked.emit(row.word.text)
+            if self.delegate.copy_hit(index, event.position()):
+                self._copy_press = (QPersistentModelIndex(index), event.position().toPoint())
         super().mousePressEvent(event)
+
+    def _reveal_mask(self, index, point):
+        if not self.delegate.mask_hit(index, point):
+            return False
+        entry_id = index.data(Qt.ItemDataRole.UserRole).entry.id
+        if self.delegate.submit():
+            self._just_revealed = (entry_id, time.monotonic())
+            self.setFocus(Qt.FocusReason.MouseFocusReason)
+            self.set_entry_revealed(entry_id, True)
+        return True
+
+    def related_handle_hit(self, index, point):
+        row = index.data(Qt.ItemDataRole.UserRole)
+        if row is None or row.hidden or row.owner < 0 or row.sense != 0 or index.column() != 1:
+            return False
+        rect = self.visualRect(index)
+        # The related-word text starts at x + 26; its copy/edit area stays separate.
+        return QRect(rect.left() + 6, rect.top() + row.top_padding, 20, 20).contains(point)
 
     def _begin_drag(self, point):
         entry_id, origin = self._drag_candidate
         self._drag_groups = []
+        self._drag_static = []
         for number, row in enumerate(self.model().rows):
-            if row.first:
-                self._drag_groups.append([row.entry.id, number, number, 0])
+            if ((self._sense_drag and (row.entry.id != entry_id or row.owner != self._sense_drag[1]))
+                    or (self._related_drag and (row.entry.id != entry_id or row.owner < 0))):
+                self._drag_static.append([row.entry.id, number, number, self.rowHeight(number)])
+                continue
+            if self._sense_drag:
+                self._drag_groups.append([row.sense, number, number, self.rowHeight(number)])
+                continue
+            if (row.sense == 0 if self._related_drag else row.first):
+                self._drag_groups.append([row.owner if self._related_drag else row.entry.id, number, number, 0])
             self._drag_groups[-1][2] = number
             self._drag_groups[-1][3] += self.rowHeight(number)
-        self._drag_source = next(i for i, group in enumerate(self._drag_groups) if group[0] == entry_id)
+        source_key = (self._sense_drag[2] if self._sense_drag else
+                      (self._related_drag[1] if self._related_drag else entry_id))
+        self._drag_source = next(i for i, group in enumerate(self._drag_groups) if group[0] == source_key)
         self._drag_target = self._drag_source
         top = self.rowViewportPosition(self._drag_groups[self._drag_source][1])
         self._drag_grab_offset = origin.y() - top
         self._drag_point = point
-        offset = 0
-        self._drag_positions = {}
-        for word_id, start, end, height in self._drag_groups:
-            self._drag_positions[word_id] = float(offset)
-            offset += height
+        self._drag_base = (self.rowViewportPosition(self._drag_groups[0][1]) + self.verticalScrollBar().value()
+                           if self._related_drag or self._sense_drag else 0)
+        self._drag_positions = group_positions(self._drag_groups, self._drag_base)
         self._drag_active = True
         self.viewport().setCursor(Qt.CursorShape.ClosedHandCursor)
         self._drag_scroll.start()
         self._update_drag_target()
 
     def mouseMoveEvent(self, event):
+        if (self._copy_press and
+                (event.position().toPoint() - self._copy_press[1]).manhattanLength() >= QApplication.startDragDistance()):
+            self._copy_press = None
         if self._drag_candidate:
             point = event.position().toPoint()
             if not self._drag_active:
@@ -716,12 +885,7 @@ class WordTable(QTableView):
         # Compare the dragged group's top edge with the centres of the remaining groups.
         top = self._drag_point.y() - self._drag_grab_offset + self.verticalScrollBar().value()
         others = [group for i, group in enumerate(self._drag_groups) if i != self._drag_source]
-        target, offset = 0, 0
-        for group in others:
-            if top < offset + group[3] / 2:
-                break
-            target += 1
-            offset += group[3]
+        target = insertion_index(self._drag_groups, self._drag_source, top, self._drag_base)
         if target == self._drag_target:
             return
         self._drag_target = target
@@ -729,11 +893,7 @@ class WordTable(QTableView):
         reordered.insert(target, self._drag_groups[self._drag_source])
         self._drag_animation.stop()
         self._drag_starts = dict(self._drag_positions)
-        self._drag_ends = {}
-        offset = 0
-        for word_id, start, end, height in reordered:
-            self._drag_ends[word_id] = float(offset)
-            offset += height
+        self._drag_ends = group_positions(reordered, self._drag_base)
         self._drag_animation.start()
 
     def _animate_drag(self, progress):
@@ -747,7 +907,7 @@ class WordTable(QTableView):
         if not self._drag_active or not self.viewport().rect().contains(self._drag_point):
             return
         y, height = self._drag_point.y(), self.viewport().height()
-        delta = -max(2, (32 - y) // 2) if y < 32 else (max(2, (y - height + 32) // 2) if y > height - 32 else 0)
+        delta = edge_scroll_delta(y, height)
         if delta:
             bar = self.verticalScrollBar()
             bar.setValue(bar.value() + delta)
@@ -756,6 +916,8 @@ class WordTable(QTableView):
 
     def cancel_drag(self):
         self._drag_candidate = None
+        self._related_drag = None
+        self._sense_drag = None
         self._drag_active = False
         self._drag_scroll.stop()
         self._drag_animation.stop()
@@ -763,14 +925,35 @@ class WordTable(QTableView):
         self.viewport().update()
 
     def mouseReleaseEvent(self, event):
+        if event.button() == Qt.MouseButton.LeftButton and self._copy_press:
+            index, origin = self._copy_press
+            self._copy_press = None
+            point = event.position().toPoint()
+            if (index.isValid() and (point - origin).manhattanLength() < QApplication.startDragDistance()
+                    and self.delegate.copy_hit(QModelIndex(index), point)):
+                if self._pending_copy.isValid() and self._pending_copy != index:
+                    self._copy_timer.stop()
+                    self._emit_pending_copy()
+                self._pending_copy = index
+                self._copy_timer.start(QApplication.doubleClickInterval())
         if self._drag_candidate and event.button() == Qt.MouseButton.LeftButton:
             accepted = self._drag_active and self.viewport().rect().contains(event.position().toPoint())
             entry_id = self._drag_candidate[0]
+            related = self._related_drag
+            sense = self._sense_drag
+            if accepted and (related or sense):
+                content_y = event.position().y() + self.verticalScrollBar().value()
+                accepted = self._drag_base <= content_y < self._drag_base + sum(g[3] for g in self._drag_groups)
             target = self._drag_target if self._drag_active else None
             changed = accepted and target != self._drag_source
             self.cancel_drag()
             if changed:
-                self.moveRequested.emit(entry_id, target)
+                if sense:
+                    self.senseMoveRequested.emit(entry_id, sense[1], sense[2], target)
+                elif related:
+                    self.relatedMoveRequested.emit(entry_id, related[1], target)
+                else:
+                    self.moveRequested.emit(entry_id, target)
             event.accept()
             return
         super().mouseReleaseEvent(event)
@@ -830,14 +1013,14 @@ class WordTable(QTableView):
         self.cancel_drag()
         super().focusOutEvent(event)
 
-    def _paint_drag_group(self, painter, group, top):
+    def _paint_drag_group(self, painter, group, top, columns=range(5)):
         word_id, start, end, height = group
         selected = self.currentIndex().data(Qt.ItemDataRole.UserRole)
         for row in range(start, end + 1):
             row_height = self.rowHeight(row)
             if top + row_height >= 0 and top <= self.viewport().height():
                 item = self.model().rows[row]
-                for column in range(self.model().columnCount()):
+                for column in columns:
                     if item.hidden and column == 3:
                         continue
                     option = QStyleOptionViewItem()
@@ -845,7 +1028,7 @@ class WordTable(QTableView):
                     option.rect = QRect(self.columnViewportPosition(column), round(top),
                                         self.columnWidth(column) + (self.columnWidth(3) if item.hidden and column == 2 else 0),
                                         row_height)
-                    if selected and selected.entry.id == word_id:
+                    if selected and selected.entry.id == item.entry.id:
                         option.state |= QStyle.StateFlag.State_Selected
                     self.delegate.paint(painter, option, self.model().index(row, column))
             top += row_height
@@ -854,18 +1037,33 @@ class WordTable(QTableView):
         painter = QPainter(self.viewport())
         painter.fillRect(self.viewport().rect(), QColor(WordGroupStyle.BACKGROUND))
         scroll = self.verticalScrollBar().value()
+        for group in self._drag_static:
+            self._paint_drag_group(painter, group, self.rowViewportPosition(group[1]))
+        columns = (2, 3) if self._sense_drag else range(self.model().columnCount())
+        if self._sense_drag:
+            for group in self._drag_groups:
+                self._paint_drag_group(painter, group, self.rowViewportPosition(group[1]), (0, 1, 4))
         for i, group in enumerate(self._drag_groups):
             if i != self._drag_source:
-                self._paint_drag_group(painter, group, self._drag_positions[group[0]] - scroll)
+                self._paint_drag_group(painter, group, self._drag_positions[group[0]] - scroll, columns)
         source = self._drag_groups[self._drag_source]
         top = self._drag_point.y() - self._drag_grab_offset
-        self._paint_drag_group(painter, source, top)
-        painter.setPen(QPen(QColor(ACCENT), 1.5))
-        painter.drawRect(QRectF(1, top + 1, self.viewport().width() - 2, source[3] - 2))
+        if self._related_drag or self._sense_drag:
+            base = self._drag_base - scroll
+            top = max(base, min(top, base + sum(g[3] for g in self._drag_groups) - source[3]))
+        self._paint_drag_group(painter, source, top, columns)
 
     def mouseDoubleClickEvent(self, event):
+        self._cancel_pending_copy()
+        self.cancel_drag()
+        if event.button() != Qt.MouseButton.LeftButton:
+            event.accept()
+            return
         index = self.indexAt(event.position().toPoint())
         if index.isValid():
+            if self.related_handle_hit(index, event.position().toPoint()):
+                event.accept()
+                return
             row = index.data(Qt.ItemDataRole.UserRole)
             if row.entry.id == self._just_revealed[0] and time.monotonic() - self._just_revealed[1] < 0.5:
                 event.accept()
@@ -874,22 +1072,30 @@ class WordTable(QTableView):
                 event.accept()
                 return
             if self.model().flags(index) & Qt.ItemFlag.ItemIsEditable:
-                target = (row.entry.id, row.owner, row.sense, index.column())
-                if not self.delegate.before_edit():
-                    event.accept()
-                    return
-                # Saving the bottom draft may have rebuilt/reordered the projection.
-                matching = next((i for i, item in enumerate(self.model().rows)
-                                 if (item.entry.id, item.owner, item.sense) == target[:3]), None)
-                if matching is None:
-                    event.accept()
-                    return
-                index = self.model().index(matching, target[3])
-                self.setCurrentIndex(index)
-                self.edit(index)
+                self._edit_pointer_field(index)
                 event.accept()
                 return
         super().mouseDoubleClickEvent(event)
+
+    def _edit_pointer_field(self, index):
+        """Right-click and double-click share validation and logical field lookup."""
+        if not self.model().flags(index) & Qt.ItemFlag.ItemIsEditable:
+            return
+        row = index.data(Qt.ItemDataRole.UserRole)
+        target = (row.entry.id, row.owner, row.sense, index.column())
+        if self.delegate.editor is not None and not self.delegate.submit():
+            return
+        if not self.delegate.before_edit():
+            return
+        matching = next((i for i, item in enumerate(self.model().rows)
+                         if (item.entry.id, item.owner, item.sense) == target[:3]), None)
+        if matching is None:
+            return
+        index = self.model().index(matching, target[3])
+        self.setCurrentIndex(index)
+        self.edit(index)
+        if isinstance(self.delegate.editor, PosPicker):
+            self.delegate.editor.showPopup()
 
     def viewportEvent(self, event):
         if event.type() == QEvent.Type.ToolTip:
@@ -898,7 +1104,9 @@ class WordTable(QTableView):
             if index.isValid():
                 row = index.data(Qt.ItemDataRole.UserRole)
                 text = ""
-                if index.column() == 4 and row.first:
+                if self.related_handle_hit(index, event.pos()):
+                    text = "按住拖动调整顺序"
+                elif index.column() == 4 and row.first:
                     labels = {"learned": "恢复待记" if row.entry.learned else "标记已记下",
                               "study": "记下（回车）",
                               "edit": "编辑整组", "trash": "删除单词",

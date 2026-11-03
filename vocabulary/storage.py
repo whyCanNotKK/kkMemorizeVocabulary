@@ -32,8 +32,17 @@ class Repository:
         self.max_pending_sort_order = maxima.get(0, 0)
         self.max_learned_sort_order = maxima.get(1, 0)
         with self.connection:
-            self.connection.executemany("INSERT OR IGNORE INTO settings(key,value) VALUES (?,?)",
-                                        DEFAULT_SHORTCUTS.items())
+            configured = self.shortcuts()
+            used = set(configured.values())
+            for action, default in DEFAULT_SHORTCUTS.items():
+                if action in configured:
+                    continue
+                # Adding a new default must not collide with an older user's custom chord.
+                candidates = [default, f"Ctrl+Shift+{default.split('+')[-1]}"]
+                candidates.extend(f"Ctrl+Alt+Shift+F{number}" for number in range(1, 25))
+                value = next(candidate for candidate in candidates if candidate not in used)
+                self.connection.execute("INSERT INTO settings(key,value) VALUES (?,?)", (action, value))
+                used.add(value)
 
     def close(self):
         self.connection.close()
@@ -72,11 +81,50 @@ class Repository:
         return [self.get(row[0]) for row in self.connection.execute(
             "SELECT id FROM words ORDER BY learned,sort_order,id")]
 
+    def move_related(self, entry_id: int, source: int, target: int):
+        with self.connection:
+            self.connection.execute("BEGIN IMMEDIATE")
+            ids = [row[0] for row in self.connection.execute(
+                "SELECT id FROM related_words WHERE word_id=? ORDER BY position,id", (entry_id,))]
+            if (type(source) is not int or type(target) is not int
+                    or not 0 <= source < len(ids) or not 0 <= target < len(ids)):
+                raise ValueError("关联词排序位置已失效，请重试。")
+            if source == target:
+                return
+            ids.insert(target, ids.pop(source))
+            self.connection.executemany("UPDATE related_words SET position=? WHERE id=? AND word_id=?",
+                                        [(position, child_id, entry_id) for position, child_id in enumerate(ids)])
+
     def save(self, draft: WordEntry) -> WordEntry:
         entry = clean_entry(draft)
         with self._transaction() as counters:
             self._save_entry(entry, counters)
         return self.get(entry.id)
+
+    def move_sense(self, entry_id: int, owner: int, source: int, target: int):
+        """Reorder definitions of one word without rewriting content or study state."""
+        with self.connection:
+            self.connection.execute("BEGIN IMMEDIATE")
+            if type(owner) is not int or owner < -1:
+                raise ValueError("释义所属单词已失效，请重试。")
+            column, owner_id = "word_id", entry_id
+            if owner >= 0:
+                child = self.connection.execute(
+                    "SELECT id FROM related_words WHERE word_id=? ORDER BY position,id LIMIT 1 OFFSET ?",
+                    (entry_id, owner)).fetchone()
+                if child is None:
+                    raise ValueError("释义所属单词已失效，请重试。")
+                column, owner_id = "related_id", child[0]
+            ids = [row[0] for row in self.connection.execute(
+                f"SELECT id FROM senses WHERE {column}=? ORDER BY position,id", (owner_id,))]
+            if (type(source) is not int or type(target) is not int
+                    or not 0 <= source < len(ids) or not 0 <= target < len(ids)):
+                raise ValueError("释义排序位置已失效，请重试。")
+            if source == target:
+                return
+            ids.insert(target, ids.pop(source))
+            self.connection.executemany(f"UPDATE senses SET position=? WHERE id=? AND {column}=?",
+                                        [(position, sense_id, owner_id) for position, sense_id in enumerate(ids)])
 
     def _save_entry(self, entry: WordEntry, counters, forced_id=None):
         """Write within the caller's transaction; ordinary edits keep learned state."""
@@ -267,14 +315,23 @@ class Repository:
                                             (key, context.day.isoformat()))
         return self.study_tasks(context)
 
+    @staticmethod
+    def _study_due_clause():
+        wait = 'CASE stage ' + ' '.join(f'WHEN {stage} THEN {gap}' for stage, gap in STAGE_GAPS.items()) + ' END'
+        return f"stage<>0 AND (stage=1 OR julianday(?)-julianday(last_completed_on)>={wait})"
+
     def study_tasks(self, context: StudyContext) -> list[StudyTask]:
         flag = "afternoon_done" if context.afternoon else "morning_done"
-        wait = 'CASE stage ' + ' '.join(f'WHEN {stage} THEN {gap}' for stage, gap in STAGE_GAPS.items()) + ' END'
         rows = self.connection.execute(f"""SELECT word_id,group_number FROM memorize_vocabulary_17day
-            WHERE stage<>0 AND {flag}=0 AND
-                  (stage=1 OR julianday(?)-julianday(last_completed_on)>={wait})
+            WHERE {flag}=0 AND ({self._study_due_clause()})
             ORDER BY group_number,word_id""", (context.day.isoformat(),)).fetchall()
         return [StudyTask(self.get(row["word_id"]), row["group_number"]) for row in rows]
+
+    def study_task_total(self, context: StudyContext) -> int:
+        # Completing both periods advances stage and clears flags; retain those words in today's total.
+        day = context.day.isoformat()
+        return self.connection.execute(f"""SELECT COUNT(*) FROM memorize_vocabulary_17day
+            WHERE ({self._study_due_clause()}) OR last_completed_on=?""", (day, day)).fetchone()[0]
 
     def has_study_progress(self) -> bool:
         return self.connection.execute('SELECT 1 FROM memorize_vocabulary_17day LIMIT 1').fetchone() is not None

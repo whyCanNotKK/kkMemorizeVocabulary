@@ -103,6 +103,10 @@ def draw_symbol(p: QPainter, name: str, rect: QRectF, color: str):
         p.drawPolygon(QPolygonF(points))
     elif name == "circle":
         p.drawEllipse(QRectF(-8, -8, 16, 16))
+    elif name == "plus_circle":
+        p.drawEllipse(QRectF(-9, -9, 18, 18))
+        p.drawLine(QPointF(-4, 0), QPointF(4, 0))
+        p.drawLine(QPointF(0, -4), QPointF(0, 4))
     elif name == "minus":
         p.setPen(QPen(QColor(color), 3.0, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap))
         p.drawLine(QPointF(-7, 0), QPointF(7, 0))
@@ -168,13 +172,20 @@ def draw_symbol(p: QPainter, name: str, rect: QRectF, color: str):
 
 
 @lru_cache(maxsize=64)
-def icon(name: str, color: str = MUTED) -> QIcon:
+def icon(name: str, color: str = MUTED, disabled_color: str | None = None) -> QIcon:
     wide = name in {"chevron_down", "chevron_up"}
-    pixmap = QPixmap(80 if wide else 48, 48)
-    pixmap.fill(Qt.GlobalColor.transparent)
-    p = QPainter(pixmap)
-    draw_symbol(p, name, QRectF(4, -12, 72, 72) if wide else QRectF(4, 4, 40, 40), color)
-    p.end()
-    pixmap.setDevicePixelRatio(2)
-    return QIcon(pixmap)
+
+    def render(ink):
+        pixmap = QPixmap(80 if wide else 48, 48)
+        pixmap.fill(Qt.GlobalColor.transparent)
+        p = QPainter(pixmap)
+        draw_symbol(p, name, QRectF(4, -12, 72, 72) if wide else QRectF(4, 4, 40, 40), ink)
+        p.end()
+        pixmap.setDevicePixelRatio(2)
+        return pixmap
+
+    result = QIcon(render(color))
+    if disabled_color is not None:
+        result.addPixmap(render(disabled_color), QIcon.Mode.Disabled)
+    return result
 

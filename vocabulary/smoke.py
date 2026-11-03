@@ -40,11 +40,11 @@ def run_smoke(app, window, directory: Path):
         assert block.word.height() == row.pos.height() == row.translation.height()
         assert row.pos.width() < 120
         assert row.translation.verticalScrollBar().maximum() == 0
-        assert block.add_button.text().startswith("增加释义")
-        assert block.remove_button.text().startswith("删除释义")
+        assert row.add_button.icon().isNull() is False and not row.add_button.text()
+        assert row.remove_button.isVisible() and not row.remove_button.isEnabled()
         assert not window.toast.isVisible()
         initial_editor_height = window.editor_panel.height()
-        assert 180 <= initial_editor_height < 250
+        assert 140 <= initial_editor_height < 220
         assert window.form_scroll.verticalScrollBar().maximum() == 0
         report["checks"].append("compact_inputs_and_no_status_footer")
         repo = window.repository
@@ -88,6 +88,7 @@ def run_smoke(app, window, directory: Path):
             window.shortcuts.update(dict(window.shortcuts.values, add_related="Alt+N"))
             assert repo.shortcuts()["add_related"] == "Alt+N"
             report["checks"].append("shortcut_database_and_runtime_match")
+        window.set_global_hidden(True)
         QTest.mouseClick(window.global_hide_button, Qt.MouseButton.LeftButton)
         assert not any(row.hidden for row in window.model.rows)
         QTest.mouseClick(window.global_hide_button, Qt.MouseButton.LeftButton)
@@ -105,6 +106,26 @@ def run_smoke(app, window, directory: Path):
         QTest.qWait(60)
         window.grab().save(str(directory / "main-expanded.png"))
         assert window.model.rowCount() == 3
+        index = window.model.index(0, 2)
+        QTest.mouseDClick(window.table.viewport(), Qt.MouseButton.LeftButton,
+                         pos=window.table.visualRect(index).center())
+        editor = window.table.delegate.editor
+        QTest.qWait(20)
+        editor.view().window().grab().save(str(directory / "pos-popup.png"))
+        assert editor.view().verticalScrollBar().maximum() == 0
+        for number in range(editor.count()):
+            assert editor.view().viewport().rect().contains(editor.view().visualItemRect(editor.view().item(number)))
+        center = window.table.viewport().mapToGlobal(window.table.visualRect(index).center()).x()
+        assert abs(editor.popup.geometry().center().x() - center) <= 1
+        assert window.table.columnWidth(2) == window.table.pos_badge_width + 10
+        report["pos_editor_geometry"] = {"column_width": window.table.columnWidth(2),
+                                         "original_badge_column_width": window.table.pos_badge_width + 10,
+                                         "popup_width": editor.popup.width(), "popup_height": editor.popup.height()}
+        window.grab().save(str(directory / "pos-popup-centered.png"))
+        QTest.keyClick(editor.view(), Qt.Key.Key_N)
+        assert window.table.delegate.editor is None
+        QTest.qWait(20)
+        report["checks"].append("centered_full_pos_popup_and_immediate_save")
         index = window.model.index(0, 3)
         QTest.mouseClick(window.table.viewport(), Qt.MouseButton.LeftButton,
                          Qt.KeyboardModifier.ControlModifier, window.table.visualRect(index).center())
@@ -125,9 +146,9 @@ def run_smoke(app, window, directory: Path):
                                      "focused": target.hasFocus()}
         assert top >= 0 and top + target.height() <= window.form_scroll.viewport().height()
         window.grab().save(str(directory / "form-editing.png"))
-        assert "Ctrl+J" in child.add_button.text()
-        assert "Ctrl+J" not in window.blocks[0].add_button.text()
-        report["checks"].append("focus_scoped_hints")
+        assert "Ctrl+J" in child.rows[0].add_button.toolTip()
+        assert not child.rows[0].add_button.text()
+        report["checks"].append("definition_icon_hints")
         window.reset_form()
         window.shortcuts.set_suspended(True)
         dialog = SettingsDialog(window.shortcuts, window)
@@ -182,6 +203,9 @@ def run_smoke(app, window, directory: Path):
         imported = read_entries(directory / "all-words.json")
         assert serialize_entries(imported) == serialize_entries(entries)
         result = repo.import_entries(imported)
+        assert result.inserted == 0 and not result.conflicts
+        from dataclasses import replace
+        result = repo.import_entries([replace(entry, important=not entry.important) for entry in imported])
         assert result.inserted == 0 and len(result.conflicts) == len(entries)
         comparison = ImportConflictDialog(repo, result, window)
         comparison.show()
@@ -192,8 +216,8 @@ def run_smoke(app, window, directory: Path):
         adopted = next(entry for entry in repo.list_entries()
                        if entry.text.casefold() == entries[0].text.casefold())
         assert adopted.id != entries[0].id
-        from dataclasses import replace
-        assert replace(adopted, id=entries[0].id, sort_order=entries[0].sort_order) == entries[0]
+        assert replace(adopted, id=entries[0].id, sort_order=entries[0].sort_order) == replace(
+            entries[0], important=not entries[0].important)
         comparison.close()
         report["checks"].append("json_roundtrip_and_immediate_card_import")
         report["ok"] = True

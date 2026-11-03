@@ -1,3 +1,4 @@
+from copy import deepcopy
 from dataclasses import dataclass, field
 
 
@@ -10,11 +11,13 @@ DEFAULT_SHORTCUTS = {
     "add_related": "Ctrl+N", "remove_related": "Ctrl+M",
     "add_sense": "Ctrl+J", "remove_sense": "Ctrl+K",
     "save": "Ctrl+Return", "important": "Ctrl+I",
+    "toggle_visibility": "Ctrl+E",
 }
 SHORTCUT_LABELS = {
-    "add_related": "新增关联词", "remove_related": "移除最后一个关联词",
-    "add_sense": "新增当前词的释义", "remove_sense": "移除当前词的末项释义",
-    "save": "保存词条", "important": "切换录入主词的重点状态",
+    "add_related": "新增关联词", "remove_related": "删除关联词",
+    "add_sense": "新增释义", "remove_sense": "删除释义",
+    "save": "保存单词", "important": "设置单词‘重点/非重点’",
+    "toggle_visibility": "显示/隐藏 所有释义",
 }
 
 
@@ -55,6 +58,20 @@ class DuplicateWord(ValidationError):
     def __init__(self, entry_id: int):
         self.entry_id = entry_id
         super().__init__("这个主词已经存在，当前输入已保留。")
+
+
+def merge_entry_draft(baseline: WordEntry, draft: WordEntry, current: WordEntry) -> WordEntry:
+    """Preserve independent saved changes; reject competing edits to the same part."""
+    merged = deepcopy(current)
+    for name, label in (("text", "主词名"), ("senses", "主词释义"),
+                        ("related", "关联词"), ("important", "重点")):
+        before, edited, latest = (getattr(entry, name) for entry in (baseline, draft, current))
+        if edited == before:
+            continue
+        if latest != before and latest != edited:
+            raise ValidationError(f"{label}已在列表中修改，当前草稿已保留，请核对后再保存。")
+        setattr(merged, name, deepcopy(edited))
+    return merged
 
 
 def clean_senses(senses: list[Sense], label: str) -> list[Sense]:

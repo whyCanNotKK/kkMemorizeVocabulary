@@ -5,13 +5,16 @@ from pathlib import Path
 import shiboken6
 from PySide6.QtCore import QPoint, QSize, Qt, QTimer
 from PySide6.QtWidgets import (
-    QApplication, QDialogButtonBox, QFileDialog, QFrame, QGridLayout, QHBoxLayout, QLabel, QLineEdit, QMainWindow, QMessageBox,
+    QApplication, QDialog, QDialogButtonBox, QFileDialog, QFrame, QGridLayout, QHBoxLayout, QLabel, QLineEdit, QMainWindow, QMessageBox,
     QPlainTextEdit, QScrollArea, QVBoxLayout, QWidget,
 )
 
-from .domain import DuplicateWord, ValidationError, WordEntry
+from .domain import SHORTCUT_LABELS, DuplicateWord, ValidationError, WordEntry, merge_entry_draft
 from .busy_overlay import BusyOverlay
+from .draft_reset_dialog import DraftResetDialog
 from .import_dialog import ImportConflictDialog
+from .input_focus import InputFocusPolicy
+from .form_reorder import FormReorderDrag
 from .shortcuts import SettingsDialog, ShortcutManager
 from .table import WordTable, WordTableModel
 from .review_navigation import ReviewKeyRouter
@@ -37,6 +40,7 @@ class MainWindow(QMainWindow):
         self.edit_id = None
         self.active_block = None
         self._last_form_focus = None
+        self._related_focus_target = None
         self.blocks = []
         self.duplicate_id = None
         self._closing = False
@@ -46,6 +50,7 @@ class MainWindow(QMainWindow):
         self.setWindowIcon(icon("book", ACCENT))
         self.resize(1040, 820)
         self.setMinimumSize(860, 640)
+        self.input_focus = InputFocusPolicy(self)
         root = QWidget()
         self.setCentralWidget(root)
         layout = QVBoxLayout(root)
@@ -86,7 +91,6 @@ class MainWindow(QMainWindow):
         self.global_hide_button.setAccessibleName("全局隐藏：开")
         self.global_hide_button.setCheckable(True)
         self.global_hide_button.setChecked(True)
-        self.global_hide_button.setToolTip("显示所有词条的词性、翻译和关联词")
         self.global_hide_button.clicked.connect(lambda: self.set_global_hidden())
         filters.addWidget(self.global_hide_button)
         self.import_button = button("")
@@ -104,10 +108,12 @@ class MainWindow(QMainWindow):
 
         self.model = WordTableModel(self.commit_cell, self)
         self.table = WordTable(self.model, self.before_inline)
-        self.table.wordClicked.connect(self.copy_word)
+        self.table.copyRequested.connect(self.copy_text)
         self.table.revealRequested.connect(self.reveal)
         self.table.actionRequested.connect(self.list_action)
         self.table.moveRequested.connect(self.move_word)
+        self.table.relatedMoveRequested.connect(self.move_related_word)
+        self.table.senseMoveRequested.connect(self.move_word_sense)
         self.table.shuffleRequested.connect(self.shuffle_words)
         self.table.delegate.editingChanged.connect(self.inline_changed)
         self.table.editPreparationRequested.connect(self.prepare_list_edit)
@@ -115,13 +121,16 @@ class MainWindow(QMainWindow):
         self.study_page = StudyPage(repository, self.commit_cell)
         self.study_page.table.delegate.editingChanged.connect(self.inline_changed)
         self.study_page.table.editPreparationRequested.connect(self.prepare_list_edit)
-        self.study_page.table.wordClicked.connect(self.copy_word)
+        self.study_page.table.copyRequested.connect(self.copy_text)
+        self.study_page.table.relatedMoveRequested.connect(self.move_related_word)
+        self.study_page.table.senseMoveRequested.connect(self.move_word_sense)
         self.study_page.error.connect(lambda text: self.show_notice(text, True))
         self.study_page.hide()
         list_layout.addWidget(self.study_page, 1)
         layout.addWidget(list_panel, 1)
         self.review_keys = ReviewKeyRouter(
-            list_panel, lambda: self.study_page.table if self.filter_name == "study17" else self.table)
+            list_panel, lambda: self.study_page.table if self.filter_name == "study17" else self.table,
+            self.search_box)
 
         editor_panel = QFrame()
         self.editor_panel = editor_panel
@@ -179,9 +188,10 @@ class MainWindow(QMainWindow):
         editor_layout.addWidget(self.form_scroll, 1)
 
         self.add_related_button = button("新增关联词", quiet=True)
+        self.add_related_button.hide()
         self.add_related_button.clicked.connect(self.add_related)
-        self.remove_related_button = button("移除末项关联词", quiet=True)
-        self.remove_related_button.clicked.connect(self.remove_last_related)
+        self.remove_related_button = button("删除关联词", quiet=True)
+        self.remove_related_button.clicked.connect(self.remove_focused_related)
         footer = QHBoxLayout()
         footer.addWidget(self.add_related_button)
         footer.addWidget(self.remove_related_button)
@@ -193,7 +203,7 @@ class MainWindow(QMainWindow):
         self.star_button.setCheckable(True)
         self.star_button.setChecked(True)
         self.star_button.setFixedSize(38, 36)
-        self.star_button.setAccessibleName("切换当前主词是否重点")
+        self.star_button.setAccessibleName(SHORTCUT_LABELS["important"])
         self.star_button.toggled.connect(self.star_changed)
         self.save_button = button("保存")
         self.save_button.setObjectName("primary")
@@ -211,23 +221,35 @@ class MainWindow(QMainWindow):
 
         form_actions = {
             "add_related": self.add_related,
-            "remove_related": self.remove_last_related,
+            "remove_related": self.remove_focused_related,
             "add_sense": self.add_sense,
             "remove_sense": self.remove_sense,
             "save": self.save_current,
             "important": self.toggle_form_star,
         }
-        self.shortcuts = ShortcutManager(repository, self, {
+        callbacks = {
             name: lambda action=action: self.run_form_action(action) for name, action in form_actions.items()
-        })
+        }
+        callbacks["toggle_visibility"] = self.set_global_hidden
+        fixed = {}
+        for number, key in enumerate(self.filter_buttons, 1):
+            action = f"tab_{key}"
+            fixed[action] = (f"Alt+{number}", f"Ctrl+{number}")
+            callbacks[action] = lambda key=key: self.set_filter(key)
+            self.filter_buttons[key].setToolTip(" / ".join(fixed[action]))
+        self.shortcuts = ShortcutManager(repository, self, callbacks, fixed=fixed)
         self.shortcuts.changed.connect(self.refresh_shortcut_labels)
+        self.form_drag = FormReorderDrag(self.form_scroll, lambda: self.blocks, self._can_change_form)
+        self.form_drag.relatedMoved.connect(self.move_form_related)
+        self.form_drag.senseMoved.connect(lambda block, source, target: block.move_sense(source, target))
+        self.form_drag.activeChanged.connect(self.form_drag_changed)
         self.reset_form()
         self.refresh()
         QApplication.instance().focusChanged.connect(self.focus_changed)
         QTimer.singleShot(0, self.blocks[0].word.setFocus)
         self.busy_overlay = BusyOverlay(self)
 
-    def copy_word(self, text):
+    def copy_text(self, text):
         QApplication.clipboard().setText(text)
         self.toast.show_message(f"已复制：{text}")
 
@@ -259,7 +281,7 @@ class MainWindow(QMainWindow):
         self.update_editor_height()
         self.collapse_button.setChecked(collapsed)
         self.collapse_button.setIcon(icon("chevron_up" if collapsed else "chevron_down"))
-        label = "展开添加单词区域" if collapsed else "收起添加单词区域"
+        label = f"{'展开' if collapsed else '收起'}{self.form_title.text()}区域"
         self.collapse_button.setToolTip(label)
         self.collapse_button.setAccessibleName(label)
         if not collapsed and self._collapsed_focus and shiboken6.isValid(self._collapsed_focus):
@@ -373,6 +395,35 @@ class MainWindow(QMainWindow):
             self.show_notice(str(error), True)
         self.refresh()
 
+    def move_related_word(self, entry_id, source, target):
+        try:
+            self.repository.move_related(entry_id, source, target)
+        except Exception as error:
+            self.show_notice(str(error), True)
+        self.refresh_after_inline()
+
+    def move_form_related(self, source, target):
+        self.blocks.insert(target + 1, self.blocks.pop(source + 1))
+        for index, block in enumerate(self.blocks):
+            self.form_layout.removeWidget(block)
+            self.form_layout.insertWidget(index, block)
+        self.update_tab_order()
+        self.form_changed()
+
+    def move_word_sense(self, entry_id, owner, source, target):
+        try:
+            self.repository.move_sense(entry_id, owner, source, target)
+        except Exception as error:
+            self.show_notice(str(error), True)
+        self.refresh_after_inline()
+
+    def form_drag_changed(self, active):
+        if active:
+            self._shortcuts_before_form_drag = self.shortcuts.suspended
+            self.shortcuts.set_suspended(True)
+        else:
+            self.shortcuts.set_suspended(self._shortcuts_before_form_drag)
+
     def shuffle_words(self):
         if self.filter_name != "pending" or self.search_box.text().strip():
             return
@@ -442,21 +493,23 @@ class MainWindow(QMainWindow):
         self.global_hide_button.setChecked(self.global_hidden)
         self.global_hide_button.setAccessibleName(f"全局隐藏：{'开' if self.global_hidden else '关'}")
         self.global_hide_button.setToolTip(
-            f"{'隐藏' if self.next_global_hidden() else '显示'}当前标签页所有词条的词性、翻译和关联词")
+            f"显示/隐藏 所有释义 · {self.shortcuts.labels()['toggle_visibility']}")
 
-    def add_block(self, text="", senses=None, related=False):
+    def add_block(self, text="", senses=None, related=False, *, position=None):
         block = WordBlock(text, senses, related)
-        block.removeRequested.connect(self.remove_related)
         block.changed.connect(self.form_changed)
         block.structureChanged.connect(self.update_tab_order)
         block.heightChanged.connect(self.schedule_editor_resize)
         block.cursorMoved.connect(self.ensure_current_input_visible)
-        self.form_layout.addWidget(block)
-        self.blocks.append(block)
+        position = len(self.blocks) if position is None else position
+        self.form_layout.insertWidget(position, block)
+        self.blocks.insert(position, block)
         self.update_related_actions()
         return block
 
     def reset_form(self, entry=None):
+        self.form_drag.cancel()
+        self._related_focus_target = None
         if entry is not None:
             self.set_form_collapsed(False)
         self.active_block = None
@@ -466,6 +519,10 @@ class MainWindow(QMainWindow):
             block.deleteLater()
         self.blocks = []
         self.edit_id = entry.id if entry else None
+        self.form_title.setText("编辑单词" if self.edit_id is not None else "添加单词")
+        label = f"{'展开' if self.form_collapsed else '收起'}{self.form_title.text()}区域"
+        self.collapse_button.setToolTip(label)
+        self.collapse_button.setAccessibleName(label)
         entry = entry or WordEntry()
         self.add_block(entry.text, entry.senses)
         for child in entry.related:
@@ -478,9 +535,15 @@ class MainWindow(QMainWindow):
         self.update_tab_order()
 
     def update_related_actions(self):
-        has_related = len(self.blocks) > 1
-        self.remove_related_button.setEnabled(has_related)
-        self.remove_related_button.setVisible(has_related)
+        owner = QApplication.focusWidget()
+        while owner is not None and owner is not self.editor_panel:
+            owner = owner.parentWidget()
+        form_focused = owner is self.editor_panel
+        self.add_related_button.setVisible(form_focused)
+        target = self.related_action_block()
+        can_remove = form_focused and target in self.blocks[1:]
+        self.remove_related_button.setEnabled(can_remove)
+        self.remove_related_button.setVisible(can_remove)
 
     def form_value(self):
         if not self.blocks:
@@ -496,6 +559,8 @@ class MainWindow(QMainWindow):
         if not self.blocks:
             return
         dirty = self.is_dirty()
+        self.cancel_button.setText("取消" if self.edit_id is not None else "清空")
+        self.cancel_button.setAccessibleName("取消当前编辑" if self.edit_id is not None else "清空当前输入")
         self.cancel_button.setVisible(bool(self.edit_id or dirty))
 
     def star_changed(self):
@@ -534,9 +599,17 @@ class MainWindow(QMainWindow):
         target = next((block for block in self.blocks if new is block or
                        (new is not None and block.isAncestorOf(new))), None)
         self.active_block = target
+        owner = new
+        while owner is not None and owner is not self.editor_panel:
+            owner = owner.parentWidget()
+        if target is not None:
+            self._related_focus_target = target
+        elif owner is not self.editor_panel:
+            self._related_focus_target = None
         keys = self.shortcuts.labels()
+        self.update_related_actions()
         for block in self.blocks:
-            block.set_active(block is target, keys)
+            block.set_shortcuts(keys)
         if target:
             self._last_form_focus = new
             self.form_scroll.ensureWidgetVisible(new, 10, 12)
@@ -571,39 +644,58 @@ class MainWindow(QMainWindow):
 
     def refresh_shortcut_labels(self):
         keys = self.shortcuts.labels()
-        self.add_related_button.setText(f"新增关联词  {keys['add_related']}")
-        self.remove_related_button.setText(f"移除末项关联词  {keys['remove_related']}")
+        self.update_visibility_button()
+        for control, key in ((self.add_related_button, "add_related"),
+                             (self.remove_related_button, "remove_related")):
+            label = SHORTCUT_LABELS[key]
+            control.setText(f"{label}  {keys[key]}")
+            control.setToolTip(f"{label} · {keys[key]}")
+            control.setAccessibleName(label)
         self.save_button.setText(f"{'保存修改' if self.edit_id else '保存'}  {keys['save']}")
         for block in self.blocks:
-            block.set_active(block is self.active_block, keys)
+            block.set_shortcuts(keys)
         self.star_changed()
 
     def _can_change_form(self):
         if self.filter_name == 'study17':
             return False
         if self.table.delegate.editor:
-            self.show_notice("请先保存或取消列表中的编辑。", True)
-            return False
+            if not self.table.delegate.submit():
+                return False
         self.set_form_collapsed(False)
         return True
 
     def add_related(self):
+        target = self.related_action_block()
         if not self._can_change_form():
             return
-        block = self.add_block(related=True)
+        position = self.blocks.index(target) + 1 if target in self.blocks else 1
+        block = self.add_block(related=True, position=position)
         self.form_changed()
         self.update_tab_order()
-        QTimer.singleShot(0, block.word.setFocus)
+        QTimer.singleShot(0, lambda: self.restore_input_focus(block.word))
 
-    def remove_last_related(self):
-        if len(self.blocks) > 1 and self._can_change_form():
-            self.remove_related(self.blocks[-1])
+    def related_action_block(self):
+        target = self.focused_block()
+        if target is not None:
+            return target
+        # Clicking a footer action moves focus away from its input before clicked is emitted.
+        if QApplication.focusWidget() in (self.add_related_button, self.remove_related_button):
+            return self._related_focus_target if self._related_focus_target in self.blocks else None
+        return None
+
+    def remove_focused_related(self):
+        target = self.related_action_block()
+        if target in self.blocks[1:] and self._can_change_form():
+            self.remove_related(target)
 
     def remove_related(self, block):
         if block not in self.blocks[1:]:
             return
-        if block.has_content() and not confirm_remove(self, "移除这个关联词及其全部释义？"):
+        if block.has_content() and not confirm_remove(self, "删除当前关联词及其全部释义？"):
+            self.restore_input_focus(block.word)
             return
+        position = self.blocks.index(block)
         self.blocks.remove(block)
         if self.active_block is block:
             self.active_block = None
@@ -613,27 +705,37 @@ class MainWindow(QMainWindow):
         self.update_related_actions()
         self.form_changed()
         self.update_tab_order()
-        self.blocks[-1].word.setFocus()
+        self.restore_input_focus(self.blocks[min(position, len(self.blocks) - 1)].word)
 
     def add_sense(self):
         block = self.focused_block()
         if block and self._can_change_form():
-            block.add_sense()
+            block.add_sense(after=block.focused_row())
 
     def remove_sense(self):
         block = self.focused_block()
-        if block and self._can_change_form():
-            block.remove_last_sense()
+        row = block.focused_row() if block else None
+        if row is not None and self._can_change_form():
+            block.remove_sense(row)
 
     def focused_block(self):
         focus = QApplication.focusWidget()
-        return next((block for block in self.blocks if focus is block
-                     or (focus is not None and block.isAncestorOf(focus))), None)
+        # Combo popups are separate windows but retain their owning input as a parent.
+        while focus is not None:
+            if focus in self.blocks:
+                return focus
+            focus = focus.parentWidget()
+        return None
 
     def _save_form(self):
+        if not self.current_table().delegate.submit():
+            return False
         is_new = self.edit_id is None
         try:
-            saved = self.repository.save(self.form_value())
+            draft = self.form_value()
+            if not is_new:
+                draft = merge_entry_draft(self._baseline, draft, self.repository.get(self.edit_id))
+            saved = self.repository.save(draft)
         except DuplicateWord as error:
             self.duplicate_id = error.entry_id
             self.show_notice(str(error), True, duplicate=True)
@@ -693,15 +795,18 @@ class MainWindow(QMainWindow):
         return False
 
     def cancel_form(self):
-        if self.resolve_dirty():
+        if self.edit_id is None and not self.is_dirty():
+            return
+        prompt = "取消当前编辑？" if self.edit_id is not None else "清空当前输入？"
+        dialog = DraftResetDialog(self.cancel_button, prompt, self)
+        if dialog.exec() == QDialog.DialogCode.Accepted:
             self.reset_form()
-            self.blocks[0].word.setFocus()
+            QTimer.singleShot(0, lambda: self.restore_input_focus(self.blocks[0].word))
+        else:
+            self.restore_input_focus(self.cancel_button)
+        dialog.deleteLater()
 
     def before_inline(self):
-        if self.is_dirty() and not self.resolve_dirty():
-            return False
-        if self.edit_id is not None:
-            self.reset_form()
         return True
 
     def inline_changed(self, editing):
@@ -710,6 +815,9 @@ class MainWindow(QMainWindow):
 
     def refresh_after_inline(self):
         if self._closing or self.current_table().delegate.editor is not None:
+            return
+        if self.current_table().dragging:
+            QTimer.singleShot(50, self.refresh_after_inline)
             return
         if self.filter_name == 'study17':
             self.study_page.load(self.study_page.context)
@@ -754,12 +862,16 @@ class MainWindow(QMainWindow):
         if not self.current_table().delegate.submit():
             return
         if action == "edit":
+            if self.edit_id == entry_id:
+                self.set_form_collapsed(False)
+                self.blocks[0].word.setFocus()
+                return
             if not self.resolve_dirty():
                 return
             self.reset_form(self.repository.get(entry_id))
             self.blocks[0].word.setFocus()
             return
-        if self.edit_id == entry_id:
+        if self.edit_id == entry_id and action == "trash":
             if not self.resolve_dirty():
                 return
             self.reset_form()
@@ -785,7 +897,9 @@ class MainWindow(QMainWindow):
             if not self.current_table().delegate.submit():
                 return
             self.search_box.clear()
-            self.set_filter("all")
+            # Locating a duplicate keeps its rejected draft available for correction.
+            self.filter_name = "all"
+            self.refresh()
             for number, row in enumerate(self.model.rows):
                 if row.entry.id == self.duplicate_id:
                     index = self.model.index(number, 1)

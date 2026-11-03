@@ -41,42 +41,65 @@ def assert_selected(table, entry):
     assert {index.row() for index in table.selectionModel().selectedRows()} == expected
 
 
-def test_mask_click_reveals_and_selects_clicked_word(review_list, window, qtbot):
+@pytest.mark.parametrize("button", [Qt.MouseButton.LeftButton, Qt.MouseButton.RightButton])
+def test_mask_click_reveals_and_selects_clicked_word(review_list, window, qtbot, button):
     table, entries = review_list
     table.setCurrentIndex(index_for(table, entries[-1]))
     window.filter_buttons[window.filter_name].setFocus()
     mask = table.visualRect(index_for(table, entries[0], column=2))
-    qtbot.mouseClick(table.viewport(), Qt.MouseButton.LeftButton, pos=mask.topLeft() + QPoint(40, 18))
+    QApplication.clipboard().setText("keep clipboard")
+    qtbot.mouseClick(table.viewport(), button, pos=mask.topLeft() + QPoint(40, 18))
+    assert table.delegate.editor is None and QApplication.activePopupWidget() is None
+    assert QApplication.clipboard().text() == "keep clipboard"
     assert not table.model().rows[0].hidden
     assert_selected(table, entries[0])
     assert table.hasFocus()
     assert table.verticalScrollBar().value() == 0
 
 
+@pytest.mark.parametrize("button", [Qt.MouseButton.LeftButton, Qt.MouseButton.RightButton])
+def test_mask_reveal_respects_invalid_inline_edit(review_list, qtbot, button):
+    table, entries = review_list
+    table.edit(index_for(table, entries[0]))
+    editor = table.delegate.editor
+    editor.setText("")
+    mask = table.visualRect(index_for(table, entries[1], column=2))
+    with qtbot.assertNotEmitted(table.revealRequested):
+        qtbot.mouseClick(table.viewport(), button, pos=mask.topLeft() + QPoint(40, 18))
+    assert table.delegate.editor is editor and editor.text() == ""
+    assert all(row.hidden for row in table.model().rows if row.entry.id == entries[1].id)
+    table.delegate.cancel()
+
+
 @pytest.mark.parametrize("width", [860, 1300])
-def test_only_actual_mask_shape_reveals_answers(review_list, window, qtbot, width):
+def test_mask_reveal_extends_vertically_but_not_horizontally(review_list, window, qtbot, width):
     table, entries = review_list
     window.resize(width, 820)
     qtbot.wait(20)
     cell = table.visualRect(index_for(table, entries[1], column=2))
     origin = cell.topLeft()
+    mask = table.delegate.mask_rect(cell)
     for point in (
             origin + QPoint(5, 18),  # Left padding.
-            origin + QPoint(40, 5),  # Above the bar.
-            origin + QPoint(40, 30),  # Below the bar.
+            QPoint(int(mask.left()) - 1, cell.top()),
+            QPoint(int(mask.right()) + 1, cell.top() + 18),
             QPoint(cell.right() - 4, cell.top() + 18),  # Trailing translation space.
-            origin + QPoint(12, 11),  # Outside the rounded top-left corner.
     ):
-        with qtbot.assertNotEmitted(table.revealRequested):
-            qtbot.mouseClick(table.viewport(), Qt.MouseButton.LeftButton, pos=point)
-        assert all(row.hidden for row in table.model().rows)
-        assert table.currentIndex().data(Qt.ItemDataRole.UserRole).entry.id == entries[1].id
-    for button in (Qt.MouseButton.RightButton, Qt.MouseButton.MiddleButton):
-        qtbot.mouseClick(table.viewport(), button, pos=origin + QPoint(40, 18))
-        assert all(row.hidden for row in table.model().rows)
-    qtbot.mouseClick(table.viewport(), Qt.MouseButton.LeftButton, pos=origin + QPoint(40, 18))
-    assert_selected(table, entries[1])
-    assert not table.currentIndex().data(Qt.ItemDataRole.UserRole).hidden
+        for button in (Qt.MouseButton.LeftButton, Qt.MouseButton.RightButton):
+            with qtbot.assertNotEmitted(table.revealRequested):
+                qtbot.mouseClick(table.viewport(), button, pos=point)
+            assert all(row.hidden for row in table.model().rows)
+            assert table.currentIndex().data(Qt.ItemDataRole.UserRole).entry.id == entries[1].id
+    qtbot.mouseClick(table.viewport(), Qt.MouseButton.MiddleButton, pos=origin + QPoint(40, 18))
+    assert all(row.hidden for row in table.model().rows)
+    for point in (origin + QPoint(40, 0), origin + QPoint(40, 5),
+                  origin + QPoint(40, 30), origin + QPoint(12, 11),
+                  QPoint(int(mask.right()) - 1, cell.bottom())):
+        for button in (Qt.MouseButton.LeftButton, Qt.MouseButton.RightButton):
+            table.set_entry_revealed(entries[1].id, False)
+            qtbot.mouseClick(table.viewport(), button, pos=point)
+            assert_selected(table, entries[1])
+            assert not table.currentIndex().data(Qt.ItemDataRole.UserRole).hidden
 
 
 def test_reveal_tooltip_only_applies_inside_mask(review_list, monkeypatch):
@@ -84,11 +107,11 @@ def test_reveal_tooltip_only_applies_inside_mask(review_list, monkeypatch):
     tips = []
     monkeypatch.setattr("PySide6.QtWidgets.QToolTip.showText", lambda pos, text, *args: tips.append(text))
     origin = table.visualRect(index_for(table, entries[0], column=2)).topLeft()
-    for offset in (QPoint(40, 5), QPoint(12, 11), QPoint(40, 18)):
+    for offset in (QPoint(5, 18), QPoint(40, 5), QPoint(12, 11), QPoint(40, 30)):
         point = origin + offset
         event = QHelpEvent(QEvent.Type.ToolTip, point, table.viewport().mapToGlobal(point))
         QApplication.sendEvent(table.viewport(), event)
-    assert tips == ["点击查看词性、翻译和关联词"]
+    assert tips == ["点击查看词性、翻译和关联词"] * 3
 
 
 @pytest.mark.parametrize("down,up", [(Qt.Key.Key_S, Qt.Key.Key_W),
@@ -477,7 +500,7 @@ def test_completing_final_study_word_leaves_clean_empty_list(review_list, window
     assert not table.currentIndex().isValid()
     assert not table.selectionModel().hasSelection()
     assert table.hasFocus()
-    assert "待完成 0 词" in page.period_label.text()
+    assert page.task_count.accessibleName() == f"当前单词任务：0/{len(entries)}"
     assert "没有待完成的单词" in table.empty_text
     for key in (Qt.Key.Key_Return, Qt.Key.Key_Enter, Qt.Key.Key_Space, Qt.Key.Key_S):
         qtbot.keyClick(table, key)

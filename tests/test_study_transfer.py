@@ -364,8 +364,9 @@ def test_routed_progress_failure_before_study_page_was_opened_keeps_words_and_re
 
 def test_invalid_file_and_cancellation_never_save_hidden_draft(source, window, monkeypatch, tmp_path):
     add(window.repository, 'local')
-    window.blocks[0].word.setText('草稿')
     enter(window, monkeypatch, AM)
+    # Inject a hidden draft to verify import never touches it before validation.
+    window.blocks[0].word.setText('草稿')
     before = window.repository.study_backup()
     info, errors = import_ui(window, monkeypatch, tmp_path, source.study_backup(), 'cancel')
     original_resolve = window.resolve_dirty
@@ -470,22 +471,24 @@ def test_ordinary_page_invalid_structure_has_exact_message_and_never_routes_or_w
 
 @pytest.mark.parametrize('collapsed', [False, True])
 def test_hidden_form_preserves_draft_and_blocks_all_form_shortcuts(window, qtbot, monkeypatch, collapsed):
-    window.blocks[0].word.setText('draft')
     window.set_form_collapsed(collapsed)
     enter(window, monkeypatch)
+    window.blocks[0].word.setText('draft')
     assert not window.editor_panel.isVisible()
     value = window.form_value()
-    for callback in window.shortcuts.callbacks.values():
-        callback()
+    for action in window.shortcuts.values:
+        if action == 'toggle_visibility':
+            continue  # This is a window action, not a form action.
+        window.shortcuts.callbacks[action]()
     qtbot.keyClick(window.study_page.table, Qt.Key.Key_N, Qt.KeyboardModifier.ControlModifier)
     qtbot.keyClick(window.study_page.table, Qt.Key.Key_Return, Qt.KeyboardModifier.ControlModifier)
     assert window.form_value() == value and window.form_collapsed == collapsed
     assert window.repository.list_entries() == []
     assert not window.editor_panel.isVisible()
+    window.blocks[0].word.clear()
     window.set_filter('pending')
     assert window.editor_panel.isVisible() and window.form_collapsed == collapsed
-    assert window.form_value() == value
-    window.blocks[0].word.clear()
+    assert not window.is_dirty()
 
 
 def test_study_export_button_routes_independently_and_uses_visible_error_anchor(source, window, monkeypatch, tmp_path):

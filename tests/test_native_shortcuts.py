@@ -1,5 +1,6 @@
 import pytest
 from vocabulary.native_shortcuts import WindowHotkeys
+from vocabulary.domain import RelatedWord, Sense, WordEntry
 
 
 class KeyboardStub:
@@ -94,3 +95,78 @@ def test_queued_native_chord_is_discarded_after_configuration_changes(window, qt
     window.shortcuts.update(dict(window.shortcuts.values, add_sense="Alt+J"))
     qtbot.wait(20)
     assert len(window.blocks[0].rows) == 1
+
+
+@pytest.mark.parametrize("modifier_key", [0xA4, 0xA2], ids=["alt", "ctrl"])
+def test_native_digits_switch_tabs_before_ime(window, qtbot, native, modifier_key):
+    bridge, api = native
+    for number, page in [(2, "all"), (3, "learned"), (4, "study17"), (1, "pending")]:
+        window.setFocus()
+        bridge.refresh()
+        bridge.dispatch_key(modifier_key, True)
+        assert bridge.dispatch_key(ord(str(number)), True)
+        assert bridge.dispatch_key(ord(str(number)), False)
+        bridge.dispatch_key(modifier_key, False)
+        qtbot.wait(20)
+        assert window.filter_name == page
+
+
+def test_native_visibility_shortcut_fires_once_and_follows_remapping(window, qtbot, native):
+    bridge, api = native
+    window.blocks[0].word.setFocus()
+    bridge.refresh()
+    bridge.dispatch_key(0xA2, True)
+    assert bridge.dispatch_key(ord("E"), True)
+    assert bridge.dispatch_key(ord("E"), True)
+    bridge.dispatch_key(ord("E"), False)
+    bridge.dispatch_key(0xA2, False)
+    qtbot.wait(20)
+    assert not window.global_hidden
+    window.shortcuts.update(dict(window.shortcuts.values, toggle_visibility="Alt+E"))
+    bridge.dispatch_key(0xA2, True)
+    assert not bridge.dispatch_key(ord("E"), True)
+    bridge.dispatch_key(0xA2, False)
+    bridge.dispatch_key(0xA4, True)
+    assert bridge.dispatch_key(ord("E"), True)
+    bridge.dispatch_key(ord("E"), False)
+    bridge.dispatch_key(0xA4, False)
+    qtbot.wait(20)
+    assert window.global_hidden
+
+
+def test_native_delete_shortcut_targets_focused_definition(window, qtbot, native, monkeypatch):
+    block = window.blocks[0]
+    block.add_sense()
+    block.add_sense()
+    qtbot.wait(20)
+    rows = list(block.rows)
+    rows[0].translation.setFocus()
+    bridge, api = native
+    bridge.refresh()
+    bridge.dispatch_key(0xA2, True)
+    assert bridge.dispatch_key(ord("K"), True)
+    bridge.dispatch_key(ord("K"), False)
+    bridge.dispatch_key(0xA2, False)
+    qtbot.wait(20)
+    assert block.rows == rows[1:]
+
+
+@pytest.mark.parametrize("action", ["add", "remove"])
+def test_native_related_actions_follow_focused_middle_word(window, qtbot, native, monkeypatch, action):
+    window.reset_form(WordEntry("main", [Sense("n.", "main")],
+                               [RelatedWord(name, [Sense("n.", name)]) for name in ("a", "b", "c")]))
+    qtbot.wait(10)
+    source = window.blocks[2].rows[0].translation
+    source.setFocus()
+    monkeypatch.setattr("vocabulary.window.confirm_remove", lambda *args: True)
+    bridge, api = native
+    bridge.refresh()
+    key = ord("N" if action == "add" else "M")
+    bridge.dispatch_key(0xA2, True)
+    assert bridge.dispatch_key(key, True)
+    assert bridge.dispatch_key(key, True)
+    bridge.dispatch_key(key, False)
+    bridge.dispatch_key(0xA2, False)
+    qtbot.wait(10)
+    assert [block.word.text() for block in window.blocks] == (
+        ["main", "a", "b", "", "c"] if action == "add" else ["main", "a", "c"])

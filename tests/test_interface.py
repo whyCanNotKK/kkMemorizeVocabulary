@@ -60,10 +60,12 @@ def test_click_word_copies_full_name_with_bottom_notice(window, repo, qtbot):
     saved = seed(repo)
     window.refresh()
     clipboard = QApplication.clipboard()
+    clipboard.setText("unchanged")
     rect = window.table.visualRect(window.model.index(0, 1))
     qtbot.mouseClick(window.table.viewport(), Qt.MouseButton.LeftButton,
                     pos=rect.topLeft() + QPoint(15, 14))
-    assert clipboard.text() == "record"
+    assert clipboard.text() == "unchanged"
+    qtbot.waitUntil(lambda: clipboard.text() == "record")
     assert window.model.rows[0].hidden  # Copying does not reveal answers.
     assert window.toast.label.text() == "已复制：record"
     assert window.toast.isVisible() and not window.toast.action.isVisible()
@@ -76,7 +78,7 @@ def test_click_word_copies_full_name_with_bottom_notice(window, repo, qtbot):
     rect = window.table.visualRect(window.model.index(2, 1))
     qtbot.mouseClick(window.table.viewport(), Qt.MouseButton.LeftButton,
                     pos=rect.topLeft() + QPoint(31, window.model.rows[2].top_padding + 7))
-    assert clipboard.text() == "recorder"
+    qtbot.waitUntil(lambda: clipboard.text() == "recorder")
     assert window.toast.label.text() == "已复制：recorder"
     assert window.table.currentIndex() == window.model.index(2, 1)
 
@@ -87,7 +89,7 @@ def test_click_word_copies_full_name_with_bottom_notice(window, repo, qtbot):
     # The ellipsis is clickable, but the clipboard receives the unabridged name.
     qtbot.mouseClick(window.table.viewport(), Qt.MouseButton.LeftButton,
                     pos=QPoint(rect.right() - 14, rect.top() + 14))
-    assert clipboard.text() == long_word
+    qtbot.waitUntil(lambda: clipboard.text() == long_word)
 
 
 def test_copy_requires_left_click_on_visible_word_text(window, repo, qtbot):
@@ -107,7 +109,6 @@ def test_copy_requires_left_click_on_visible_word_text(window, repo, qtbot):
             child.topLeft() + QPoint(16, 10),  # Related-word arrow.
             table.visualRect(window.model.index(1, 1)).center(),  # Extra sense.
             table.visualRect(window.model.index(0, 2)).center(),  # Part of speech.
-            table.visualRect(window.model.index(0, 3)).center(),  # Translation.
     ):
         qtbot.mouseClick(table.viewport(), Qt.MouseButton.LeftButton, pos=point)
         assert clipboard.text() == "unchanged"
@@ -116,6 +117,72 @@ def test_copy_requires_left_click_on_visible_word_text(window, repo, qtbot):
         qtbot.mouseClick(table.viewport(), button, pos=main.topLeft() + QPoint(15, 14))
         assert clipboard.text() == "unchanged"
         assert not window.toast.isVisible()
+
+
+@pytest.mark.parametrize("page", ["pending", "all", "learned", "study17"])
+@pytest.mark.parametrize("related", [False, True])
+def test_double_click_edits_word_without_copying(window, repo, qtbot, page, related):
+    from PySide6.QtCore import QPoint
+
+    saved = seed(repo)
+    if page == "learned":
+        repo.set_flag(saved.id, "learned", True)
+    window.set_filter(page)
+    if page == "study17":
+        from datetime import date
+        from vocabulary.learning import StudyContext
+
+        context = StudyContext(date(2026, 10, 30), False)
+        repo.prepare_study(context)
+        window.study_page.load(context)
+        table = window.study_page.table
+        table.set_entry_revealed(saved.id, True)
+    else:
+        window.reveal(saved.id, True)
+        table = window.table
+    index = table.model().index(2 if related else 0, 1)
+    row = index.data(Qt.ItemDataRole.UserRole)
+    point = table.visualRect(index).topLeft() + QPoint(31 if related else 15, row.top_padding + 7)
+    clipboard = QApplication.clipboard()
+    clipboard.setText("keep clipboard")
+    copies = []
+    table.copyRequested.connect(copies.append)
+    # A real double-click includes the first press/release before the double-click event.
+    qtbot.mouseClick(table.viewport(), Qt.MouseButton.LeftButton, pos=point)
+    qtbot.mouseDClick(table.viewport(), Qt.MouseButton.LeftButton, pos=point)
+    qtbot.mouseRelease(table.viewport(), Qt.MouseButton.LeftButton, pos=point)
+    assert table.delegate.editor is not None
+    qtbot.wait(QApplication.doubleClickInterval() + 80)
+    assert clipboard.text() == "keep clipboard" and copies == []
+    assert not window.toast.isVisible()
+    table.delegate.cancel()
+
+
+@pytest.mark.parametrize("action", ["refresh", "hide", "drag"])
+def test_abandoned_word_click_does_not_copy_later(window, repo, qtbot, action):
+    from PySide6.QtCore import QPoint
+
+    seed(repo)
+    window.refresh()
+    table = window.table
+    rect = table.visualRect(window.model.index(0, 1))
+    point = rect.topLeft() + QPoint(15, 14)
+    clipboard = QApplication.clipboard()
+    clipboard.setText("keep clipboard")
+    if action == "drag":
+        qtbot.mousePress(table.viewport(), Qt.MouseButton.LeftButton, pos=point)
+        destination = point + QPoint(QApplication.startDragDistance() + 10, 0)
+        qtbot.mouseMove(table.viewport(), pos=destination)
+        qtbot.mouseRelease(table.viewport(), Qt.MouseButton.LeftButton, pos=destination)
+    else:
+        qtbot.mouseClick(table.viewport(), Qt.MouseButton.LeftButton, pos=point)
+        if action == "refresh":
+            window.refresh()
+        else:
+            table.hide()
+            table.show()
+    qtbot.wait(QApplication.doubleClickInterval() + 80)
+    assert clipboard.text() == "keep clipboard" and not window.toast.isVisible()
 
 
 @pytest.mark.parametrize("page", ["pending", "all", "learned", "study17"])
@@ -144,7 +211,7 @@ def test_copy_works_in_all_lists_with_form_hidden_or_collapsed(window, repo, qtb
     rect = table.visualRect(table.model().index(0, 1))
     qtbot.mouseClick(table.viewport(), Qt.MouseButton.LeftButton,
                     pos=rect.topLeft() + QPoint(15, 14))
-    assert QApplication.clipboard().text() == "record"
+    qtbot.waitUntil(lambda: QApplication.clipboard().text() == "record")
     assert window.toast.isVisible()
     assert window.toast.label.text() == "已复制：record"
 
@@ -173,7 +240,7 @@ def test_collapse_preserves_draft_focus_and_automatic_height(window, qtbot):
 
 def test_form_grows_with_senses_then_scrolls_at_half_window_and_shrinks(window, qtbot):
     initial = window.editor_panel.height()
-    assert 180 <= initial < 250
+    assert 140 <= initial < 220
     assert window.form_scroll.verticalScrollBar().maximum() == 0
     block = window.blocks[0]
     for _ in range(3):
@@ -368,8 +435,9 @@ def test_shortcut_target_and_focus_labels(window, qtbot):
     qtbot.wait(10)
     assert len(window.blocks) == 2
     child = window.blocks[1]
-    assert "Ctrl+J" in child.add_button.text()
-    assert "Ctrl+J" not in window.blocks[0].add_button.text()
+    assert not child.rows[0].add_button.text()
+    assert "Ctrl+J" in child.rows[0].add_button.toolTip()
+    assert "Ctrl+J" in window.blocks[0].rows[0].add_button.toolTip()
     qtbot.keyClick(child.word, Qt.Key.Key_J, Qt.KeyboardModifier.ControlModifier)
     qtbot.wait(10)
     assert len(child.rows) == 2 and len(window.blocks[0].rows) == 2
@@ -415,6 +483,20 @@ def test_tab_reverse_newline_and_star_space(window, qtbot):
     assert block.rows[0].pos.hasFocus()
     qtbot.keyClick(block.rows[0].pos, Qt.Key.Key_Tab, Qt.KeyboardModifier.ShiftModifier)
     assert block.word.hasFocus()
+    block.add_sense()
+    qtbot.wait(10)
+    first, second = block.rows
+    first.translation.setFocus()
+    qtbot.keyClick(first.translation, Qt.Key.Key_Tab)
+    assert second.pos.hasFocus()
+    qtbot.keyClick(second.pos, Qt.Key.Key_Tab, Qt.KeyboardModifier.ShiftModifier)
+    assert first.translation.hasFocus()
+    block.move_sense(0, 1)
+    second.translation.setFocus()
+    qtbot.keyClick(second.translation, Qt.Key.Key_Tab)
+    assert first.pos.hasFocus()
+    qtbot.keyClick(first.pos, Qt.Key.Key_Tab, Qt.KeyboardModifier.ShiftModifier)
+    assert second.translation.hasFocus()
     edit = block.rows[0].translation
     edit.setFocus()
     qtbot.keyClicks(edit, "line")
@@ -575,13 +657,15 @@ def test_related_removal_confirm_space_and_escape(window, qtbot):
     child = window.blocks[-1]
     child.word.setText("keep me")
     answer_confirmation(qtbot, False)
-    window.remove_last_related()
+    window.remove_focused_related()
     assert len(window.blocks) == 2
+    qtbot.waitUntil(child.word.hasFocus)
     answer_confirmation(qtbot, True)
-    window.remove_last_related()
+    window.remove_focused_related()
     assert len(window.blocks) == 1
     window.add_related()
-    window.remove_last_related()
+    qtbot.wait(10)
+    window.remove_focused_related()
     assert len(window.blocks) == 1
 
 
@@ -612,7 +696,7 @@ def test_mouse_double_click_edits_each_kind_and_focus_out_saves(window, repo, qt
         if column == 1:
             editor.setText(text)
         elif column == 2:
-            editor.set_pos(text)
+            qtbot.keyClick(editor.view(), Qt.Key.Key_2)
         else:
             editor.setPlainText(text)
         window.blocks[0].word.setFocus()
@@ -644,7 +728,8 @@ def test_full_edit_adds_and_removes_aggregate_items(window, repo, qtbot):
     row.pos.set_pos("adj.")
     row.translation.setPlainText("创纪录的")
     window.add_related()
-    child = window.blocks[-1]
+    qtbot.wait(10)
+    child = window.focused_block()
     child.word.setText("recording")
     child.rows[0].pos.set_pos("n.")
     child.rows[0].translation.setPlainText("录音")
@@ -685,27 +770,19 @@ def test_multi_related_focus_scrolls_input_into_view(window, qtbot):
     assert top_left.y() + target.height() <= window.form_scroll.viewport().height()
 
 
-@pytest.mark.parametrize("choice", ["保存", "放弃", "取消"])
-def test_inline_switch_resolves_bottom_draft(window, repo, qtbot, choice):
+def test_inline_switch_preserves_bottom_draft(window, repo, qtbot, monkeypatch):
     saved = seed(repo)
     window.reveal(saved.id, True)
     fill_form(window, "new-word")
-    def answer():
-        dialog = QApplication.activeModalWidget()
-        assert isinstance(dialog, QMessageBox)
-        target = next(item for item in dialog.buttons() if item.text() == choice)
-        qtbot.mouseClick(target, Qt.MouseButton.LeftButton)
-    QTimer.singleShot(30, answer)
+    draft = window.form_value()
+    monkeypatch.setattr(window, "resolve_dirty", lambda: not window.is_dirty() or pytest.fail("list editing must not process draft"))
     index = window.model.index(0, 1)
     qtbot.mouseDClick(window.table.viewport(), Qt.MouseButton.LeftButton,
                      pos=window.table.visualRect(index).center())
     qtbot.wait(20)
-    if choice == "取消":
-        assert window.table.delegate.editor is None
-        assert window.blocks[0].word.text() == "new-word"
-    else:
-        assert window.table.delegate.editor.text() == "record"
-        assert len(repo.list_entries()) == (2 if choice == "保存" else 1)
+    assert window.table.delegate.editor.text() == "record"
+    assert window.form_value() == draft and len(repo.list_entries()) == 1
+    window.table.delegate.cancel()
 
 
 def test_settings_returns_focus_to_previous_form_field(window, qtbot):

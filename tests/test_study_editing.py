@@ -47,7 +47,7 @@ def test_study_double_click_saves_master_aggregate_and_preserves_progress(
     if column == 1:
         editor.setText(text)
     elif column == 2:
-        editor.set_pos(text)
+        qtbot.keyClick(editor.view(), Qt.Key.Key_3 if text == 'adj.' else Qt.Key.Key_4)
     else:
         editor.setPlainText(text)
     monkeypatch.setattr(StudyContext, 'now', classmethod(lambda cls: StudyContext(AM.day, True)))

@@ -1,4 +1,4 @@
-"""Route review-area navigation without taking keys from text inputs."""
+"""Route review controls and the search/list arrow-key handoff."""
 from PySide6.QtCore import QEvent, QObject, Qt
 from PySide6.QtWidgets import (
     QAbstractButton, QAbstractSlider, QAbstractSpinBox, QApplication, QComboBox,
@@ -14,12 +14,13 @@ def navigation_step(event):
 
 
 class ReviewKeyRouter(QObject):
-    """Only list-area controls may hand navigation to the active table."""
+    """Keep navigation within the list area and its search field."""
 
-    def __init__(self, panel, active_table):
+    def __init__(self, panel, active_table, search_box=None):
         super().__init__(panel)
         self.panel = panel
         self.active_table = active_table
+        self.search_box = search_box
         QApplication.instance().installEventFilter(self)
 
     def eventFilter(self, source, event):
@@ -35,6 +36,22 @@ class ReviewKeyRouter(QObject):
             return False
         if source is not self.panel and not self.panel.isAncestorOf(source):
             return False
+        table = self.active_table()
+        if self.search_box is not None and self.search_box.isVisible():
+            if source is self.search_box and event.key() == Qt.Key.Key_Down:
+                if table.navigate_entries(1, first=True):
+                    event.accept()
+                    return True
+            if (source is table and event.key() == Qt.Key.Key_Up
+                    and self.search_box.text().strip() and table.can_navigate_entries()):
+                current = table.currentIndex()
+                row = current.data(Qt.ItemDataRole.UserRole)
+                rows = table.model().rows
+                if (rows and row is not None and table.selectionModel().isSelected(current)
+                        and row.entry.id == rows[0].entry.id):
+                    self.search_box.setFocus(Qt.FocusReason.OtherFocusReason)
+                    event.accept()
+                    return True
         if source is not self.panel and not isinstance(source, (QAbstractButton, QAbstractSlider, QHeaderView)):
             return False
         # Input-owned buttons (e.g. search's clear button) keep their input scope.

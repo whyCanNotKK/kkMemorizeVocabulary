@@ -27,6 +27,8 @@ Double-click a word name, a revealed part of speech, or a definition to edit it 
 
 Sessions use **Beijing time (UTC+8), with the afternoon starting at 15:00**. Refresh or reenter the page after a period or date change. Study progress is separate from the ordinary Learned status; finished words are excluded from future draws.
 
+The period row shows **当前单词任务：remaining/total** at the far right, with the remaining count emphasized. The total includes tasks already completed in that period and remains accurate after refresh or restart.
+
 In **设置 → 十七天背单词设置**, customize words per group (default 10) and new groups per day (default 3), each from 1 to 1000. The daily new-word limit is their product. Click **完成** to save; changes persist after restart and apply to future daily draws. Existing groups, today's batch, and review progress stay as they are. Study imports retain local draw preferences.
 
 The study page imports and exports participating words and their progress. Ordinary tabs also recognize valid study files and offer Words and progress, Words only, or Cancel, even when no local progress exists. The study page accepts study files only.
@@ -56,22 +58,41 @@ This uses an isolated development database. For everyday use with the default da
 
 ## Common controls
 
+The entry form keeps an independent draft across tab switches and list cell edits. Loading another word into the form asks how to handle that draft. Saving preserves unrelated list changes and retains the draft if both editors changed the same part differently.
+
+For new words, Clear resets the form only after confirmation. For existing entries, Cancel discards unsaved edits and returns to a blank new-word form after confirmation, keeping the saved entry unchanged. Both dialogs default to Cancel and place Cancel over the original action button, so an accidental second click cancels.
+
 Definition editors grow with explicit newlines or wrapped text and shrink when content is removed, both in lists and in the entry form. List editors keep within the visible table area and scroll internally for very long text; the entry form grows up to half the window and then scrolls its input area.
 
-Enter a word, part of speech, and translation in the bottom form, then save with **Ctrl+Enter**. Add more definitions or related words as needed. Double-click a list cell to edit it; click a word's text to copy its full name. The eye button hides or reveals answers in the current tab.
+Enter a word, part of speech, and translation in the bottom form, then save with **Ctrl+Enter**. Add more definitions or related words as needed. Single-click a word or definition to copy its full text after the system double-click interval. Double-click or right-click a word, part of speech, or definition to edit it without copying; single-clicking a part of speech only selects it. Hold a part of speech to reorder its definition; dragging word or definition text has no action. The eye button hides or reveals answers in the current tab.
+
+When answers are hidden, either left-click or right-click the gray answer mask or the space directly above or below it within the same row to reveal the whole entry. The target keeps the mask's horizontal width. This click only reveals, without editing or copying.
+
+Newly focused inputs place the cursor at the end of their content. Double-click a part of speech in any list to open a popup centered on its label, with all choices visible. Click a choice, press 1–9 or n/v/a, or use arrow keys and Enter to save immediately and close the popup; Esc cancels.
+
+Hold a related word's bent-arrow icon to drag that word and all its definitions within the same parent. This works in all four lists (including search results) and in the entry form. Lists save the order immediately; the form saves it with the entry. Press Esc or release outside the related-word area to cancel.
+
+In any list, hold a visible part-of-speech label to drag it with its definition within the same main or related word. This uses the same reorder animation, works in search, and saves on release. All drag previews appear without an extra outline. Press Esc or release outside that word's definitions to cancel. Double-clicking the label still opens its editor.
+
+In the entry form, each definition has a drag handle, a circled plus to insert a definition after it, and a trash icon to delete it. Hover the icons for current shortcuts; deletion is disabled for the last definition. Drag a definition together with its part of speech within the same word, then save the entry to keep the order. The footer's add-related action appears while the form has focus; delete appears only when a related word is the current target. Ctrl+N inserts after the focused word and Ctrl+M deletes the focused related word. Focusing the main word inserts at the start and hides delete. Individual related-word blocks have no remove button. Search hides the shuffle button until the query is cleared.
 
 | Key | Action |
 | --- | --- |
+| Alt+1 / 2 / 3 / 4 or Ctrl+1 / 2 / 3 / 4 | Switch to To learn / All / Learned / Seventeen-day study, keeping the entry draft |
 | W / S or Up / Down | Previous / next main word, with the list focused |
 | Space | Hide / reveal the selected entry, outside search |
 | Enter | Reveal / complete the selected word on the study page |
 | F2 | Edit the selected row's definition; reveal it first if hidden |
 | Tab / Shift+Tab while editing | Save and edit the next / previous word, part of speech, or definition |
 | Ctrl+Up / Ctrl+Down | Scroll without moving the selection |
+| Down in search / Up at the first result | Focus the first result / return to editing a nonempty search |
 | Ctrl+Enter | Save the entry or current cell edit |
+| Ctrl+E | Show / hide all definitions in the current tab (configurable in Settings) |
 | Ctrl+N / Ctrl+J | Add a related word / definition in the entry form |
+| Ctrl+M | Delete the focused related word |
+| Ctrl+K | Delete the focused definition; do nothing when no definition has focus |
 
-Common entry shortcuts can be changed in **设置** (Settings). Search covers main words, related words, and translations; dragging and shuffling are disabled during search.
+Common entry shortcuts can be changed in **设置** (Settings). Search covers main words, related words, and translations; main-word dragging and shuffling are disabled during search.
 
 ## Data and backups
 

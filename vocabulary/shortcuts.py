@@ -34,11 +34,15 @@ def display_shortcut(value):
 
 
 class ShortcutManager(QObject):
+    """Bind named callbacks to configurable chords and fixed chord aliases."""
+
     changed = Signal()
 
-    def __init__(self, repository, window, callbacks):
+    def __init__(self, repository, window, callbacks, fixed=None):
         super().__init__(window)
         self.repository, self.window, self.callbacks = repository, window, callbacks
+        self.fixed_bindings = {sequence: action for action, sequences in (fixed or {}).items()
+                               for sequence in sequences}
         self.bindings = []
         self.values = repository.shortcuts()
         self.suspended = False
@@ -58,7 +62,7 @@ class ShortcutManager(QObject):
                     and (target is self.window or self.window.isAncestorOf(target))):
                 sequence = QKeySequence(event.keyCombination()).toString(
                     QKeySequence.SequenceFormat.PortableText).replace("Enter", "Return")
-                action = next((key for key, value in self.values.items() if value == sequence), None)
+                action = self.active_bindings.get(sequence)
                 if action is not None:
                     event.accept()
                     if event.type() == QEvent.Type.KeyPress and not event.isAutoRepeat():
@@ -75,10 +79,19 @@ class ShortcutManager(QObject):
             raise ValidationError("快捷键不能重复，请先为占用它的操作设置其他组合。")
         return normalized
 
+    @property
+    def active_bindings(self):
+        """Portable chord → action mapping shared by Qt and native dispatch."""
+        return self._combined_bindings(self.values)
+
+    def _combined_bindings(self, values):
+        # Fixed navigation wins over any conflicting configuration from an older version.
+        return {value: action for action, value in values.items()} | self.fixed_bindings
+
     def _apply(self, values):
         new = []
         try:
-            for key, value in values.items():
+            for value, action in self._combined_bindings(values).items():
                 shortcut = QShortcut(self.window)
                 sequences = [QKeySequence(value)]
                 if "Return" in value:
@@ -87,7 +100,7 @@ class ShortcutManager(QObject):
                 shortcut.setContext(Qt.ShortcutContext.WindowShortcut)
                 shortcut.setAutoRepeat(False)
                 shortcut.setEnabled(False)
-                shortcut.activated.connect(self.callbacks[key])
+                shortcut.activated.connect(self.callbacks[action])
                 new.append(shortcut)
         except Exception:
             for shortcut in new:
@@ -111,6 +124,8 @@ class ShortcutManager(QObject):
 
     def update(self, values):
         validated = self.validate(values)
+        if set(validated.values()) & self.fixed_bindings.keys():
+            raise ValidationError("这个快捷键已保留给固定导航操作。")
         old = self.repository.shortcuts()
         self.repository.write_shortcuts(validated)  # Commit before binding or changing any labels.
         try:

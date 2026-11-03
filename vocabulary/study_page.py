@@ -1,10 +1,10 @@
 """Dedicated study projection; refreshing is the only way to change its clock."""
-from PySide6.QtCore import QModelIndex, Signal
+from PySide6.QtCore import QModelIndex, Qt, Signal
 from PySide6.QtWidgets import QHBoxLayout, QLabel, QVBoxLayout, QWidget
 
 from .learning import StudyContext
 from .table import WordTable, WordTableModel
-from .theme import icon
+from .theme import ACCENT, MUTED, icon
 from .widgets import button
 
 
@@ -16,6 +16,7 @@ class StudyPage(QWidget):
         self.repository = repository
         self.context = None
         self.tasks = []
+        self.total_tasks = 0
         self.revealed = set()
         self._known_ids = set()
         self.global_hidden = True
@@ -33,6 +34,11 @@ class StudyPage(QWidget):
         self.period_label.setObjectName("muted")
         toolbar.addWidget(self.period_label)
         toolbar.addStretch()
+        self.task_count = QLabel()
+        self.task_count.setTextFormat(Qt.TextFormat.RichText)
+        self.task_count.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        toolbar.addWidget(self.task_count)
+        self.update_task_count()
         layout.addLayout(toolbar)
         self.model = WordTableModel(edit_callback, self)
         self.model.study_groups = {}
@@ -52,19 +58,22 @@ class StudyPage(QWidget):
         try:
             tasks = (self.repository.prepare_study(context) if generate else
                      self.repository.study_tasks(context))
+            total = self.repository.study_task_total(context)
         except Exception as error:
             self.error.emit(str(error))
             return False
         self.context, self.tasks = context, tasks
+        self.total_tasks = total
         ids = {task.entry.id for task in tasks}
         if not self.global_hidden:
             self.revealed.update(ids - self._known_ids)
         self._known_ids.update(ids)
-        self.period_label.setText(f"{context.label} · 待完成 {len(tasks)} 词")
+        self.period_label.setText(context.label)
         self.render()
         return True
 
     def render(self):
+        self.update_task_count()
         with self.table.preserve_view():
             self.model.study_groups = {task.entry.id: task.group_number for task in self.tasks}
             # Group numbers can grow beyond the original star column's width.
@@ -73,6 +82,14 @@ class StudyPage(QWidget):
             self.table.setColumnWidth(0, max(38, width))
             self.model.populate([task.entry for task in self.tasks], self.revealed)
             self.table.update_spans()
+
+    def update_task_count(self):
+        remaining = len(self.tasks)
+        self.task_count.setText(
+            f'<span style="color:{MUTED}">当前单词任务：</span>'
+            f'<span style="color:{ACCENT};font-size:22px;font-weight:700">{remaining}</span>'
+            f'<span style="color:{MUTED}">/{self.total_tasks}</span>')
+        self.task_count.setAccessibleName(f"当前单词任务：{remaining}/{self.total_tasks}")
 
     def reveal(self, word_id, expanded):
         if expanded:
@@ -103,7 +120,6 @@ class StudyPage(QWidget):
             return
         self.tasks = [task for task in self.tasks if task.entry.id != word_id]
         self.revealed.discard(word_id)
-        self.period_label.setText(f"{self.context.label} · 待完成 {len(self.tasks)} 词")
         self.render()
         if self.tasks:
             target = self.tasks[min(position, len(self.tasks) - 1)]
