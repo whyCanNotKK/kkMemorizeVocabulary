@@ -50,6 +50,39 @@ class StudyContext:
 class StudyTask:
     entry: WordEntry
     group_number: int
+    is_review: bool = False
+
+
+@dataclass(frozen=True)
+class StudyTaskHistory:
+    id: int
+    task_date: str
+    afternoon: int
+    started_at: str
+    ended_at: str | None
+    duration_seconds: int
+    status: int
+    new_total: int
+    review_total: int
+    new_done: int
+    review_done: int
+
+
+def study_timestamp(instant: datetime | None = None) -> str:
+    instant = instant or datetime.now(BEIJING)
+    if instant.tzinfo is None:
+        raise ValueError('学习时间必须包含时区。')
+    return instant.astimezone(BEIJING).isoformat(timespec='seconds')
+
+
+def format_study_duration(seconds: int) -> str:
+    if seconds < 60:
+        return f'{seconds} s'
+    minutes, remaining = divmod(seconds, 60)
+    if minutes < 60:
+        return f'{minutes} min {remaining} s'
+    hours, minutes = divmod(minutes, 60)
+    return f'{hours} h {minutes} min'
 
 
 def next_stage(stage: int) -> int:

@@ -57,6 +57,7 @@ class WordTableModel(QAbstractTableModel):
         self.rows = []
         self.edit_callback = edit_callback
         self.study_groups = None
+        self.study_completed_ids = set()
 
     def populate(self, entries, revealed):
         self.beginResetModel()
@@ -88,11 +89,13 @@ class WordTableModel(QAbstractTableModel):
             return None
         row, column = self.rows[index.row()], index.column()
         if self.study_groups is not None and row.first:
-            if column == 0 and role in (Qt.ItemDataRole.DisplayRole, Qt.ItemDataRole.ToolTipRole,
+            if column == 0 and role == Qt.ItemDataRole.ToolTipRole:
+                return None
+            if column == 0 and role in (Qt.ItemDataRole.DisplayRole,
                                        Qt.ItemDataRole.AccessibleTextRole):
                 return str(self.study_groups[row.entry.id])
             if column == 4 and role == Qt.ItemDataRole.AccessibleTextRole:
-                return "记下"
+                return '' if row.entry.id in self.study_completed_ids else '记下'
         if role == Qt.ItemDataRole.UserRole:
             return row
         if role == Qt.ItemDataRole.ToolTipRole and column in (1, 2, 3):
@@ -231,7 +234,7 @@ class WordDelegate(QStyledItemDelegate):
                 draw_symbol(painter, "star", QRectF(rect.center().x() - 8, rect.top() + 10, 16, 16),
                             GOLD if row.entry.important else "#596371")
         elif column == 4 and row.first:
-            for action, target in self.view.action_rects(option.rect):
+            for action, target in self.view.action_rects(option.rect, row):
                 if action == "drag" and not self.view.reorder_enabled:
                     color = "#46505c"
                 else:
@@ -741,7 +744,11 @@ class WordTable(QTableView):
         target = max(0, min(len(entries) - 1, entries.index(row.entry.id) + step))
         self.select_entry(entries[target], scroll=True)
 
-    def action_rects(self, rect):
+    def action_rects(self, rect, row=None):
+        if row is None:
+            row = self.indexAt(rect.center()).data(Qt.ItemDataRole.UserRole)
+        if self.study_mode and row is not None and row.entry.id in self.model().study_completed_ids:
+            return []
         names = ("study",) if self.study_mode else (
             ("drag", "learned", "edit", "trash") if self.show_drag_handle else ("learned", "edit", "trash"))
         return [(name, QRect(rect.left() + 5 + i * 34, rect.top() + 2, 32, min(32, rect.height() - 4)))
@@ -808,7 +815,7 @@ class WordTable(QTableView):
                 event.accept()
                 return
             if column == 4 and row.first:
-                for action, rect in self.action_rects(self.visualRect(index)):
+                for action, rect in self.action_rects(self.visualRect(index), row):
                     if rect.contains(event.position().toPoint()):
                         if action == "drag":
                             if self.reorder_enabled:
@@ -1016,6 +1023,9 @@ class WordTable(QTableView):
                 row = current.data(Qt.ItemDataRole.UserRole)
                 if (not event.isAutoRepeat() and row is not None
                         and self.selectionModel().isSelected(current)):
+                    if study_enter and row.entry.id in self.model().study_completed_ids:
+                        event.accept()
+                        return
                     if study_enter and not row.hidden:
                         self.actionRequested.emit(row.entry.id, "study")
                     else:
@@ -1126,11 +1136,11 @@ class WordTable(QTableView):
                               "study": "记下（回车）",
                               "edit": "编辑整组", "trash": "删除单词",
                               "drag": "按住拖动整个词条" if self.reorder_enabled else "搜索时不可调整排序"}
-                    for name, rect in self.action_rects(self.visualRect(index)):
+                    for name, rect in self.action_rects(self.visualRect(index), row):
                         if rect.contains(event.pos()):
                             text = labels[name]
                 elif index.column() == 0 and row.first:
-                    text = (f"第 {index.data()} 组" if self.study_mode else
+                    text = ('' if self.study_mode else
                             ("取消重点" if row.entry.important else "设为重点"))
                 elif row.hidden and index.column() in (2, 3):
                     if self.delegate.mask_hit(index, event.pos()):

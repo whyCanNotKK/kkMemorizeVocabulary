@@ -60,49 +60,54 @@ def test_total_counts_only_due_and_completed_today_including_final_stage(repo):
     assert repo.study_task_total(PM) == 2 and repo.study_tasks(PM) == []
 
 
-def test_task_counter_shows_remaining_over_stable_total_on_right(window, repo, qtbot, monkeypatch, tmp_path):
+def test_task_counter_shows_completed_over_stable_total_on_right(window, repo, qtbot, monkeypatch, tmp_path):
     entries = seed(repo)
     monkeypatch.setattr(StudyContext, "now", classmethod(lambda cls: AM))
     window.set_filter("study17")
     page = window.study_page
     qtbot.wait(20)
     assert page.period_label.text() == AM.label
-    assert page.task_count.accessibleName() == "当前单词任务：3/3"
-    assert page.task_count.alignment() & Qt.AlignmentFlag.AlignRight
-    assert page.task_count.geometry().right() >= page.width() - 20
+    assert page.new_count.accessibleName() == '新词：0/3'
+    assert page.review_count.accessibleName() == '复习：0/0'
+    assert page.new_count.alignment() & Qt.AlignmentFlag.AlignRight
+    assert page.refresh_button.geometry().right() < page.period_label.geometry().left()
+    assert page.elapsed_label.geometry().right() < page.timer_button.geometry().left()
+    assert page.new_count.geometry().right() < page.completed_button.geometry().left()
+    assert page.completed_button.geometry().right() >= page.width() - 20
     page.complete(entries[0].id, "study")
-    assert page.task_count.accessibleName() == "当前单词任务：2/3"
+    assert page.new_count.accessibleName() == '新词：1/3'
     window.grab().save(str(tmp_path / "study-task-counter.png"))
-    assert page.reload() and page.task_count.accessibleName() == "当前单词任务：2/3"
+    assert page.reload() and page.new_count.accessibleName() == '新词：1/3'
     window.set_filter("pending")
     window.set_filter("study17")
-    assert page.task_count.accessibleName() == "当前单词任务：2/3"
+    assert page.new_count.accessibleName() == '新词：1/3'
     for entry in entries[1:]:
         page.complete(entry.id, "study")
-    assert page.task_count.accessibleName() == "当前单词任务：0/3"
+    assert page.new_count.accessibleName() == '新词：3/3'
     monkeypatch.setattr(StudyContext, "now", classmethod(lambda cls: PM))
-    assert page.reload() and page.task_count.accessibleName() == "当前单词任务：3/3"
+    assert page.reload() and page.new_count.accessibleName() == '新词：0/3'
     for entry in entries:
         page.complete(entry.id, "study")
-    assert page.task_count.accessibleName() == "当前单词任务：0/3"
-    assert page.reload() and page.task_count.accessibleName() == "当前单词任务：0/3"
+    assert page.new_count.accessibleName() == '新词：3/3'
+    assert page.reload() and page.new_count.accessibleName() == '新词：3/3'
 
 
 def test_counter_empty_and_failures_preserve_previous_value(window, repo, monkeypatch):
     monkeypatch.setattr(StudyContext, "now", classmethod(lambda cls: AM))
     window.set_filter("study17")
     page = window.study_page
-    assert page.task_count.accessibleName() == "当前单词任务：0/0"
+    assert page.new_count.accessibleName() == '新词：0/0'
+    assert page.review_count.accessibleName() == '复习：0/0'
     entry = seed(repo, 1)[0]
     assert page.load(StudyContext(DAY + timedelta(days=1), False), generate=True)
-    before = page.task_count.text()
+    before = page.new_count.text()
 
-    def fail(*args):
+    def fail(*args, **kwargs):
         raise OSError("locked")
 
     monkeypatch.setattr(repo, "complete_study", fail)
     page.complete(entry.id, "study")
-    assert page.task_count.text() == before
+    assert page.new_count.text() == before
     monkeypatch.setattr(repo, "study_task_total", fail)
     assert not page.load(AM)
-    assert page.task_count.text() == before and len(page.tasks) == 1
+    assert page.new_count.text() == before and len(page.tasks) == 1

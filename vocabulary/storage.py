@@ -8,7 +8,8 @@ import sqlite3
 from .domain import (DEFAULT_SHORTCUTS, DuplicateWord, RelatedWord, Sense, WordEntry,
                      clean_entry, same_entry_content)
 from .transfer import ImportConflict, ImportResult
-from .learning import STAGE_GAPS, StudyContext, StudyDrawSettings, StudyTask, next_stage, study_due
+from .learning import (STAGE_GAPS, StudyContext, StudyDrawSettings, StudyTask,
+                       StudyTaskHistory, next_stage, study_due, study_timestamp)
 from .study_transfer import RECORD_FIELDS, StudyBackup
 from .migration import migrate_database
 
@@ -252,8 +253,23 @@ class Repository:
         self.batch_update_sort_orders({entry.id: number for number, entry in enumerate(entries, 1)
                                        if entry.sort_order != number})
 
-    def delete(self, entry_id: int):
+    def delete(self, entry_id: int, context: StudyContext | None = None):
         with self.connection:
+            self.connection.execute('BEGIN IMMEDIATE')
+            context = context or StudyContext.now()
+            progress = self.connection.execute(
+                'SELECT * FROM memorize_vocabulary_17day WHERE word_id=?', (entry_id,)).fetchone()
+            history = self.study_task_history(context)
+            if progress is not None and history is not None:
+                completed_today = progress['last_completed_on'] == context.day.isoformat()
+                if completed_today or study_due(progress['stage'], progress['last_completed_on'], context.day):
+                    kind = ('new' if progress['stage'] == 1 or
+                            (completed_today and progress['stage'] == 2) else 'review')
+                    done = completed_today or progress['afternoon_done' if context.afternoon else 'morning_done']
+                    total = max(0, getattr(history, f'{kind}_total') - 1)
+                    count = min(total, max(0, getattr(history, f'{kind}_done') - int(bool(done))))
+                    self.connection.execute(f'''UPDATE study_task_history
+                        SET {kind}_total=?,{kind}_done=? WHERE id=?''', (total, count, history.id))
             self.connection.execute("DELETE FROM words WHERE id=?", (entry_id,))
 
     def set_flag(self, entry_id: int, flag: str, value: bool):
@@ -322,10 +338,21 @@ class Repository:
 
     def study_tasks(self, context: StudyContext) -> list[StudyTask]:
         flag = "afternoon_done" if context.afternoon else "morning_done"
-        rows = self.connection.execute(f"""SELECT word_id,group_number FROM memorize_vocabulary_17day
+        rows = self.connection.execute(f"""SELECT word_id,group_number,stage FROM memorize_vocabulary_17day
             WHERE {flag}=0 AND ({self._study_due_clause()})
             ORDER BY group_number,word_id""", (context.day.isoformat(),)).fetchall()
-        return [StudyTask(self.get(row["word_id"]), row["group_number"]) for row in rows]
+        return [StudyTask(self.get(row["word_id"]), row["group_number"], row['stage'] != 1) for row in rows]
+
+    def study_completed_tasks(self, context: StudyContext) -> list[StudyTask]:
+        flag = 'afternoon_done' if context.afternoon else 'morning_done'
+        day = context.day.isoformat()
+        rows = self.connection.execute(f'''SELECT word_id,group_number,stage,last_completed_on
+            FROM memorize_vocabulary_17day
+            WHERE ({flag}=1 AND ({self._study_due_clause()})) OR last_completed_on=?
+            ORDER BY group_number,word_id''', (day, day)).fetchall()
+        return [StudyTask(self.get(row['word_id']), row['group_number'],
+                          not (row['stage'] == 1 or (row['stage'] == 2 and row['last_completed_on'] == day)))
+                for row in rows]
 
     def study_task_total(self, context: StudyContext) -> int:
         # Completing both periods advances stage and clears flags; retain those words in today's total.
@@ -334,7 +361,45 @@ class Repository:
             WHERE ({self._study_due_clause()}) OR last_completed_on=?""", (day, day)).fetchone()[0]
 
     def has_study_progress(self) -> bool:
-        return self.connection.execute('SELECT 1 FROM memorize_vocabulary_17day LIMIT 1').fetchone() is not None
+        return (self.connection.execute('SELECT 1 FROM memorize_vocabulary_17day LIMIT 1').fetchone() is not None
+                or self.connection.execute('SELECT 1 FROM study_task_history LIMIT 1').fetchone() is not None)
+
+    def study_task_history(self, context: StudyContext) -> StudyTaskHistory | None:
+        row = self.connection.execute('SELECT * FROM study_task_history WHERE task_date=? AND afternoon=?',
+                                      (context.day.isoformat(), int(context.afternoon))).fetchone()
+        return StudyTaskHistory(**dict(row)) if row is not None else None
+
+    def study_task_histories(self) -> list[StudyTaskHistory]:
+        return [StudyTaskHistory(**dict(row)) for row in self.connection.execute(
+            'SELECT * FROM study_task_history ORDER BY task_date DESC,afternoon DESC')]
+
+    def _start_study_task(self, context, instant):
+        history = self.study_task_history(context)
+        if history is not None:
+            return history
+        flag = 'afternoon_done' if context.afternoon else 'morning_done'
+        rows = self.connection.execute(f'''SELECT stage FROM memorize_vocabulary_17day
+            WHERE {flag}=0 AND ({self._study_due_clause()})''', (context.day.isoformat(),)).fetchall()
+        if not rows:
+            return None
+        new = sum(row['stage'] == 1 for row in rows)
+        self.connection.execute('''INSERT INTO study_task_history
+            (task_date,afternoon,started_at,new_total,review_total) VALUES (?,?,?,?,?)''',
+            (context.day.isoformat(), int(context.afternoon), study_timestamp(instant), new, len(rows) - new))
+        return self.study_task_history(context)
+
+    def start_study_task(self, context: StudyContext, *, instant=None) -> StudyTaskHistory | None:
+        with self.connection:
+            self.connection.execute('BEGIN IMMEDIATE')
+            return self._start_study_task(context, instant)
+
+    def save_study_duration(self, context: StudyContext, duration_seconds: int):
+        if type(duration_seconds) is not int or duration_seconds < 0:
+            raise ValueError('任务时长必须是非负整数秒。')
+        with self.connection:
+            self.connection.execute('''UPDATE study_task_history SET duration_seconds=MAX(duration_seconds,?)
+                WHERE task_date=? AND afternoon=? AND status=0''',
+                (duration_seconds, context.day.isoformat(), int(context.afternoon)))
 
     def study_backup(self) -> StudyBackup:
         """Read entries, progress and generation markers from the same WAL snapshot."""
@@ -354,7 +419,9 @@ class Repository:
                 "SELECT value FROM settings WHERE key='study_last_add_new_vocabulary'").fetchone()
             counter = self.connection.execute(
                 "SELECT value FROM settings WHERE key='study17.group_counter'").fetchone()
-            return StudyBackup(words, records, last_draw[0] if last_draw else None, int(counter[0]) if counter else 0)
+            history = [dict(row) for row in self.connection.execute('SELECT * FROM study_task_history ORDER BY id')]
+            return StudyBackup(words, records, last_draw[0] if last_draw else None,
+                               int(counter[0]) if counter else 0, history)
 
     def replace_study_progress(self, backup: StudyBackup):
         """Resolve final local word IDs, then atomically replace progress and its settings."""
@@ -370,14 +437,22 @@ class Repository:
             self.connection.executemany('''INSERT INTO memorize_vocabulary_17day
                 (word_id,group_number,stage,morning_done,afternoon_done,last_completed_on)
                 VALUES (?,?,?,?,?,?)''', values)
+            self.connection.execute('DELETE FROM study_task_history')
+            for record in backup.task_history:
+                self.connection.execute('''INSERT INTO study_task_history
+                    (id,task_date,afternoon,started_at,ended_at,duration_seconds,status,
+                     new_total,review_total,new_done,review_done) VALUES (?,?,?,?,?,?,?,?,?,?,?)''',
+                    tuple(record[field] for field in StudyTaskHistory.__dataclass_fields__))
             self.connection.execute("DELETE FROM settings WHERE key IN ('study_last_add_new_vocabulary','study17.group_counter')")
             self.connection.executemany('INSERT INTO settings(key,value) VALUES (?,?)',
                 ([('study_last_add_new_vocabulary', backup.study_last_add_new_vocabulary)]
                  if backup.study_last_add_new_vocabulary is not None else [])
                 + [('study17.group_counter', str(backup.group_counter))])
 
-    def complete_study(self, word_id: int, context: StudyContext):
+    def complete_study(self, word_id: int, context: StudyContext, *, duration_seconds=0, instant=None) -> StudyTaskHistory | bool:
         """Apply the page's frozen date/period; a duplicate completion is a no-op."""
+        if type(duration_seconds) is not int or duration_seconds < 0:
+            raise ValueError('任务时长必须是非负整数秒。')
         with self.connection:
             self.connection.execute("BEGIN IMMEDIATE")
             row = self.connection.execute(
@@ -386,7 +461,10 @@ class Repository:
                 raise ValueError("该单词的学习记录已不存在，请刷新。")
             flag = "afternoon_done" if context.afternoon else "morning_done"
             if not study_due(row['stage'], row['last_completed_on'], context.day) or row[flag]:
-                return
+                return False
+            history = self._start_study_task(context, instant)
+            if history.status:
+                raise ValueError('当前时段的任务已经完成，请刷新学习任务。')
             if not context.afternoon:
                 self.connection.execute("""UPDATE memorize_vocabulary_17day
                     SET morning_done=1,afternoon_done=0 WHERE word_id=?""", (word_id,))
@@ -398,6 +476,19 @@ class Repository:
                 self.connection.execute("""UPDATE memorize_vocabulary_17day
                     SET morning_done=0,afternoon_done=0,last_completed_on=?,
                         stage=? WHERE word_id=?""", (context.day.isoformat(), stage, word_id))
+            kind = 'new' if row['stage'] == 1 else 'review'
+            finished = self.connection.execute(f'''SELECT 1 FROM memorize_vocabulary_17day
+                WHERE {flag}=0 AND ({self._study_due_clause()}) LIMIT 1''',
+                (context.day.isoformat(),)).fetchone() is None
+            if finished:
+                self.connection.execute(f'''UPDATE study_task_history
+                    SET {kind}_done=MIN({kind}_total,{kind}_done+1),
+                        duration_seconds=MAX(duration_seconds,?),status=1,ended_at=? WHERE id=?''',
+                    (duration_seconds, study_timestamp(instant), history.id))
+            else:
+                self.connection.execute(f'''UPDATE study_task_history
+                    SET {kind}_done=MIN({kind}_total,{kind}_done+1) WHERE id=?''', (history.id,))
+            return self.study_task_history(context)
 
     def write_shortcuts(self, values: dict[str, str]):
         with self.connection:

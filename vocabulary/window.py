@@ -19,6 +19,7 @@ from .shortcuts import SettingsDialog, ShortcutManager
 from .table import WordTable, WordTableModel
 from .review_navigation import ReviewKeyRouter
 from .study_page import StudyPage
+from .study_history import StudyHistoryPanel
 from .learning import StudyContext
 from .study_transfer import StudyBackup, read_study_backup, read_word_or_study_file, write_study_backup
 from .theme import ACCENT, GOLD, MUTED, icon
@@ -119,6 +120,7 @@ class MainWindow(QMainWindow):
         self.table.editPreparationRequested.connect(self.prepare_list_edit)
         list_layout.addWidget(self.table, 1)
         self.study_page = StudyPage(repository, self.commit_cell)
+        self.destroyed.connect(self.study_page.timer.dispose)
         self.study_page.table.delegate.editingChanged.connect(self.inline_changed)
         self.study_page.table.editPreparationRequested.connect(self.prepare_list_edit)
         self.study_page.table.copyRequested.connect(self.copy_text)
@@ -215,6 +217,8 @@ class MainWindow(QMainWindow):
         footer.addWidget(self.save_button)
         editor_layout.addLayout(footer)
         layout.addWidget(editor_panel)
+        self.history_panel = StudyHistoryPanel(repository, self.study_page.timer, root)
+        layout.addWidget(self.history_panel)
         self._editor_resize_timer = QTimer(self)
         self._editor_resize_timer.setSingleShot(True)
         self._editor_resize_timer.timeout.connect(self.update_editor_height)
@@ -237,6 +241,8 @@ class MainWindow(QMainWindow):
             fixed[action] = (f"Alt+{number}", f"Ctrl+{number}")
             callbacks[action] = lambda key=key: self.set_filter(key)
             self.filter_buttons[key].setToolTip(" / ".join(fixed[action]))
+        callbacks = {name: lambda callback=callback: self.run_keyboard_action(callback)
+                     for name, callback in callbacks.items()}
         self.shortcuts = ShortcutManager(repository, self, callbacks, fixed=fixed)
         self.shortcuts.changed.connect(self.refresh_shortcut_labels)
         self.form_drag = FormReorderDrag(self.form_scroll, lambda: self.blocks, self._can_change_form)
@@ -320,6 +326,7 @@ class MainWindow(QMainWindow):
         self.search_box.setVisible(not studying)
         self.editor_panel.setVisible(not studying)
         self.editor_panel.setEnabled(not studying)
+        self.history_panel.setVisible(studying)
         for control, label in ((self.import_button, '导入学习进度' if studying else '导入单词'),
                                (self.export_button, '导出学习进度' if studying else '导出当前页面所有单词')):
             control.setToolTip(label)
@@ -580,6 +587,11 @@ class MainWindow(QMainWindow):
         if self.filter_name != 'study17' or action == self.save_current:
             return action()
 
+    def run_keyboard_action(self, callback):
+        # Native IME-compatible shortcuts can consume the key before Qt sees it.
+        self.study_page.timer.note_activity()
+        return callback()
+
     def current_table(self):
         return self.study_page.table if self.filter_name == 'study17' else self.table
 
@@ -587,7 +599,9 @@ class MainWindow(QMainWindow):
         self.schedule_editor_resize()
         chain = [*self.filter_buttons.values(), self.settings_button, self.search_box, self.global_hide_button,
                  self.import_button, self.export_button, self.table,
-                 self.study_page.refresh_button, self.study_page.table, self.collapse_button]
+                 self.study_page.refresh_button, self.study_page.timer_button, self.study_page.completed_button,
+                 self.study_page.table,
+                 self.history_panel.collapse_button, self.history_panel.table, self.collapse_button]
         for block in self.blocks:
             chain.extend(block.input_order())
         chain.extend([self.add_related_button, self.remove_related_button,
@@ -887,7 +901,9 @@ class MainWindow(QMainWindow):
             elif action == "trash":
                 if not confirm_remove(self, f"删除 {entry.text} 及其全部释义和关联词？"):
                     return
-                self.repository.delete(entry_id)
+                self.repository.delete(entry_id, self.study_page.context or StudyContext.now())
+                if self.study_page.context is not None:
+                    self.study_page.load(self.study_page.context)
                 self.revealed.discard(entry_id)
                 self.show_notice(f"已删除 {entry.text}")
             self.refresh()
@@ -1033,7 +1049,7 @@ class MainWindow(QMainWindow):
     def choose_study_import_mode(self):
         dialog = QMessageBox(self)
         dialog.setWindowTitle('导入学习进度')
-        dialog.setText('导入学习进度将覆盖本机全部学习进度，请选择导入方式。'
+        dialog.setText('导入学习进度将覆盖本机全部学习进度及任务历史，请选择导入方式。'
                        if self.repository.has_study_progress() else '文件包含学习进度，请选择导入方式。')
         full = dialog.addButton('导入单词和进度', QMessageBox.ButtonRole.AcceptRole)
         words = dialog.addButton('仅导入单词', QMessageBox.ButtonRole.ActionRole)
@@ -1065,6 +1081,8 @@ class MainWindow(QMainWindow):
                 return
             if not self.current_table().delegate.submit() or not self.resolve_dirty():
                 return
+            if mode == 'full':
+                self.study_page.timer.pause()
             result = run_repository_task(self.repository, self.busy_overlay,
                                          '正在导入单词…', 'import_entries', backup.words)
             if self.edit_id is not None:
@@ -1073,9 +1091,10 @@ class MainWindow(QMainWindow):
             if mode == 'full':
                 run_repository_task(self.repository, self.busy_overlay,
                                     '正在恢复学习进度…', 'replace_study_progress', backup)
+                self.study_page.timer.reset()
                 self.study_page.revealed.clear()
                 self.study_page.load(StudyContext.now())
-                status = f'已恢复 {len(backup.records)} 条学习进度。'
+                status = f'已恢复 {len(backup.records)} 条学习进度及 {len(backup.task_history)} 条任务历史。'
             else:
                 self.study_page.load(self.study_page.context or StudyContext.now())
                 status = '本机学习进度已保留。'
@@ -1105,11 +1124,20 @@ class MainWindow(QMainWindow):
             self.toast.dismiss()
         if hasattr(self, "_editor_resize_timer"):
             self.schedule_editor_resize()
+        if hasattr(self, 'history_panel'):
+            self.history_panel.update_height()
 
     def closeEvent(self, event):
         if not self.current_table().delegate.submit() or not self.resolve_dirty():
             event.ignore()
             return
+        try:
+            self.study_page.timer.pause()
+        except Exception as error:
+            self.show_notice(str(error), True)
+            event.ignore()
+            return
+        self.study_page.timer.dispose()
         self._closing = True
         event.accept()
 

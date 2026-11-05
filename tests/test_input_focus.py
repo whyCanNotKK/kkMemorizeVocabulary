@@ -181,3 +181,55 @@ def test_pos_save_failure_keeps_popup_and_retries(inline, repo, qtbot, monkeypat
     monkeypatch.setattr(repo, "save", save)
     qtbot.keyClick(editor.view(), Qt.Key.Key_Return)
     assert table.delegate.editor is None and repo.get(entry.id).senses[0].pos == "v."
+
+
+@pytest.mark.parametrize('background', ['toolbar', 'label', 'window_margin', 'history_header'])
+def test_background_click_releases_button_focus_without_changing_its_checked_state(
+        window, qtbot, monkeypatch, background):
+    monkeypatch.setattr(StudyContext, 'now', classmethod(lambda cls: StudyContext(date(2026, 11, 5), False)))
+    window.set_filter('study17')
+    page = window.study_page
+    qtbot.mouseClick(page.completed_button, Qt.MouseButton.LeftButton)
+    assert page.completed_button.hasFocus() and page.show_completed
+    target, position = {
+        'toolbar': (page, QPoint(page.width() // 2, page.completed_button.geometry().center().y())),
+        'label': (page.period_label, page.period_label.rect().center()),
+        'window_margin': (window.centralWidget(), QPoint(4, 4)),
+        'history_header': (window.history_panel.title, window.history_panel.title.rect().center()),
+    }[background]
+    qtbot.mouseClick(target, Qt.MouseButton.LeftButton, pos=position)
+    assert not page.completed_button.hasFocus()
+    assert QApplication.focusWidget() is window
+    assert page.show_completed and page.completed_button.isChecked()
+    assert page.completed_button.focusPolicy() & Qt.FocusPolicy.TabFocus
+    page.completed_button.setFocus(Qt.FocusReason.TabFocusReason)
+    assert page.completed_button.hasFocus()
+
+
+def test_background_focus_release_keeps_tab_selection_and_keyboard_shortcuts(window, qtbot):
+    qtbot.mouseClick(window.filter_buttons['all'], Qt.MouseButton.LeftButton)
+    assert window.filter_name == 'all' and window.filter_buttons['all'].hasFocus()
+    qtbot.mouseClick(window.centralWidget(), Qt.MouseButton.LeftButton, pos=QPoint(4, 4))
+    assert not window.filter_buttons['all'].hasFocus() and window.filter_name == 'all'
+    qtbot.keyClick(window, Qt.Key.Key_1, Qt.KeyboardModifier.AltModifier)
+    assert window.filter_name == 'pending'
+
+
+def test_interactive_clicks_and_input_drafts_keep_their_focus_behavior(window, qtbot):
+    editor = window.blocks[0].word
+    editor.setText('unfinished draft')
+    window.save_button.setFocus()
+    qtbot.mouseClick(editor, Qt.MouseButton.LeftButton)
+    assert editor.hasFocus()
+    qtbot.mouseClick(window.centralWidget(), Qt.MouseButton.LeftButton, pos=QPoint(4, 4))
+    assert editor.hasFocus() and editor.text() == 'unfinished draft'
+    window.global_hide_button.setFocus()
+    qtbot.mouseClick(window.table.viewport(), Qt.MouseButton.LeftButton, pos=QPoint(15, 20))
+    assert not window.global_hide_button.hasFocus() and window.table.hasFocus()
+
+
+def test_passive_form_scroll_background_releases_button_focus(window, qtbot):
+    window.save_button.setFocus()
+    qtbot.mouseClick(window.form_content, Qt.MouseButton.LeftButton,
+                     pos=QPoint(window.form_content.width() - 2, window.form_content.height() - 2))
+    assert not window.save_button.hasFocus()

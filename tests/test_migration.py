@@ -16,7 +16,7 @@ from vocabulary.storage import Repository
 ROOT = Path(__file__).resolve().parents[1]
 
 
-@pytest.mark.parametrize('start', range(6))
+@pytest.mark.parametrize('start', range(migration.SCHEMA_VERSION + 1))
 def test_each_start_version_runs_only_remaining_steps_and_commits_each(start, monkeypatch):
     connection = sqlite3.connect(':memory:')
     connection.execute('PRAGMA foreign_keys=ON')
@@ -60,7 +60,7 @@ def test_failed_step_keeps_previously_committed_versions_and_can_resume(tmp_path
     assert connection.execute("SELECT name FROM sqlite_master WHERE name='memorize_vocabulary_17day'").fetchone() is None
     assert connection.execute("SELECT value FROM settings WHERE key='partial'").fetchone() is None
     migration.migrate_database(connection)
-    assert connection.execute('PRAGMA user_version').fetchone()[0] == 5
+    assert connection.execute('PRAGMA user_version').fetchone()[0] == migration.SCHEMA_VERSION
     connection.close()
 
 
@@ -97,11 +97,11 @@ def test_missing_script_never_advances_version(tmp_path, monkeypatch):
 
 def test_higher_version_is_rejected_before_loading_scripts(monkeypatch):
     connection = sqlite3.connect(':memory:')
-    connection.execute('PRAGMA user_version=6')
+    connection.execute(f'PRAGMA user_version={migration.SCHEMA_VERSION + 1}')
     monkeypatch.setattr(migration, 'read_migration', lambda name: pytest.fail('must not run SQL scripts'))
     with pytest.raises(RuntimeError):
         migration.migrate_database(connection)
-    assert connection.execute('PRAGMA user_version').fetchone()[0] == 6
+    assert connection.execute('PRAGMA user_version').fetchone()[0] == migration.SCHEMA_VERSION + 1
     assert not connection.in_transaction
     connection.close()
 
@@ -137,7 +137,7 @@ def test_sql_resources_work_from_an_installed_zip_package(tmp_path):
         'print(connection.execute("PRAGMA user_version").fetchone()[0])', str(package)],
         capture_output=True, text=True, timeout=20)
     assert result.returncode == 0, result.stderr
-    assert result.stdout.strip() == '5'
+    assert result.stdout.strip() == str(migration.SCHEMA_VERSION)
     configuration = tomllib.loads((ROOT / 'pyproject.toml').read_text(encoding='utf-8'))
     assert 'migrations/*.sql' in configuration['tool']['setuptools']['package-data']['vocabulary']
 
@@ -156,7 +156,7 @@ def test_release_verifier_checks_packaged_sql_collection_and_content(tmp_path, d
     elif damage == 'extra':
         (directory / 'obsolete.sql').write_text('SELECT 1;', encoding='utf-8')
     if damage is None:
-        assert verify_migrations(tmp_path) == 5
+        assert verify_migrations(tmp_path) == migration.SCHEMA_VERSION
     else:
         with pytest.raises(AssertionError):
             verify_migrations(tmp_path)

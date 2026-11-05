@@ -57,6 +57,10 @@ QScrollBar:vertical { background: transparent; width: 10px; margin: 0; }
 QScrollBar::handle:vertical { background: #485362; border-radius: 4px; min-height: 28px; }
 QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0; }
 QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical { background: transparent; }
+QScrollBar:horizontal { background: transparent; height: 10px; margin: 0; }
+QScrollBar::handle:horizontal { background: #485362; border-radius: 4px; min-width: 28px; }
+QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal { width: 0; }
+QScrollBar::add-page:horizontal, QScrollBar::sub-page:horizontal { background: transparent; }
 QToolTip { background: #303a47; color: #e8edf4; border: 1px solid #566779; padding: 7px; }
 QFrame#wordBlock { border: none; background: transparent; }
 QFrame#wordSeparator { border: none; background: #343e4a; }
@@ -101,8 +105,10 @@ def draw_symbol(p: QPainter, name: str, rect: QRectF, color: str):
             points.append(QPointF(math.cos(angle) * radius, math.sin(angle) * radius))
         p.setBrush(QColor(color))
         p.drawPolygon(QPolygonF(points))
-    elif name == "circle":
+    elif name in {"circle", "circle_check"}:
         p.drawEllipse(QRectF(-8, -8, 16, 16))
+        if name == "circle_check":
+            p.drawPolyline(QPolygonF([QPointF(-4, 0), QPointF(-1, 3), QPointF(4, -3)]))
     elif name == "plus_circle":
         p.drawEllipse(QRectF(-9, -9, 18, 18))
         p.drawLine(QPointF(-4, 0), QPointF(4, 0))
@@ -133,6 +139,30 @@ def draw_symbol(p: QPainter, name: str, rect: QRectF, color: str):
         p.drawPolygon(QPolygonF([QPointF(-10, 0), QPointF(-5, -6), QPointF(5, -6),
                                 QPointF(10, 0), QPointF(5, 6), QPointF(-5, 6)]))
         p.drawEllipse(QRectF(-3, -3, 6, 6))
+    elif name == "task_cross":
+        p.drawLine(QPointF(-6, -6), QPointF(6, 6))
+        p.drawLine(QPointF(-6, 6), QPointF(6, -6))
+    elif name == "task_check":
+        p.drawPolyline(QPolygonF([QPointF(-8, 0), QPointF(-2, 6), QPointF(8, -6)]))
+    elif name == "task_forward":
+        p.setPen(Qt.PenStyle.NoPen)
+        p.setBrush(QColor(color))
+        for x in (-9, 0):
+            p.drawPolygon(QPolygonF([QPointF(x, -7), QPointF(x + 9, 0), QPointF(x, 7)]))
+    elif name == "stopwatch":
+        p.drawEllipse(QRectF(-8, -6, 16, 16))
+        p.drawLine(QPointF(-3, -10), QPointF(3, -10))
+        p.drawLine(QPointF(0, -10), QPointF(0, -6))
+        p.drawLine(QPointF(6, -4), QPointF(8, -6))
+        p.drawLine(QPointF(7, -7), QPointF(9, -5))
+        p.drawLine(QPointF(0, 2), QPointF(0, -3))
+    elif name == "play":
+        p.setBrush(QColor(color))
+        p.drawPolygon(QPolygonF([QPointF(-5, -8), QPointF(8, 0), QPointF(-5, 8)]))
+    elif name == "pause":
+        p.setPen(QPen(QColor(color), 3.0, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap))
+        p.drawLine(QPointF(-4, -7), QPointF(-4, 7))
+        p.drawLine(QPointF(4, -7), QPointF(4, 7))
     elif name == "refresh":
         p.drawArc(QRectF(-8, -8, 16, 16), 45 * 16, 285 * 16)
         p.drawPolyline(QPolygonF([QPointF(1, -7), QPointF(6, -7), QPointF(6, -12)]))

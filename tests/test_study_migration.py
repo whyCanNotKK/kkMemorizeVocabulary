@@ -22,6 +22,7 @@ def legacy_database(tmp_path, version, dates=('2026-10-28', '2026-10-30', '2026-
     repo.close()
     connection = sqlite3.connect(path)
     connection.executescript('''
+        DROP TABLE study_task_history;
         DROP TABLE memorize_vocabulary_17day;
         CREATE TABLE memorize_vocabulary_17day (
             word_id INTEGER PRIMARY KEY REFERENCES words(id) ON DELETE CASCADE,
@@ -57,7 +58,7 @@ def test_real_legacy_upgrade_preserves_progress_settings_and_drops_old_columns(t
     path, words, before = legacy_database(tmp_path, version, dates)
     repo = Repository(path)
     try:
-        assert repo.connection.execute('PRAGMA user_version').fetchone()[0] == 5
+        assert repo.connection.execute('PRAGMA user_version').fetchone()[0] == 7
         assert [row['name'] for row in repo.connection.execute('PRAGMA table_info(memorize_vocabulary_17day)')] == COLUMNS
         rows = repo.connection.execute('SELECT * FROM memorize_vocabulary_17day ORDER BY word_id').fetchall()
         assert [tuple(row) for row in rows] == [
@@ -83,7 +84,7 @@ def test_real_legacy_upgrade_preserves_progress_settings_and_drops_old_columns(t
     reopened = Repository(path)
     try:
         assert reopened.study_backup() == snapshot
-        assert reopened.connection.execute('PRAGMA user_version').fetchone()[0] == 5
+        assert reopened.connection.execute('PRAGMA user_version').fetchone()[0] == 7
     finally:
         reopened.close()
 

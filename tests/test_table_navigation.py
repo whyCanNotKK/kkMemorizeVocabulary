@@ -392,7 +392,7 @@ def test_study_enter_completion_failure_keeps_word_selected(review_list, window,
     table.setCurrentIndex(index_for(table, entries[0]))
     table.setFocus()
 
-    def fail(*args):
+    def fail(*args, **kwargs):
         raise OSError("无法保存学习进度")
 
     monkeypatch.setattr(repo, "complete_study", fail)
@@ -553,7 +553,7 @@ def test_completing_final_study_word_leaves_clean_empty_list(review_list, window
     assert not table.currentIndex().isValid()
     assert not table.selectionModel().hasSelection()
     assert table.hasFocus()
-    assert page.task_count.accessibleName() == f"当前单词任务：0/{len(entries)}"
+    assert page.new_count.accessibleName() == f"新词：{len(entries)}/{len(entries)}"
     assert "没有待完成的单词" in table.empty_text
     for key in (Qt.Key.Key_Return, Qt.Key.Key_Enter, Qt.Key.Key_Space, Qt.Key.Key_S):
         qtbot.keyClick(table, key)

@@ -61,7 +61,9 @@ def test_export_only_participants_including_future_done_and_completed(repo):
                for record in exported.records.values())
     assert any(record['afternoon_done'] for record in exported.records.values())
     assert repo.study_backup() == before
-    assert 'word_id' not in content and '"id"' not in content
+    assert 'word_id' not in content
+    assert all('id' not in word for word in json.loads(content)['words'])
+    assert exported.task_history == before.task_history
     assert all(entry.id is None for entry in exported.words)
     assert exported.words[0].senses == before.words[0].senses
     assert exported.words[0].related == before.words[0].related
@@ -141,10 +143,10 @@ def test_empty_snapshot_clears_progress_and_replaces_markers_but_keeps_words(sou
     assert source.study_backup().study_last_add_new_vocabulary is None
 
 
-@pytest.mark.parametrize('version', [1, 2])
+@pytest.mark.parametrize('version', [1, 2, 3, 4])
 def test_old_study_file_is_rejected(document, version):
     document['version'] = version
-    with pytest.raises(ValidationError, match='version: 3'):
+    with pytest.raises(ValidationError, match='version: 5'):
         parse_study_backup(json.dumps(document))
 
 
@@ -187,7 +189,7 @@ def test_invalid_backup_rejected_before_import(document, corruption):
 def test_duplicate_json_keys_custom_groups_and_bad_stage_dates(document):
     content = json.dumps(document)
     with pytest.raises(ValidationError):
-        parse_study_backup(content.replace('"version": 3', '"version": 3, "version": 3'))
+        parse_study_backup(content.replace('"version": 5', '"version": 5, "version": 5'))
     large_group = deepcopy(document)
     for i in range(10):
         name = f'beta{i}'

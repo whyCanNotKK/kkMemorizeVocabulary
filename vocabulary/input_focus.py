@@ -1,8 +1,10 @@
-"""Place newly focused inputs at the end without changing ongoing editing."""
+"""Input caret placement and passive-background button focus handling."""
 import shiboken6
 from PySide6.QtCore import QEvent, QObject, Qt, QTimer
 from PySide6.QtGui import QTextCursor
-from PySide6.QtWidgets import QApplication, QAbstractSpinBox, QLineEdit, QPlainTextEdit, QTextEdit, QWidget
+from PySide6.QtWidgets import (QAbstractButton, QAbstractItemView, QAbstractSlider,
+                              QApplication, QAbstractSpinBox, QComboBox, QKeySequenceEdit,
+                              QLineEdit, QPlainTextEdit, QScrollArea, QTextEdit, QWidget)
 
 
 class InputFocusPolicy(QObject):
@@ -44,6 +46,8 @@ class InputFocusPolicy(QObject):
         self._move_to_end(self._input(new))
 
     def eventFilter(self, source, event):
+        if event.type() == QEvent.Type.MouseButtonPress:
+            self._release_button_on_background(source)
         if event.type() == QEvent.Type.FocusIn:
             editor = self._input(source)
             if editor is not None and (event.reason() == Qt.FocusReason.MouseFocusReason
@@ -52,6 +56,26 @@ class InputFocusPolicy(QObject):
                 # Mouse clicks and spin boxes place/select text after delivering focus.
                 QTimer.singleShot(0, lambda: self._finish_focus(editor))
         return False
+
+    def _release_button_on_background(self, source):
+        app = QApplication.instance()
+        focused = app.focusWidget()
+        if (not isinstance(source, QWidget) or not isinstance(focused, QAbstractButton)
+                or source.window() is not self.window or focused.window() is not self.window
+                or app.activeModalWidget() or app.activePopupWidget()):
+            return
+        widget = source
+        while widget is not self.window:
+            if isinstance(widget, (QAbstractButton, QAbstractItemView, QAbstractSlider,
+                                   QAbstractSpinBox, QComboBox, QKeySequenceEdit,
+                                   QLineEdit, QPlainTextEdit, QTextEdit)):
+                return
+            if widget.focusPolicy() != Qt.FocusPolicy.NoFocus and not isinstance(widget, QScrollArea):
+                return
+            widget = widget.parentWidget()
+        # Keep the window focused so application shortcuts still have an owner.
+        # Checkable buttons retain their actual on/off state.
+        self.window.setFocus(Qt.FocusReason.MouseFocusReason)
 
     def _finish_focus(self, editor):
         if shiboken6.isValid(editor):

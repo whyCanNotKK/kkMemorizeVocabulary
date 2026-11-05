@@ -1,8 +1,9 @@
-"""Dedicated study projection; refreshing is the only way to change its clock."""
-from PySide6.QtCore import QModelIndex, Qt, Signal
+"""Study projection with a frozen date/period and a separate live task clock."""
+from PySide6.QtCore import QModelIndex, QSize, Qt, QTimer, Signal
 from PySide6.QtWidgets import QHBoxLayout, QLabel, QVBoxLayout, QWidget
 
-from .learning import StudyContext
+from .learning import StudyContext, format_study_duration
+from .study_timer import StudyTimer
 from .table import WordTable, WordTableModel
 from .theme import ACCENT, MUTED, icon
 from .widgets import button
@@ -16,10 +17,14 @@ class StudyPage(QWidget):
         self.repository = repository
         self.context = None
         self.tasks = []
+        self.completed_tasks = []
+        self.show_completed = False
         self.total_tasks = 0
         self.revealed = set()
         self._known_ids = set()
         self.global_hidden = True
+        self.timer = StudyTimer(repository, self)
+        self.timer.error.connect(self.error)
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         toolbar = QHBoxLayout()
@@ -27,18 +32,44 @@ class StudyPage(QWidget):
         self.refresh_button.setIcon(icon("refresh"))
         self.refresh_button.setFixedSize(36, 36)
         self.refresh_button.setAccessibleName("刷新十七天背单词任务")
-        self.refresh_button.setToolTip("重新读取任务，并更新操作日期和上午/下午时段")
+        self.refresh_button.setToolTip("刷新")
         self.refresh_button.clicked.connect(self.reload)
         toolbar.addWidget(self.refresh_button)
+        self.timer_button = button('', quiet=True)
+        self.timer_button.setFixedSize(36, 36)
+        self.timer_button.clicked.connect(self.toggle_timer)
         self.period_label = QLabel()
         self.period_label.setObjectName("muted")
         toolbar.addWidget(self.period_label)
+        self.elapsed_icon = QLabel()
+        self.elapsed_icon.setPixmap(icon('stopwatch').pixmap(20, 20))
+        self.elapsed_icon.setFixedSize(20, 20)
+        self.elapsed_icon.setToolTip('用时')
+        self.elapsed_icon.setAccessibleName('用时')
+        toolbar.addWidget(self.elapsed_icon)
+        self.elapsed_label = QLabel('0 s')
+        self.elapsed_label.setObjectName('muted')
+        toolbar.addWidget(self.elapsed_label)
+        toolbar.addWidget(self.timer_button)
         toolbar.addStretch()
-        self.task_count = QLabel()
-        self.task_count.setTextFormat(Qt.TextFormat.RichText)
-        self.task_count.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-        toolbar.addWidget(self.task_count)
+        self.review_count = QLabel()
+        self.new_count = QLabel()
+        for label in (self.review_count, self.new_count):
+            label.setTextFormat(Qt.TextFormat.RichText)
+            label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+            toolbar.addWidget(label)
+        self.completed_button = button('', quiet=True)
+        self.completed_button.setFixedSize(36, 36)
+        self.completed_button.setIconSize(QSize(20, 20))
+        self.completed_button.setCheckable(True)
+        self.completed_button.clicked.connect(self.toggle_completed)
+        toolbar.addWidget(self.completed_button)
+        self.timer.changed.connect(self.update_timer_button)
+        self.timer.changed.connect(self.update_task_count)
+        self.timer.changed.connect(self.update_elapsed)
+        self.update_timer_button()
         self.update_task_count()
+        self.update_completed_button()
         layout.addLayout(toolbar)
         self.model = WordTableModel(edit_callback, self)
         self.model.study_groups = {}
@@ -48,6 +79,9 @@ class StudyPage(QWidget):
         self.table.revealRequested.connect(self.reveal)
         self.table.actionRequested.connect(self.complete)
         layout.addWidget(self.table)
+        self._clock_display = QTimer(self)
+        self._clock_display.setInterval(1000)
+        self._clock_display.timeout.connect(self.update_elapsed)
 
     def reload(self):
         return self.load(StudyContext.now(), generate=True)
@@ -59,39 +93,89 @@ class StudyPage(QWidget):
             tasks = (self.repository.prepare_study(context) if generate else
                      self.repository.study_tasks(context))
             total = self.repository.study_task_total(context)
+            completed = self.repository.study_completed_tasks(context) if self.show_completed else []
+            self.timer.bind(context)
+            if not tasks:
+                self.timer.pause()
         except Exception as error:
             self.error.emit(str(error))
             return False
         self.context, self.tasks = context, tasks
+        self.completed_tasks = completed
         self.total_tasks = total
         ids = {task.entry.id for task in tasks}
         if not self.global_hidden:
             self.revealed.update(ids - self._known_ids)
         self._known_ids.update(ids)
+        if self.show_completed:
+            self.revealed.update(task.entry.id for task in completed)
         self.period_label.setText(context.label)
         self.render()
         return True
 
     def render(self):
         self.update_task_count()
+        self.update_timer_button()
+        self.update_elapsed()
+        visible = self.tasks + (self.completed_tasks if self.show_completed else [])
         with self.table.preserve_view():
-            self.model.study_groups = {task.entry.id: task.group_number for task in self.tasks}
+            self.model.study_groups = {task.entry.id: task.group_number for task in visible}
+            self.model.study_completed_ids = {task.entry.id for task in self.completed_tasks}
             # Group numbers can grow beyond the original star column's width.
             width = max((self.table.fontMetrics().horizontalAdvance(str(task.group_number)) + 20
-                         for task in self.tasks), default=38)
+                         for task in visible), default=38)
             self.table.setColumnWidth(0, max(38, width))
-            self.model.populate([task.entry for task in self.tasks], self.revealed)
+            self.model.populate([task.entry for task in visible], self.revealed)
             self.table.update_spans()
 
     def update_task_count(self):
-        remaining = len(self.tasks)
-        self.task_count.setText(
-            f'<span style="color:{MUTED}">当前单词任务：</span>'
-            f'<span style="color:{ACCENT};font-size:22px;font-weight:700">{remaining}</span>'
-            f'<span style="color:{MUTED}">/{self.total_tasks}</span>')
-        self.task_count.setAccessibleName(f"当前单词任务：{remaining}/{self.total_tasks}")
+        history = self.timer.history
+        review_total = history.review_total if history else sum(task.is_review for task in self.tasks)
+        new_total = history.new_total if history else len(self.tasks) - review_total
+        for label, text, done, total in (
+                (self.review_count, '复习', history.review_done if history else 0, review_total),
+                (self.new_count, '新词', history.new_done if history else 0, new_total)):
+            label.setText(f'<span style="color:{MUTED}">{text}：</span>'
+                          f'<span style="color:{ACCENT};font-size:22px;font-weight:700">{done}</span>'
+                          f'<span style="color:{MUTED}">/{total}</span>')
+            label.setAccessibleName(f'{text}：{done}/{total}')
+
+    def update_elapsed(self):
+        duration = format_study_duration(self.timer.duration_seconds())
+        self.elapsed_label.setText(duration)
+        self.elapsed_label.setAccessibleName(f'用时：{duration}')
+
+    def update_completed_button(self):
+        text = '隐藏已完成' if self.show_completed else '显示已完成'
+        self.completed_button.setIcon(icon('circle_check' if self.show_completed else 'circle',
+                                           ACCENT if self.show_completed else MUTED))
+        self.completed_button.setToolTip(text)
+        self.completed_button.setAccessibleName(text)
+        self.completed_button.setChecked(self.show_completed)
+        self.completed_button.setProperty('active', self.show_completed)
+        self.completed_button.style().unpolish(self.completed_button)
+        self.completed_button.style().polish(self.completed_button)
+
+    def toggle_completed(self, show):
+        if not self.table.delegate.submit():
+            self.completed_button.setChecked(self.show_completed)
+            return
+        try:
+            completed = self.repository.study_completed_tasks(self.context) if show and self.context else []
+        except Exception as error:
+            self.completed_button.setChecked(self.show_completed)
+            self.error.emit(str(error))
+            return
+        self.show_completed = show
+        self.completed_tasks = completed
+        self.revealed.update(task.entry.id for task in completed)
+        self.update_completed_button()
+        self.render()
 
     def reveal(self, word_id, expanded):
+        if expanded and word_id not in self.revealed and any(task.entry.id == word_id for task in self.tasks):
+            if not self.start_timer():
+                return
         if expanded:
             self.revealed.add(word_id)
         else:
@@ -102,7 +186,7 @@ class StudyPage(QWidget):
 
     def set_global_hidden(self, hidden):
         self.global_hidden = hidden
-        ids = {task.entry.id for task in self.tasks}
+        ids = {task.entry.id for task in self.tasks + (self.completed_tasks if self.show_completed else [])}
         if hidden:
             self.revealed.difference_update(ids)
         else:
@@ -115,13 +199,30 @@ class StudyPage(QWidget):
             return
         if not self.table.delegate.submit():
             return
+        # A paused task resumes as a lifecycle transition, including a retry of a
+        # failed pause save. The first mark still creates its record atomically.
+        if self.timer.history is not None and not self.timer.running and not self.start_timer():
+            return
         try:
-            self.repository.complete_study(word_id, self.context)
+            # A first mark creates history and applies progress in one transaction.
+            # Do not create the record separately as a prerequisite of this write.
+            duration = self.timer.duration_seconds()
+            history = self.repository.complete_study(word_id, self.context, duration_seconds=duration)
+            if not history:
+                self.load(self.context)
+                return
+            self.timer.completed(history)
         except Exception as error:
             self.error.emit(str(error))
             return
+        completed = self.tasks[position]
         self.tasks = [task for task in self.tasks if task.entry.id != word_id]
-        self.revealed.discard(word_id)
+        if self.show_completed:
+            self.completed_tasks.append(completed)
+            self.completed_tasks.sort(key=lambda task: (task.group_number, task.entry.id))
+            self.revealed.add(word_id)
+        else:
+            self.revealed.discard(word_id)
         self.render()
         if self.tasks:
             target = self.tasks[min(position, len(self.tasks) - 1)]
@@ -130,3 +231,37 @@ class StudyPage(QWidget):
             self.table.clearSelection()
             self.table.setCurrentIndex(QModelIndex())
         self.table.setFocus()
+
+    def update_timer_button(self):
+        history = self.timer.history
+        text = ('暂停' if self.timer.running else '继续' if history is not None else '开始背单词')
+        if history is not None and history.status:
+            text = '任务已完成'
+        self.timer_button.setIcon(icon('pause' if self.timer.running else 'play'))
+        self.timer_button.setToolTip(text)
+        self.timer_button.setAccessibleName(text)
+        self.timer_button.setEnabled(bool(self.tasks) and not (history is not None and history.status))
+
+    def start_timer(self):
+        try:
+            return self.timer.start()
+        except Exception as error:
+            self.error.emit(str(error))
+            return False
+
+    def toggle_timer(self):
+        if not self.table.delegate.submit():
+            return
+        if self.timer.running:
+            self.timer.suspend()
+        else:
+            self.start_timer()
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        self.update_elapsed()
+        self._clock_display.start()
+
+    def hideEvent(self, event):
+        self._clock_display.stop()
+        super().hideEvent(event)

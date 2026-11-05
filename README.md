@@ -2,129 +2,23 @@
 
 **English** | [简体中文](README.zh-CN.md)
 
-An offline vocabulary notebook for Windows, with grouped definitions, hidden-answer review, and a dedicated **seventeen-day study** page. Built with Python, PySide6 / Qt Widgets, and SQLite. All data stays on your computer.
+An offline vocabulary notebook for Windows 10/11 x64, with a Chinese interface. Organize your own words and definitions, hide answers for review, and study with a seventeen-day review schedule. Your data stays on your computer.
 
-[Download releases](https://github.com/whyCanNotKK/kkMemorizeVocabulary/releases) · [Project design (Chinese)](docs/项目设计说明.md)
+## Install
 
-## Features
+1. Open [Releases](https://github.com/whyCanNotKK/kkMemorizeVocabulary/releases/latest).
+2. Download **kkMemorizeVocabulary-Setup.exe** from **Assets**.
+3. Run the installer, then open the app from the Start menu or its desktop shortcut.
 
-- **Seventeen-day study**: daily new words, fixed groups, morning and afternoon sessions, and scheduled reviews.
-- **Organized vocabulary**: multiple definitions, multiline translations, related words, stars, and To learn / Learned categories.
-- **Clearer interface**: a dark theme, aligned definitions with vertical guides, whole-entry selection, and a collapsible entry form.
-- **Quick review**: click to reveal answers or copy a word; navigate by keyboard and keep your scroll position when switching tabs.
-- **Easy editing and ordering**: edit cells directly, search words and translations, drag entries, or shuffle the To learn list.
-- **Local storage and exchange**: saved entries, study progress, order, and custom shortcuts persist locally; JSON import/export includes duplicate comparison.
+The installer includes the required runtime; you do not need to install Python separately.
 
-Supports Windows 10/11 x64. The interface is currently in Chinese. Packaged builds include Python and Qt and run offline.
+## Add your vocabulary
 
-## Seventeen-day study
+**No vocabulary list or dictionary is bundled. You need to enter or import your own words and definitions.**
 
-1. Add words to **待记** (To learn), then open **十七天背单词** in the morning. By default, the app randomly draws up to **30 new words per day**, in **3 groups of up to 10**, without redrawing or topping up that day's batch.
-2. Complete each round in the morning, then again in the afternoon. Stages are **days 1, 2, 4, 7, and 15**; later reviews follow gaps of 1, 2, 3, and 8 days from the actual completed round. Missed sessions retain their progress.
-3. With a word selected and the study list focused, press **Enter** to reveal its answers; press again to mark it done and select the next word.
+- **Enter words:** fill in the word, part of speech and definition in the entry form, then save. Multiple definitions and related words are supported.
+- **Import words:** use the import button to load a JSON vocabulary file supported by this app. You can export your entries for reuse or backup.
 
-Double-click a word name, a revealed part of speech, or a definition to edit it directly, including related words. Press Enter, leave the cell, or use the save shortcut to save to the same vocabulary entry used by ordinary tabs; Shift+Enter adds a newline in definitions and Esc cancels. These editing keys work in all four lists. Learning groups and progress are preserved.
+Once words are in **待记** (To learn), open **十七天背单词** to start studying.
 
-Sessions use **Beijing time (UTC+8), with the afternoon starting at 15:00**. Refresh or reenter the page after a period or date change. Study progress is separate from the ordinary Learned status; finished words are excluded from future draws.
-
-The period row shows **当前单词任务：remaining/total** at the far right, with the remaining count emphasized. The total includes tasks already completed in that period and remains accurate after refresh or restart.
-
-In **设置 → 十七天背单词设置**, customize words per group (default 10) and new groups per day (default 3), each from 1 to 1000. The daily new-word limit is their product. Click **完成** to save; changes persist after restart and apply to future daily draws. Existing groups, today's batch, and review progress stay as they are. Study imports retain local draw preferences.
-
-The study page imports and exports participating words and their progress. Ordinary tabs also recognize valid study files and offer Words and progress, Words only, or Cancel, even when no local progress exists. The study page accepts study files only.
-
-## Get started
-
-Download a build from [Releases](https://github.com/whyCanNotKK/kkMemorizeVocabulary/releases), when available:
-
-- **Installer**: run `kkMemorizeVocabulary-Setup.exe`.
-- **Portable**: extract `kkMemorizeVocabulary-windows-x64.zip` and run `kkMemorizeVocabulary.exe`. Keep the complete folder, including `_internal`.
-
-GitHub's **Download ZIP** contains source code. The root `BuildInstaller.exe` builds the app from source; it is a developer tool.
-
-### Run from source
-
-Use Windows x64 and Python 3.12 x64. In PowerShell:
-
-```powershell
-git clone https://github.com/whyCanNotKK/kkMemorizeVocabulary.git
-cd kkMemorizeVocabulary
-py -3.12 -m venv .venv
-.\.venv\Scripts\python.exe -m pip install -r requirements.lock.txt
-.\.venv\Scripts\python.exe main.py --data-dir artifacts\development
-```
-
-This uses an isolated development database. For everyday use with the default data directory, omit `--data-dir` or double-click `start.bat` after setup.
-
-## Common controls
-
-The entry form keeps an independent draft across tab switches and list cell edits. Loading another word into the form asks how to handle that draft. Saving preserves unrelated list changes and retains the draft if both editors changed the same part differently.
-
-For new words, Clear resets the form only after confirmation. For existing entries, Cancel discards unsaved edits and returns to a blank new-word form after confirmation, keeping the saved entry unchanged. Both dialogs default to Cancel and place Cancel over the original action button, so an accidental second click cancels.
-
-Definition editors grow with explicit newlines or wrapped text and shrink when content is removed, both in lists and in the entry form. List editors keep within the visible table area and scroll internally for very long text; the entry form grows up to half the window and then scrolls its input area.
-
-Enter a word, part of speech, and translation in the bottom form, then save with **Ctrl+Enter**. Add more definitions or related words as needed. Single-click a word or definition to copy its full text after the system double-click interval. Double-click or right-click a word, part of speech, or definition to edit it without copying; single-clicking a part of speech only selects it. Hold a part of speech to reorder its definition; dragging word or definition text has no action. The eye button hides or reveals answers in the current tab.
-
-When answers are hidden, either left-click or right-click the gray answer mask or the space directly above or below it within the same row to reveal the whole entry. The target keeps the mask's horizontal width. This click only reveals, without editing or copying.
-
-Revealing one entry keeps the list still when its main word, definitions, and related words fit in view. If they extend below the list, it scrolls just enough to show the whole entry. Entries taller than the list start at the top, keeping the main word visible while you scroll through the rest. Keyboard reveals follow the same rule.
-
-Newly focused inputs place the cursor at the end of their content. Double-click a part of speech in any list to open a popup centered on its label, with all choices visible. Click a choice, press 1–9 or n/v/a, or use arrow keys and Enter to save immediately and close the popup; Esc cancels.
-
-Hold a related word's bent-arrow icon to drag that word and all its definitions within the same parent. This works in all four lists (including search results) and in the entry form. Lists save the order immediately; the form saves it with the entry. Press Esc or release outside the related-word area to cancel.
-
-In any list, hold a visible part-of-speech label to drag it with its definition within the same main or related word. This uses the same reorder animation, works in search, and saves on release. All drag previews appear without an extra outline. Press Esc or release outside that word's definitions to cancel. Double-clicking the label still opens its editor.
-
-In the entry form, each definition has a drag handle, a circled plus to insert a definition after it, and a trash icon to delete it. Hover the icons for current shortcuts; deletion is disabled for the last definition. Drag a definition together with its part of speech within the same word, then save the entry to keep the order. The footer's add-related action appears while the form has focus; delete appears only when a related word is the current target. Ctrl+N inserts after the focused word and Ctrl+M deletes the focused related word. Focusing the main word inserts at the start and hides delete. Individual related-word blocks have no remove button. Search hides the shuffle button until the query is cleared.
-
-| Key | Action |
-| --- | --- |
-| Alt+1 / 2 / 3 / 4 or Ctrl+1 / 2 / 3 / 4 | Switch to To learn / All / Learned / Seventeen-day study, keeping the entry draft |
-| W / S or Up / Down | Previous / next main word, with the list focused |
-| Space | Hide / reveal the selected entry, outside search |
-| Enter | Reveal / complete the selected word on the study page |
-| F2 | Edit the selected row's definition; reveal it first if hidden |
-| Tab / Shift+Tab while editing | Save and edit the next / previous word, part of speech, or definition |
-| Ctrl+Up / Ctrl+Down | Scroll without moving the selection |
-| Down in search / Up at the first result | Focus the first result / return to editing a nonempty search |
-| Ctrl+Enter | Save the entry or current cell edit |
-| Ctrl+E | Show / hide all definitions in the current tab (configurable in Settings) |
-| Ctrl+N / Ctrl+J | Add a related word / definition in the entry form |
-| Ctrl+M | Delete the focused related word |
-| Ctrl+K | Delete the focused definition; do nothing when no definition has focus |
-
-Common entry shortcuts can be changed in **设置** (Settings). Search covers main words, related words, and translations; main-word dragging and shuffling are disabled during search.
-
-## Data and backups
-
-The default database is `%LOCALAPPDATA%\kkMemorizeVocabulary\vocabulary.sqlite3`. **Close the app before copying it** for a complete backup of entries, study progress, and settings. Program updates keep this data directory.
-
-Use JSON to exchange entries or study progress. Ordinary tabs export all entries matching the current category and search, including those outside the viewport. Each file type accepts only the latest format implemented by this app (currently word v2 and study v3); older and unknown newer formats are rejected. Importing study progress replaces existing local study progress; choose **仅导入单词** (Words only) to keep it.
-
-Ordinary tabs validate the complete file before processing drafts or writing data. Invalid structures, content, encoding, or versions display “数据结构不合法，导入失败”. Valid study files reuse the selected file without a second picker; recognition and cancellation do not switch tabs, draw words, or change drafts or data. Restoring progress reloads tasks without drawing new words.
-
-Import skips an existing entry when its spelling, ordered definitions and related words, important flag, and learned status all match after trimming surrounding whitespace. These entries do not appear in the duplicate comparison list or count as conflicts. Case, internal whitespace and list order remain significant; IDs and sort numbers are ignored. Study progress can still be restored when the words themselves match.
-
-Import and export display a translucent window-wide overlay with a rotating indicator and a short status message while processing files or data. Controls and closing are blocked during each task; file pickers, import choices and results remain interactive between tasks. This also applies to adopting duplicate entries and exchanging study progress.
-
-Use `--data-dir <directory>` to store data elsewhere, including with a portable build.
-
-## Development and builds
-
-Tests use temporary databases. The smoke check requires an isolated data directory:
-
-```powershell
-.\.venv\Scripts\python.exe -m pytest -q
-.\.venv\Scripts\python.exe main.py --smoke-test --data-dir artifacts\source-smoke
-```
-
-Double-click **BuildInstaller.exe** or run:
-
-```powershell
-powershell -ExecutionPolicy Bypass -File build.ps1
-```
-
-The build prepares dependencies, runs tests, packages and verifies the app, and writes the installer and portable ZIP to `dist/`. Source setup and the first build require internet access.
-
-See the [project design](docs/项目设计说明.md) for detailed behavior, architecture, and data formats, and the [acceptance record](docs/验收记录.md) for verification history (both in Chinese).
+For source setup, testing and builds, see the [development guide (Chinese)](docs/开发指南.md).
