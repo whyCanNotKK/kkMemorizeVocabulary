@@ -202,11 +202,11 @@ def test_v2_migration_and_newer_version_rejected(tmp_path):
     repo.close()
     repo = Repository(path)
     try:
-        assert repo.connection.execute('PRAGMA user_version').fetchone()[0] == 8
+        assert repo.connection.execute('PRAGMA user_version').fetchone()[0] == 10
         assert repo.get(entry.id) == entry
         assert repo.shortcuts()['save'] == 'Alt+S'
         assert len(repo.prepare_study(AM)) == 1
-        repo.connection.execute('PRAGMA user_version=9')
+        repo.connection.execute('PRAGMA user_version=11')
     finally:
         repo.close()
     with pytest.raises(RuntimeError):

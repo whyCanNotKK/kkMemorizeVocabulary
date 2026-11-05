@@ -14,7 +14,7 @@ class WordNameEditor(QLineEdit):
         layout = QVBoxLayout(self.panel)
         layout.setContentsMargins(4, 4, 4, 4)
         self.phonetic = QLineEdit()
-        self.phonetic.setPlaceholderText("音标（可选）")
+        self.phonetic.setPlaceholderText("音标")
         self.phonetic.setAccessibleName("单词音标")
         self.phonetic.setContextMenuPolicy(Qt.ContextMenuPolicy.PreventContextMenu)
         layout.addWidget(self.phonetic)

@@ -365,7 +365,7 @@ def test_v5_upgrade_does_not_invent_history_and_failed_v6_leaves_v5_intact(tmp_p
     upgraded = Repository(path)
     try:
         assert upgraded.study_task_histories() == []
-        assert upgraded.connection.execute('PRAGMA user_version').fetchone()[0] == 8
+        assert upgraded.connection.execute('PRAGMA user_version').fetchone()[0] == 10
     finally:
         upgraded.close()
 

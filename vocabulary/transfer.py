@@ -5,7 +5,7 @@ import os
 from pathlib import Path
 import tempfile
 
-from .domain import POS_OPTIONS, RelatedWord, Sense, ValidationError, WordEntry
+from .domain import POS_OPTIONS, RelatedWord, Sense, ValidationError, WordEntry, normalize_pos
 
 
 FORMAT = "kkMemorizeVocabulary"
@@ -42,9 +42,10 @@ def _object(value, fields, label):
     return value
 
 
-def _text(value, label):
-    if not isinstance(value, str) or not value.strip():
-        raise ValidationError(f"{label}：必须是非空文本。")
+def _text(value, label, *, allow_empty=False):
+    if not isinstance(value, str) or (not allow_empty and not value.strip()):
+        requirement = "文本（允许为空）" if allow_empty else "非空文本"
+        raise ValidationError(f"{label}：必须是{requirement}。")
     return value
 
 
@@ -65,10 +66,10 @@ def _senses(value, label):
     for number, item in enumerate(_array(value, label, nonempty=True), 1):
         location = f"{label} {number}"
         _object(item, ("pos", "translation"), location)
-        pos = _text(item["pos"], location + " 词性")
+        pos = normalize_pos(_text(item["pos"], location + " 词性"))
         if pos not in {code for code, _ in POS_OPTIONS}:
             raise ValidationError(f"{location}：不支持的词性 {pos}。")
-        senses.append(Sense(pos, _text(item["translation"], location + " 翻译")))
+        senses.append(Sense(pos, _text(item["translation"], location + " 翻译", allow_empty=True)))
     return senses
 
 

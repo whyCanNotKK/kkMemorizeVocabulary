@@ -4,7 +4,7 @@ from dataclasses import dataclass, field
 POS_OPTIONS = (
     ("n.", "名词"), ("v.", "动词"), ("adj.", "形容词"),
     ("adv.", "副词"), ("prep.", "介词"), ("pron.", "代词"),
-    ("conj.", "连词"), ("interj.", "感叹词"), ("其他", "其他"),
+    ("conj.", "连词"), ("interj.", "感叹词"), ("else", "其他"),
 )
 DEFAULT_SHORTCUTS = {
     "add_related": "Ctrl+N", "remove_related": "Ctrl+M",
@@ -17,6 +17,11 @@ SHORTCUT_LABELS = {
     "add_sense": "新增释义", "remove_sense": "删除释义",
     "save": "保存单词", "important": "设置单词‘重点/非重点’",
     "toggle_visibility": "显示/隐藏 所有释义",
+}
+CLEANUP_COMMANDS = {
+    "delete study record": "删除学习记录。",
+    "clean vocabulary only": "删除学习记录不包含的词汇。",
+    "remove all": "删除所有学习记录和所有词汇。",
 }
 
 
@@ -61,17 +66,22 @@ class DuplicateWord(ValidationError):
         super().__init__("这个主词已经存在，当前输入已保留。")
 
 
+def normalize_pos(pos: str) -> str:
+    """Keep the previous Chinese POS code readable in drafts and JSON backups."""
+    return 'else' if pos == '其他' else pos
+
+
 def clean_senses(senses: list[Sense], label: str) -> list[Sense]:
     result = []
     for sense in senses:
-        pos, translation = sense.pos.strip(), sense.translation.strip()
+        pos, translation = normalize_pos(sense.pos.strip()), sense.translation.strip()
         if not pos and not translation:
             continue
-        if pos not in {item[0] for item in POS_OPTIONS} or not translation:
-            raise ValidationError(f"{label}：请补齐词性和翻译。")
+        if pos not in {item[0] for item in POS_OPTIONS}:
+            raise ValidationError(f"{label}：请选择词性，翻译可留空。")
         result.append(Sense(pos, translation))
     if not result:
-        raise ValidationError(f"{label}：至少需要一条完整释义。")
+        raise ValidationError(f"{label}：至少需要一条已选择词性的释义，翻译可留空。")
     return result
 
 

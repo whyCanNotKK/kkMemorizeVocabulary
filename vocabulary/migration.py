@@ -12,6 +12,8 @@ MIGRATIONS = (
     '006_task_history.sql',
     '007_duration_seconds.sql',
     '008_phonetic.sql',
+    '009_optional_translation.sql',
+    '010_else_pos.sql',
 )
 SCHEMA_VERSION = len(MIGRATIONS)
 

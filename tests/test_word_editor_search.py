@@ -194,4 +194,4 @@ def test_form_columns_are_horizontal_aligned_and_sized(window, repo, qtbot):
         area = pos.style().subControlRect(QStyle.ComplexControl.CC_ComboBox, option,
                                          QStyle.SubControl.SC_ComboBoxEditField, pos)
         assert area.width() >= max(pos.fontMetrics().horizontalAdvance(text)
-                                   for text in ("选择词性", "interj."))
+                                   for text in ("else", "interj."))

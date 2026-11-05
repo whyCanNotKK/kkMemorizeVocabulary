@@ -59,15 +59,15 @@ def test_incomplete_draft_does_not_stop_tab_switch(window, repo, qtbot, modifier
 def test_tab_switch_submits_inline_edit_and_blocks_invalid_input(window, repo, qtbot, modifier):
     saved = repo.save(WordEntry("original", [Sense("n.", "原词")]))
     window.reveal(saved.id, True)
-    window.table.edit(window.model.index(0, 3))
+    window.table.edit(window.model.index(0, 1))
     editor = window.table.delegate.editor
-    editor.setPlainText("")
+    editor.setText("")
     press_tab(window, qtbot, 2, modifier)
     assert window.filter_name == "pending" and window.table.delegate.editor is editor
-    editor.setPlainText("新释义")
+    editor.setText("new name")
     press_tab(window, qtbot, 2, modifier)
     assert window.filter_name == "all" and window.table.delegate.editor is None
-    assert repo.get(saved.id).senses[0].translation == "新释义"
+    assert repo.get(saved.id).text == "new name"
 
 
 def test_mouse_tab_switch_preserves_draft(window, qtbot, monkeypatch):

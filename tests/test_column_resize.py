@@ -222,7 +222,7 @@ def test_reset_widths_survive_refresh_and_tabs_but_new_window_uses_defaults(resi
 def test_invalid_inline_edit_blocks_drag_and_reset(resize_list, qtbot):
     table, entry, page = resize_list
     drag_boundary(qtbot, table, 1, 60)
-    index = table._entry_index(entry.id, column=3)
+    index = table._entry_index(entry.id, column=1)
     table.scrollTo(index)
     table.edit(index)
     editor = table.delegate.editor
@@ -232,4 +232,4 @@ def test_invalid_inline_edit_blocks_drag_and_reset(resize_list, qtbot):
         drag_boundary(qtbot, table, column, -50)
         double_boundary(qtbot, table, column)
         assert [table.columnWidth(i) for i in range(5)] == widths
-        assert table.delegate.editor is editor and not editor.toPlainText()
+        assert table.delegate.editor is editor and not editor.text()

@@ -5,7 +5,7 @@ import json
 import random
 import sqlite3
 
-from .domain import (DEFAULT_SHORTCUTS, DuplicateWord, RelatedWord, Sense, WordEntry,
+from .domain import (CLEANUP_COMMANDS, DEFAULT_SHORTCUTS, DuplicateWord, RelatedWord, Sense, WordEntry,
                      clean_entry, same_entry_content)
 from .transfer import ImportConflict, ImportResult
 from .learning import (STAGE_GAPS, StudyContext, StudyDrawSettings, StudyTask,
@@ -272,6 +272,24 @@ class Repository:
                     self.connection.execute(f'''UPDATE study_task_history
                         SET {kind}_total=?,{kind}_done=? WHERE id=?''', (total, count, history.id))
             self.connection.execute("DELETE FROM words WHERE id=?", (entry_id,))
+
+    def clear_content(self, command: str):
+        """Clear the requested scope atomically, including dependent word content."""
+        if command not in CLEANUP_COMMANDS:
+            raise ValueError("无效的清空命令。")
+        with self._transaction() as counters:
+            self.connection.execute('BEGIN IMMEDIATE')
+            if command == 'clean vocabulary only':
+                self.connection.execute('''DELETE FROM words WHERE NOT EXISTS
+                    (SELECT 1 FROM memorize_vocabulary_17day WHERE word_id=words.id)''')
+            elif command == 'remove all':
+                self.connection.execute('DELETE FROM words')
+                counters[:] = [0, 0]
+            if command != 'clean vocabulary only':
+                self.connection.execute('DELETE FROM memorize_vocabulary_17day')
+                self.connection.execute('DELETE FROM study_task_history')
+                self.connection.execute('''DELETE FROM settings WHERE key IN
+                    ('study_last_add_new_vocabulary', 'study17.group_counter')''')
 
     def set_flag(self, entry_id: int, flag: str, value: bool):
         if flag not in {"important", "learned"}:

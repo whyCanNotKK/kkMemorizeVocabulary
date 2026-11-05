@@ -72,7 +72,7 @@ def test_blank_extra_rows_are_ignored_but_partial_rows_rejected(repo):
     entry.related.append(RelatedWord())
     saved = repo.save(entry)
     assert len(saved.senses) == 2 and len(saved.related) == 2
-    entry.senses.append(Sense("n.", ""))
+    entry.senses.append(Sense("", "有翻译但未选词性"))
     with pytest.raises(ValidationError):
         repo.save(entry)
 

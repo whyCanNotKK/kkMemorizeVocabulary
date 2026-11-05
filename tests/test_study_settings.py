@@ -4,7 +4,7 @@ import sqlite3
 
 import pytest
 from PySide6.QtCore import Qt
-from PySide6.QtWidgets import QDialog, QLabel, QMessageBox, QPushButton
+from PySide6.QtWidgets import QLabel, QMessageBox, QPushButton
 
 from vocabulary.domain import Sense, ValidationError, WordEntry
 from vocabulary.learning import StudyContext, StudyDrawSettings
@@ -30,7 +30,7 @@ def test_defaults_and_preferences_survive_restart_without_changing_other_setting
         assert reopened.study_draw_settings() == StudyDrawSettings(12, 4)
         assert reopened.shortcuts()['save'] == 'Alt+S'
         assert reopened.study_backup().group_counter == 0
-        assert reopened.connection.execute('PRAGMA user_version').fetchone()[0] == 8
+        assert reopened.connection.execute('PRAGMA user_version').fetchone()[0] == 10
     finally:
         reopened.close()
 
@@ -108,37 +108,41 @@ def test_settings_section_order_save_and_reopen(window, repo, qtbot):
     assert titles['十七天背单词设置'].y() < titles['快捷键设置'].y()
     assert (dialog.words_per_group.value(), dialog.groups_per_day.value()) == (10, 3)
     dialog.words_per_group.setValue(12)
+    assert repo.study_draw_settings() == StudyDrawSettings(12, 3)
     dialog.groups_per_day.setValue(4)
-    assert repo.study_draw_settings() == StudyDrawSettings()
-    done = next(button for button in dialog.findChildren(QPushButton) if button.text() == '完成')
-    qtbot.mouseClick(done, Qt.MouseButton.LeftButton)
-    assert dialog.result() == QDialog.DialogCode.Accepted
+    assert not any(button.text() == '完成' for button in dialog.findChildren(QPushButton))
     assert repo.study_draw_settings() == StudyDrawSettings(12, 4)
+    assert dialog.isVisible()
+    dialog.close()
+    reopened = Repository(repo.path)
+    try:
+        assert reopened.study_draw_settings() == StudyDrawSettings(12, 4)
+    finally:
+        reopened.close()
     assert repo.study_backup().study_last_add_new_vocabulary is None
     again = SettingsDialog(window.shortcuts, window)
     qtbot.addWidget(again)
     assert (again.words_per_group.value(), again.groups_per_day.value()) == (12, 4)
 
 
-def test_settings_cancel_and_shortcut_restore_leave_draw_preferences_unchanged(window, repo, qtbot):
+def test_settings_close_and_shortcut_restore_keep_immediate_draw_changes(window, repo, qtbot):
     repo.write_study_draw_settings(StudyDrawSettings(12, 4))
     dialog = SettingsDialog(window.shortcuts, window)
     qtbot.addWidget(dialog)
     dialog.show()
     dialog.words_per_group.setValue(5)
     dialog.restore()
-    assert repo.study_draw_settings() == StudyDrawSettings(12, 4)
+    assert repo.study_draw_settings() == StudyDrawSettings(5, 4)
     qtbot.keyClick(dialog, Qt.Key.Key_Escape)
     assert not dialog.isVisible()
-    assert repo.study_draw_settings() == StudyDrawSettings(12, 4)
+    assert repo.study_draw_settings() == StudyDrawSettings(5, 4)
 
 
-def test_settings_save_failure_preserves_dialog_input_and_database(window, repo, qtbot, monkeypatch):
+def test_settings_save_failure_restores_last_persisted_values(window, repo, qtbot, monkeypatch):
     dialog = SettingsDialog(window.shortcuts, window)
     qtbot.addWidget(dialog)
     dialog.show()
     dialog.words_per_group.setValue(12)
-    dialog.groups_per_day.setValue(4)
 
     def fail(settings):
         raise sqlite3.OperationalError('disk full')
@@ -146,11 +150,32 @@ def test_settings_save_failure_preserves_dialog_input_and_database(window, repo,
     monkeypatch.setattr(repo, 'write_study_draw_settings', fail)
     errors = []
     monkeypatch.setattr(QMessageBox, 'critical', lambda parent, title, message: errors.append(message))
-    dialog.accept()
+    dialog.groups_per_day.setValue(4)
     assert dialog.isVisible()
-    assert (dialog.words_per_group.value(), dialog.groups_per_day.value()) == (12, 4)
+    assert (dialog.words_per_group.value(), dialog.groups_per_day.value()) == (12, 3)
     assert 'disk full' in errors[0]
-    assert repo.study_draw_settings() == StudyDrawSettings()
+    assert repo.study_draw_settings() == StudyDrawSettings(12, 3)
+    monkeypatch.undo()
+    dialog.groups_per_day.setValue(5)
+    assert repo.study_draw_settings() == StudyDrawSettings(12, 5)
+
+
+def test_typing_valid_study_setting_saves_without_leaving_input(window, repo, qtbot):
+    dialog = SettingsDialog(window.shortcuts, window)
+    qtbot.addWidget(dialog)
+    dialog.show()
+    dialog.activateWindow()
+    qtbot.waitUntil(dialog.hasFocus)
+    dialog.words_per_group.setFocus()
+    qtbot.waitUntil(dialog.words_per_group.hasFocus)
+    editor = dialog.words_per_group.lineEdit()
+    editor.selectAll()
+    qtbot.keyClicks(editor, '24')
+    assert dialog.words_per_group.hasFocus()
+    assert repo.study_draw_settings() == StudyDrawSettings(24, 3)
+    qtbot.keyClick(editor, Qt.Key.Key_Return)
+    assert dialog.isVisible()
+    assert dialog._recording is None
 
 
 def test_settings_open_without_input_focus_and_background_click_clears_focus(window, qtbot):

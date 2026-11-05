@@ -3,7 +3,7 @@ import shiboken6
 from PySide6.QtCore import QEvent, QRect, Qt, Signal
 from PySide6.QtWidgets import QApplication, QFrame, QListWidget, QListWidgetItem, QVBoxLayout, QWidget
 
-from .domain import POS_OPTIONS
+from .domain import POS_OPTIONS, normalize_pos
 
 
 def pos_shortcut(event, current):
@@ -69,6 +69,7 @@ class PosPicker(QWidget):
         return item.data(Qt.ItemDataRole.UserRole) if item is not None else self._value
 
     def set_pos(self, value):
+        value = normalize_pos(value)
         self._value = value
         self.options.setCurrentRow(next((i for i, (code, label) in enumerate(POS_OPTIONS) if code == value), -1))
 

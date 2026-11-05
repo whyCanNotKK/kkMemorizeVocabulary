@@ -12,6 +12,7 @@ from PySide6.QtWidgets import (
 from .domain import SHORTCUT_LABELS, DuplicateWord, ValidationError, WordEntry
 from .busy_overlay import BusyOverlay
 from .draft_reset_dialog import DraftResetDialog
+from .unsaved_input_dialog import UnsavedInputDialog
 from .import_dialog import ImportConflictDialog
 from .input_focus import InputFocusPolicy
 from .form_reorder import FormReorderDrag
@@ -25,7 +26,7 @@ from .study_transfer import StudyBackup, read_study_backup, read_word_or_study_f
 from .theme import ACCENT, GOLD, MUTED, icon
 from .transfer import write_entries
 from .transfer_jobs import run_repository_task
-from .widgets import INPUT_SPACING, PHONETIC_WIDTH, POS_WIDTH, WORD_WIDTH, FloatingNotice, WordBlock, button, confirm_remove
+from .widgets import FloatingNotice, WordBlock, button, confirm_remove
 
 
 class MainWindow(QMainWindow):
@@ -166,16 +167,6 @@ class MainWindow(QMainWindow):
         editor_layout.setContentsMargins(0, 0, 0, 0)
         editor_layout.setSpacing(10)
         panel_layout.addWidget(self.editor_body, 1)
-        labels = QHBoxLayout()
-        labels.setContentsMargins(0, 0, 6, 0)
-        labels.setSpacing(INPUT_SPACING)
-        for text, width in (("单词", WORD_WIDTH), ("音标", PHONETIC_WIDTH), ("词性", POS_WIDTH), ("翻译", 0)):
-            label = QLabel(text)
-            label.setObjectName("muted")
-            if width:
-                label.setFixedWidth(width)
-            labels.addWidget(label, 1 if not width else 0)
-        editor_layout.addLayout(labels)
         self.form_scroll = QScrollArea()
         self.form_scroll.setWidgetResizable(True)
         self.form_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
@@ -803,21 +794,18 @@ class MainWindow(QMainWindow):
     def resolve_dirty(self):
         if not self.is_dirty():
             return True
-        dialog = QMessageBox(self)
-        dialog.setWindowTitle("保留当前输入？")
-        dialog.setText("当前表单还有未保存的内容。")
-        save = dialog.addButton("保存", QMessageBox.ButtonRole.AcceptRole)
-        discard = dialog.addButton("放弃", QMessageBox.ButtonRole.DestructiveRole)
-        cancel = dialog.addButton("取消", QMessageBox.ButtonRole.RejectRole)
-        dialog.setDefaultButton(cancel)
-        dialog.setEscapeButton(cancel)
-        dialog.exec()
-        if dialog.clickedButton() is save:
-            return self._save_form()
-        if dialog.clickedButton() is discard:
-            self.reset_form()
-            return True
-        return False
+        dialog = UnsavedInputDialog(self)
+        try:
+            if dialog.exec() != QDialog.DialogCode.Accepted:
+                return False
+            if dialog.choice == 'save':
+                return self._save_form()
+            if dialog.choice == 'discard':
+                self.reset_form()
+                return True
+            return False
+        finally:
+            dialog.deleteLater()
 
     def cancel_form(self):
         if self.edit_id is None and not self.is_dirty():
@@ -943,7 +931,7 @@ class MainWindow(QMainWindow):
         previous = (self._last_form_focus if not self.form_collapsed else None) or QApplication.focusWidget()
         self.shortcuts.set_suspended(True)
         try:
-            dialog = SettingsDialog(self.shortcuts, self)
+            dialog = SettingsDialog(self.shortcuts, self, clear_content=self.clear_content)
             dialog.exec()
             dialog.deleteLater()
         finally:
@@ -954,6 +942,24 @@ class MainWindow(QMainWindow):
                 # Qt restores the modal parent's old focus during dialog teardown.
                 # Reapply our last input target after that restoration completes.
                 QTimer.singleShot(0, lambda: self.restore_input_focus(previous))
+
+    def clear_content(self, command):
+        self.repository.clear_content(command)
+        if command != 'clean vocabulary only':
+            # Reset only after commit, so a failed deletion retains the active clock.
+            self.study_page.timer.reset()
+            self.study_page.revealed.clear()
+            self.study_page._known_ids.clear()
+        entries = self.repository.list_entries()
+        remaining_ids = {entry.id for entry in entries}
+        self.revealed.intersection_update(remaining_ids)
+        for hidden in self._search_hidden.values():
+            hidden.intersection_update(remaining_ids)
+        if self.edit_id is not None and self.edit_id not in remaining_ids:
+            self.reset_form()
+        self.study_page.load(self.study_page.context or StudyContext.now())
+        self.history_panel.refresh()
+        self.refresh(entries)
 
     def export_words(self):
         if self.busy_overlay.active:

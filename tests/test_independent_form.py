@@ -2,7 +2,7 @@ from datetime import date
 
 import pytest
 from PySide6.QtCore import Qt, QTimer
-from PySide6.QtWidgets import QApplication
+from PySide6.QtWidgets import QApplication, QPushButton
 
 from vocabulary.domain import Sense, WordEntry
 from vocabulary.learning import StudyContext
@@ -72,7 +72,10 @@ def test_opening_another_word_preserves_replacement_confirmation(window, repo, q
 
     def answer():
         dialog = QApplication.activeModalWidget()
-        next(button for button in dialog.buttons() if button.text() == choice).click()
+        if choice == '取消':
+            dialog.close()
+        else:
+            next(button for button in dialog.findChildren(QPushButton) if button.text() == choice).click()
 
     QTimer.singleShot(0, answer)
     window.list_action(second.id, "edit")

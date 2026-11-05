@@ -1,5 +1,6 @@
 """Word-table boundaries: fixed star and POS columns, adjustable content widths."""
 from PySide6.QtCore import Qt
+from PySide6.QtGui import QColor, QPainter, QPen
 from PySide6.QtWidgets import QHeaderView
 
 
@@ -9,6 +10,16 @@ class WordTableHeader(QHeaderView):
         self.table = table
         self._resize_drag = None
         self.setMouseTracking(True)
+
+    def paintEvent(self, event):
+        super().paintEvent(event)
+        painter = QPainter(self.viewport())
+        painter.setPen(QPen(QColor(150, 161, 177, 100), 1))
+        top = max(0, (self.height() - 14) // 2)
+        for column in (1, 3):
+            edge = self.sectionViewportPosition(column) + self.sectionSize(column)
+            for offset in (-2, 2):
+                painter.drawLine(edge + offset, top, edge + offset, top + 13)
 
     def _boundary_at(self, point):
         for column in (1, 3):

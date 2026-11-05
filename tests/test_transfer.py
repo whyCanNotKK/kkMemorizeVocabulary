@@ -17,7 +17,7 @@ from vocabulary.transfer import parse_entries, read_entries, serialize_entries, 
 
 def complete(text="record", *, learned=True, important=False):
     return WordEntry(text, [Sense("n.", "记录\n第二行"), Sense("v.", "记录；录制")],
-                     [RelatedWord("recorder", [Sense("n.", "录音机"), Sense("其他", "关联释义")]),
+                     [RelatedWord("recorder", [Sense("n.", "录音机"), Sense("else", "关联释义")]),
                       RelatedWord("record", [Sense("v.", "允许与主词同名")])], important, learned)
 
 
@@ -232,7 +232,7 @@ def test_conflict_dialog_shows_complete_plain_text_and_immediate_choices(repo, q
     assert left.learned.toolTip() == "已记住此单词"
     assert "    record" in left.description.text() and "\n第二行" in left.description.text()
     assert left.description.text().startswith("n. 记录")
-    assert "    其他 关联释义" in left.description.text()
+    assert "    else 关联释义" in left.description.text()
     assert "--" not in left.description.text()
     assert "关联词" not in left.description.text()
     qtbot.mouseClick(left.description, Qt.MouseButton.LeftButton)

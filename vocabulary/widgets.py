@@ -4,13 +4,13 @@ from PySide6.QtCore import (
     QEasingCurve, QEvent, QParallelAnimationGroup, QPauseAnimation, QPoint,
     QPropertyAnimation, QSequentialAnimationGroup, QRectF, QSize, Qt, Signal, QTimer,
 )
-from PySide6.QtGui import QColor, QKeyEvent, QPainter, QPen
+from PySide6.QtGui import QColor, QKeyEvent, QPainter, QPalette, QPen
 from PySide6.QtWidgets import (
     QApplication, QComboBox, QFrame, QGraphicsOpacityEffect, QHBoxLayout, QLabel, QLineEdit, QMessageBox,
-    QPlainTextEdit, QPushButton, QSizePolicy, QStyle, QStyledItemDelegate, QStyleOptionComboBox, QVBoxLayout, QWidget,
+    QPlainTextEdit, QPushButton, QSizePolicy, QStyle, QStyledItemDelegate, QStyleOptionComboBox, QStyleOptionViewItem, QVBoxLayout, QWidget,
 )
 
-from .domain import POS_OPTIONS, SHORTCUT_LABELS, RelatedWord, Sense
+from .domain import POS_OPTIONS, SHORTCUT_LABELS, RelatedWord, Sense, normalize_pos
 from .theme import MUTED, draw_related_arrow, draw_symbol, icon
 from .pos_picker import pos_shortcut
 
@@ -124,45 +124,77 @@ class FloatingNotice(QFrame):
         self.actionTriggered.emit()
 
 
+class PosOptionDelegate(QStyledItemDelegate):
+    """Keep the numbered code left-aligned and the Chinese description right-aligned."""
+    def paint(self, painter, option, index):
+        item = QStyleOptionViewItem(option)
+        self.initStyleOption(item, index)
+        item.text = ''
+        style = item.widget.style() if item.widget else QApplication.style()
+        style.drawControl(QStyle.ControlElement.CE_ItemViewItem, item, painter, item.widget)
+        rect = style.subElementRect(QStyle.SubElement.SE_ItemViewItemText, item, item.widget)
+        rect.adjust(4, 0, -4, 0)
+        painter.save()
+        painter.setFont(item.font)
+        role = (QPalette.ColorRole.HighlightedText if item.state & QStyle.StateFlag.State_Selected
+                else QPalette.ColorRole.Text)
+        painter.setPen(item.palette.color(role))
+        painter.drawText(rect, Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
+                         f'{index.row() + 1}. {index.data(Qt.ItemDataRole.UserRole)}')
+        painter.drawText(rect, Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter,
+                         index.data(Qt.ItemDataRole.UserRole + 1))
+        painter.restore()
+
+    def sizeHint(self, option, index):
+        size = super().sizeHint(option, index)
+        size.setWidth(size.width() + 16)
+        return size
+
+
 class PosCombo(QComboBox):
     """Numbers are visible only in the popup, not the selected value."""
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.addItem("选择词性", "")
         for number, (code, label) in enumerate(POS_OPTIONS, 1):
-            self.addItem(f"{number}    {code}    {label}", code)
+            self.addItem(f"{number}. {code}    {label}", code)
+            self.setItemData(number - 1, label, Qt.ItemDataRole.UserRole + 1)
+        self.setCurrentIndex(-1)
+        self.setPlaceholderText('词性')
         self.setFixedWidth(POS_WIDTH)
         self.setFixedHeight(INPUT_HEIGHT)
         self.setStyleSheet("QComboBox { padding: 7px 3px; padding-right: 0px; }"
                           "QComboBox::drop-down { width: 18px; }")
         self.view().setWordWrap(False)
         self.view().setTextElideMode(Qt.TextElideMode.ElideNone)
-        self.view().setItemDelegate(QStyledItemDelegate(self.view()))
+        self.view().setItemDelegate(PosOptionDelegate(self.view()))
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
-        self.setMaxVisibleItems(10)
+        self.setMaxVisibleItems(9)
         self.view().installEventFilter(self)
-        self._opening_index = 0
-        self.setAccessibleName("词性，数字 1 到 9 或 n、v、a 快速选择，a 切换形容词和副词，空格展开")
+        self.setAccessibleName("词性，数字 1 到 9 或 n、v、a 快速选择，a 切换形容词和副词，空格展开，Esc或Backspace清空")
 
     def paintEvent(self, event):
         option = QStyleOptionComboBox()
         self.initStyleOption(option)
-        option.currentText = self.currentData() or "选择词性"
+        option.currentText = self.currentData() or ""
         painter = QPainter(self)
         self.style().drawComplexControl(QStyle.ComplexControl.CC_ComboBox, option, painter, self)
-        self.style().drawControl(QStyle.ControlElement.CE_ComboBoxLabel, option, painter, self)
+        if self.currentData():
+            self.style().drawControl(QStyle.ControlElement.CE_ComboBoxLabel, option, painter, self)
+        else:
+            rect = self.style().subControlRect(QStyle.ComplexControl.CC_ComboBox, option,
+                                              QStyle.SubControl.SC_ComboBoxEditField, self)
+            painter.setPen(self.palette().color(QPalette.ColorRole.PlaceholderText))
+            painter.drawText(rect.adjusted(6, 0, 0, 0),
+                             Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
+                             self.placeholderText())
         painter.setPen(QPen(QColor("#96a1b1"), 1.4))
         x, y = self.width() - 15, self.height() // 2
         painter.drawLine(x - 3, y - 2, x, y + 1)
         painter.drawLine(x, y + 1, x + 3, y - 2)
 
     def set_pos(self, pos):
-        index = self.findData(pos)
-        self.setCurrentIndex(max(0, index))
-
-    def showPopup(self):
-        self._opening_index = self.currentIndex()
-        super().showPopup()
+        index = self.findData(normalize_pos(pos))
+        self.setCurrentIndex(index)
 
     def _digit(self, event: QKeyEvent) -> bool:
         value = pos_shortcut(event, self.currentData())
@@ -174,6 +206,8 @@ class PosCombo(QComboBox):
         return True
 
     def keyPressEvent(self, event):
+        if self._clear_selection(event):
+            return
         if self._digit(event):
             event.accept()
         elif event.key() == Qt.Key.Key_Space:
@@ -184,14 +218,21 @@ class PosCombo(QComboBox):
 
     def eventFilter(self, obj, event):
         if obj is self.view() and event.type() == QEvent.Type.KeyPress:
+            if self._clear_selection(event):
+                return True
             if self._digit(event):
                 return True
-            if event.key() == Qt.Key.Key_Escape:
-                self.setCurrentIndex(self._opening_index)
-                self.hidePopup()
-                self.setFocus()
-                return True
         return super().eventFilter(obj, event)
+
+    def _clear_selection(self, event):
+        if (event.key() not in (Qt.Key.Key_Escape, Qt.Key.Key_Backspace)
+                or event.modifiers() != Qt.KeyboardModifier.NoModifier):
+            return False
+        self.setCurrentIndex(-1)
+        self.hidePopup()
+        self.setFocus()
+        event.accept()
+        return True
 
     def wheelEvent(self, event):
         if self.hasFocus():
@@ -272,7 +313,7 @@ class SenseRow(QWidget):
         self.pos.set_pos(sense.pos)
         self.translation = ExpandingTextEdit()
         self.translation.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        self.translation.setPlaceholderText("输入翻译，Enter 换行")
+        self.translation.setPlaceholderText("翻译（Enter 换行）")
         self.translation.setPlainText(sense.translation)
         self.translation.setTabChangesFocus(True)
         self.translation.setFixedHeight(INPUT_HEIGHT)
@@ -357,7 +398,7 @@ class WordBlock(QFrame):
         inputs = QHBoxLayout()
         inputs.setSpacing(INPUT_SPACING)
         self.word = QLineEdit(text)
-        self.word.setPlaceholderText("关联词" if related else "输入主词")
+        self.word.setPlaceholderText("关联词" if related else "单词")
         self.word.setFixedSize(WORD_WIDTH, INPUT_HEIGHT)
         self.word.setAccessibleName("关联词" if related else "主词")
         word_column = QWidget()
@@ -374,7 +415,7 @@ class WordBlock(QFrame):
             word_layout.addWidget(self.word)
         self.phonetic = QLineEdit(phonetic)
         self.phonetic.setFixedSize(PHONETIC_WIDTH, INPUT_HEIGHT)
-        self.phonetic.setPlaceholderText("音标（可选）")
+        self.phonetic.setPlaceholderText("音标")
         self.phonetic.setAccessibleName("关联词音标" if related else "主词音标")
         self.phonetic.textChanged.connect(self.changed)
         inputs.addWidget(word_column, 0, Qt.AlignmentFlag.AlignTop)

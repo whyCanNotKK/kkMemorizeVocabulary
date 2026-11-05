@@ -256,7 +256,7 @@ def test_form_grows_with_senses_then_scrolls_at_half_window_and_shrinks(window, 
 
 def test_related_words_grow_form_and_resize_recalculates_half_window_limit(window, qtbot):
     initial = window.editor_panel.height()
-    for _ in range(7):
+    for _ in range(9):
         window.add_related()
     qtbot.waitUntil(lambda: window.form_scroll.verticalScrollBar().maximum() > 0)
     assert window.editor_panel.height() == window.centralWidget().height() // 2
@@ -307,14 +307,18 @@ def test_pos_digits_space_and_escape(qtbot):
     qtbot.addWidget(combo)
     combo.show()
     combo.setFocus()
+    assert combo.currentData() is None
+    combo.showPopup()
+    qtbot.keyClick(combo.view(), Qt.Key.Key_Escape)
+    assert combo.currentData() is None
     qtbot.keyClick(combo, Qt.Key.Key_3)
     assert combo.currentData() == "adj."
     qtbot.keyClick(combo, Qt.Key.Key_Space)
     assert combo.view().isVisible()
-    assert combo.itemText(3).startswith("3")
+    assert combo.itemText(2).startswith("3")
     qtbot.keyClick(combo.view(), Qt.Key.Key_Down)
     qtbot.keyClick(combo.view(), Qt.Key.Key_Escape)
-    assert combo.currentData() == "adj."
+    assert combo.currentData() is None
     combo.showPopup()
     qtbot.keyClick(combo.view(), Qt.Key.Key_2)
     assert combo.currentData() == "v."
@@ -588,7 +592,7 @@ def test_inline_translation_save_and_cancel(window, repo, qtbot):
 def test_inline_invalid_content_stays_in_editor(window, repo, qtbot):
     saved = seed(repo)
     window.reveal(saved.id, True)
-    window.table.edit(window.model.index(0, 3))
+    window.table.edit(window.model.index(0, 1))
     qtbot.wait(10)
     editor = window.table.delegate.editor
     editor.clear()
@@ -891,7 +895,7 @@ def test_restart_resets_visibility_after_new_word_and_global_show(window, repo, 
 def test_global_toggle_keeps_visibility_when_inline_edit_is_invalid(window, repo, qtbot):
     saved = seed(repo)
     window.reveal(saved.id, True)
-    window.table.edit(window.model.index(0, 3))
+    window.table.edit(window.model.index(0, 1))
     qtbot.wait(10)
     window.table.delegate.editor.clear()
     qtbot.mouseClick(window.global_hide_button, Qt.MouseButton.LeftButton)

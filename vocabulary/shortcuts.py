@@ -1,8 +1,10 @@
-from PySide6.QtCore import QEvent, QObject, Qt, Signal
+from PySide6.QtCore import QEvent, QObject, QSignalBlocker, Qt, Signal
 from PySide6.QtGui import QKeySequence, QShortcut
-from PySide6.QtWidgets import QAbstractButton, QApplication, QDialog, QHBoxLayout, QLabel, QLineEdit, QMessageBox, QSpinBox, QVBoxLayout, QWidget
+from PySide6.QtWidgets import QAbstractButton, QApplication, QDialog, QFrame, QHBoxLayout, QLabel, QLineEdit, QMessageBox, QScrollArea, QSpinBox, QVBoxLayout, QWidget
 
-from .domain import DEFAULT_SHORTCUTS, SHORTCUT_LABELS, ValidationError
+from .domain import CLEANUP_COMMANDS, DEFAULT_SHORTCUTS, SHORTCUT_LABELS, ValidationError
+from .cleanup_input import CleanupInput
+from .draft_reset_dialog import DraftResetDialog
 from .learning import StudyDrawSettings
 from .native_shortcuts import WindowHotkeys
 from .widgets import button
@@ -161,20 +163,39 @@ class ShortcutRecorder(QLineEdit):
         self.captured.emit(value)
 
 
+def add_settings_separator(layout):
+    separator = QFrame()
+    separator.setObjectName('settingsSeparator')
+    separator.setFixedHeight(1)
+    separator.setStyleSheet('QFrame#settingsSeparator { background: rgba(150, 161, 177, 70); border: none; }')
+    layout.addWidget(separator)
+
+
 class SettingsDialog(QDialog):
-    def __init__(self, manager, parent=None):
+    def __init__(self, manager, parent=None, *, clear_content=None):
         super().__init__(parent)
         self.manager = manager
+        self.clear_content_callback = clear_content or manager.repository.clear_content
         self.setWindowTitle("设置")
-        self.setMinimumWidth(610)
+        self.setMinimumWidth(407)
         self._recording = None
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(26, 24, 26, 24)
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(18, 18, 18, 18)
+        self.scroll = QScrollArea()
+        self.scroll.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.scroll.setWidgetResizable(True)
+        self.scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        content = QWidget()
+        layout = QVBoxLayout(content)
+        layout.setContentsMargins(0, 0, 10, 0)
         layout.setSpacing(15)
+        self.scroll.setWidget(content)
+        outer.addWidget(self.scroll)
         study_title = QLabel("十七天背单词设置")
         study_title.setObjectName("title")
         layout.addWidget(study_title)
         settings = manager.repository.study_draw_settings()
+        self._saved_study_settings = settings
         self.words_per_group = QSpinBox()
         self.groups_per_day = QSpinBox()
         row = QHBoxLayout()
@@ -198,38 +219,63 @@ class SettingsDialog(QDialog):
         row.addWidget(QLabel("个新单词"))
         row.addStretch()
         layout.addLayout(row)
+        self.words_per_group.valueChanged.connect(self.save_study_settings)
+        self.groups_per_day.valueChanged.connect(self.save_study_settings)
+        add_settings_separator(layout)
         title = QLabel("快捷键设置")
         title.setObjectName("title")
-        layout.addWidget(title)
+        heading = QHBoxLayout()
+        heading.addWidget(title, alignment=Qt.AlignmentFlag.AlignBottom)
+        heading.addStretch()
+        self.restore_button = button("恢复默认快捷键")
+        self.restore_button.setAutoDefault(False)
+        self.restore_button.setFixedSize(self.restore_button.sizeHint())
+        self.restore_button.clicked.connect(self.restore)
+        heading.addWidget(self.restore_button, alignment=Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignBottom)
+        layout.addLayout(heading)
         self.editors = {}
         self.buttons = {}
         for key, label in SHORTCUT_LABELS.items():
             row = QHBoxLayout()
             name = QLabel(label)
-            name.setMinimumWidth(200)
+            name.setWordWrap(True)
+            name.setFixedWidth(126)
             editor = ShortcutRecorder()
+            editor.setMinimumWidth(80)
             editor.setText(manager.labels()[key])
             editor.setFocusPolicy(Qt.FocusPolicy.NoFocus)
             editor.captured.connect(lambda value, key=key: self.capture(key, value))
             editor.cancelled.connect(self.cancel_recording)
             modify = button("修改")
+            modify.setAutoDefault(False)
             modify.clicked.connect(lambda checked=False, key=key: self.record(key))
             self.editors[key], self.buttons[key] = editor, modify
             row.addWidget(name)
             row.addWidget(editor, 1)
             row.addWidget(modify)
             layout.addLayout(row)
-        footer = QHBoxLayout()
-        restore = button("恢复默认快捷键")
-        restore.clicked.connect(self.restore)
-        done = button("完成")
-        done.setObjectName("primary")
-        done.setDefault(True)
-        done.clicked.connect(self.accept)
-        footer.addWidget(restore)
-        footer.addStretch()
-        footer.addWidget(done)
-        layout.addLayout(footer)
+        add_settings_separator(layout)
+        cleanup_title = QLabel('清空内容')
+        cleanup_title.setObjectName('title')
+        layout.addWidget(cleanup_title)
+        notice = QLabel('输入对应的确认信息删除对应的内容\n\n' + '\n'.join(
+            f'（{index}）{command}：{description}'
+            for index, (command, description) in enumerate(CLEANUP_COMMANDS.items(), 1)))
+        notice.setWordWrap(True)
+        notice.setObjectName('muted')
+        layout.addWidget(notice)
+        cleanup_row = QHBoxLayout()
+        self.cleanup_input = CleanupInput()
+        self.cleanup_button = button('确认')
+        self.cleanup_button.setAutoDefault(False)
+        self.cleanup_button.setEnabled(False)
+        self.cleanup_input.textChanged.connect(
+            lambda text: self.cleanup_button.setEnabled(text in CLEANUP_COMMANDS))
+        self.cleanup_button.clicked.connect(self.confirm_cleanup)
+        cleanup_row.addWidget(self.cleanup_input, 1)
+        cleanup_row.addWidget(self.cleanup_button)
+        layout.addLayout(cleanup_row)
+        self.resize(407, min(480, self.screen().availableGeometry().height() - 80))
         manager.changed.connect(self.refresh)
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
         self.setFocus()
@@ -240,6 +286,26 @@ class SettingsDialog(QDialog):
     def showEvent(self, event):
         super().showEvent(event)
         self.setFocus()
+
+    def confirm_cleanup(self):
+        command = self.cleanup_input.text()
+        if command not in CLEANUP_COMMANDS:
+            return
+        prompt = CLEANUP_COMMANDS[command] + '\n此操作不可恢复。'
+        if command != 'delete study record':
+            prompt += '\n被删除词条的编辑草稿也将丢弃。'
+        dialog = DraftResetDialog(self.cleanup_button, prompt, self)
+        try:
+            if dialog.exec() != QDialog.DialogCode.Accepted:
+                return
+            try:
+                self.clear_content_callback(command)
+            except Exception as error:
+                QMessageBox.critical(self, '清空失败', str(error))
+                return
+            self.cleanup_input.clear()
+        finally:
+            dialog.deleteLater()
 
     def eventFilter(self, target, event):
         if event.type() == QEvent.Type.MouseButtonPress:
@@ -259,16 +325,19 @@ class SettingsDialog(QDialog):
                 self.setFocus(Qt.FocusReason.MouseFocusReason)
         return super().eventFilter(target, event)
 
-    def accept(self):
-        self.words_per_group.interpretText()
-        self.groups_per_day.interpretText()
+    def save_study_settings(self):
+        settings = StudyDrawSettings(self.words_per_group.value(), self.groups_per_day.value())
+        if settings == self._saved_study_settings:
+            return
         try:
-            self.manager.repository.write_study_draw_settings(StudyDrawSettings(
-                self.words_per_group.value(), self.groups_per_day.value()))
+            self.manager.repository.write_study_draw_settings(settings)
         except Exception as error:
+            with QSignalBlocker(self.words_per_group), QSignalBlocker(self.groups_per_day):
+                self.words_per_group.setValue(self._saved_study_settings.words_per_group)
+                self.groups_per_day.setValue(self._saved_study_settings.groups_per_day)
             QMessageBox.critical(self, "保存失败", f"学习设置保存失败：{error}")
             return
-        super().accept()
+        self._saved_study_settings = settings
 
     def refresh(self):
         for key, text in self.manager.labels().items():
