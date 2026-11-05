@@ -3,16 +3,47 @@ import sqlite3
 
 import pytest
 from PySide6.QtCore import QTimer, Qt
-from PySide6.QtWidgets import QApplication, QDialog, QLabel, QMessageBox
+from PySide6.QtWidgets import QApplication, QDialog, QLabel, QLineEdit, QMessageBox
 
 from vocabulary.domain import CLEANUP_COMMANDS, RelatedWord, Sense, WordEntry
 from vocabulary.draft_reset_dialog import DraftResetDialog
 from vocabulary.learning import StudyContext, StudyDrawSettings
 from vocabulary.shortcuts import SettingsDialog
+from vocabulary.cleanup_input import CleanupInput
 from vocabulary.storage import Repository
 
 
 AM = StudyContext(date(2026, 11, 5), False)
+
+
+@pytest.mark.parametrize('command', CLEANUP_COMMANDS)
+def test_last_hint_character_is_drawn_after_typed_text(qtbot, qapp, command):
+    from vocabulary.theme import apply_theme
+
+    apply_theme(qapp)
+    prefix = command[:-1]
+    hint = CleanupInput()
+    reference = QLineEdit()
+    for editor, text in ((hint, prefix), (reference, command)):
+        qtbot.addWidget(editor)
+        editor.setFixedSize(330, 36)
+        editor.setText(text)
+        editor.show()
+        editor.clearFocus()
+    qapp.processEvents()
+    hint_image = hint.grab().toImage()
+    reference_image = reference.grab().toImage()
+    # Find the final glyph in a normal Qt input, then require ghost ink in the
+    # same columns. This catches overlap with the typed prefix, not just slicing.
+    reference_columns = []
+    for x in range(reference.width() - 12):
+        if any(reference_image.pixelColor(x, y).red() > 150 for y in range(12, 25)):
+            reference_columns.append(x)
+    last_x = max(reference_columns)
+    ghost_pixels = sum(hint_image.pixelColor(x, y).red() > 65
+                       for x in range(last_x - 2, last_x + 1) for y in range(12, 25))
+    assert ghost_pixels >= 3, f'Final hint character {command[-1]!r} overlaps typed text'
+    assert hint.text() == prefix and hint.hint_suffix() == command[-1]
 
 
 def seed(repo):

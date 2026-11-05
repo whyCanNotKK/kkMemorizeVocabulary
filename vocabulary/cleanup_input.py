@@ -32,6 +32,8 @@ class CleanupInput(QLineEdit):
         color.setAlpha(95)
         painter.setPen(color)
         cursor = self.cursorRect()
-        painter.drawText(cursor.x() + 1, cursor.center().y()
+        # QLineEdit exposes a wide cursor rectangle for input methods. Its left
+        # edge is before the caret, so anchoring there overlaps the typed suffix.
+        painter.drawText(cursor.center().x() + 1, cursor.center().y()
                          + (self.fontMetrics().ascent() - self.fontMetrics().descent()) // 2,
                          suffix)
