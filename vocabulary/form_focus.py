@@ -1,5 +1,5 @@
 """Form context survives passive clicks without retaining an old input target."""
-from PySide6.QtCore import QEvent, QObject, Qt, Signal
+from PySide6.QtCore import QEvent, QObject, Qt, Signal, Slot
 from PySide6.QtWidgets import (
     QAbstractButton, QAbstractItemView, QAbstractSlider, QAbstractSpinBox,
     QApplication, QComboBox, QKeySequenceEdit, QLineEdit, QPlainTextEdit,
@@ -21,6 +21,16 @@ class FormFocusContext(QObject):
         app = QApplication.instance()
         app.focusChanged.connect(self._focus_changed)
         app.installEventFilter(self)
+        panel.destroyed.connect(self._panel_destroyed)
+
+    @Slot()
+    def _panel_destroyed(self):
+        # The panel may die before this window-owned context. Global focus
+        # notifications during the rest of teardown must not access it.
+        app = QApplication.instance()
+        app.focusChanged.disconnect(self._focus_changed)
+        app.removeEventFilter(self)
+        self.active = False
 
     @staticmethod
     def _belongs_to(widget, ancestor):
@@ -38,6 +48,7 @@ class FormFocusContext(QObject):
             self.active = active
             self.changed.emit()
 
+    @Slot(QWidget, QWidget)
     def _focus_changed(self, old, new):
         self._set_active(self.panel.isVisible() and self.contains(new))
 

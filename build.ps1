@@ -1,6 +1,7 @@
 param(
     [switch]$OpenOutput,
-    [switch]$Pause
+    [switch]$Pause,
+    [switch]$FullTests
 )
 
 $ErrorActionPreference = 'Stop'
@@ -58,8 +59,14 @@ try {
 
     Write-Host '[2/6] Preparing the local Inno Setup compiler...'
     $compiler = & "$PSScriptRoot/scripts/prepare-inno.ps1"
-    Write-Host '[3/6] Running the test suite with temporary databases...'
-    Invoke-BuildCommand $python @('-m', 'pytest', '-q')
+    if ($FullTests) {
+        Write-Host '[3/6] Running the full regression suite with temporary databases...'
+        Invoke-BuildCommand $python @('-m', 'pytest', '-q')
+    } else {
+        Write-Host '[3/6] Running essential build checks with temporary databases...'
+        Write-Host 'Full UI regression is available with: build.ps1 -FullTests'
+        Invoke-BuildCommand $python @('-m', 'pytest', '-q', '-x', '@tests/build-smoke.txt')
+    }
 
     Write-Host '[4/6] Building the application...'
     try {

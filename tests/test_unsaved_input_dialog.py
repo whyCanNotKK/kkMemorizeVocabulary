@@ -23,7 +23,11 @@ def test_unsaved_input_actions_and_cancel(window, repo, qtbot, operation, choice
             assert dialog.findChild(QLabel).text() == '单词编辑区域还有未保存内容'
             buttons = dialog.findChildren(QPushButton)
             assert {button.text() for button in buttons} == {'保存', '放弃'}
-            assert dialog.hasFocus()
+            # Offscreen Qt can still have another test window active. Check
+            # the dialog's initial focus before activating it for key input.
+            assert dialog.focusWidget() is dialog
+            dialog.activateWindow()
+            qtbot.waitUntil(dialog.hasFocus)
             assert all(not button.hasFocus() and not button.isDefault() for button in buttons)
             qtbot.keyClick(dialog, Qt.Key.Key_Return)
             assert dialog.isVisible() and dialog.choice is None

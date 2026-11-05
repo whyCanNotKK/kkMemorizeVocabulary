@@ -57,9 +57,13 @@ def test_single_click_copies_only_word_or_definition(mouse_list, qtbot, owner, c
     assert table.delegate.editor is None and not table.dragging
 
 
-@pytest.mark.parametrize("owner", [-1, 0])
-@pytest.mark.parametrize("column", [1, 2, 3])
-@pytest.mark.parametrize("gesture", ["double", "right"])
+# Cover every pair of owner, field and gesture in every page without the
+# redundant full three-way Cartesian product of the shared editor path.
+@pytest.mark.parametrize("owner,column,gesture", [
+    (-1, 1, "double"), (0, 1, "right"),
+    (-1, 2, "right"), (0, 2, "double"),
+    (-1, 3, "double"), (0, 3, "right"),
+])
 def test_double_or_right_click_edits_without_copying(mouse_list, window, repo, qtbot, owner, column, gesture):
     table, entry = mouse_list
     index, point = field(table, owner, column)

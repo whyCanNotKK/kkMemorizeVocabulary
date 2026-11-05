@@ -278,8 +278,12 @@ def test_navigation_scrolls_to_main_word_and_space_reveals_whole_group(window, r
 
 @pytest.mark.parametrize("review_list", [(page, 40) for page in
                          ("pending", "all", "learned", "study17")], indirect=True)
-@pytest.mark.parametrize("trigger", ["left", "right", "keyboard"])
-@pytest.mark.parametrize("layout", ["fits", "bottom_overflow", "tall_main", "tall_related"])
+# Mouse/key routing is covered separately in each page. Exercise each layout
+# once per page instead of repeating the same scrolling checks for every input.
+@pytest.mark.parametrize("layout,trigger", [
+    ("fits", "left"), ("bottom_overflow", "right"),
+    ("tall_main", "keyboard"), ("tall_related", "left"),
+])
 def test_single_reveal_prioritizes_complete_entry(review_list, window, repo, qtbot, trigger, layout):
     table, _ = review_list
     entry = table.model().rows[22].entry
@@ -554,7 +558,9 @@ def test_completing_final_study_word_leaves_clean_empty_list(review_list, window
     assert not table.selectionModel().hasSelection()
     assert table.hasFocus()
     assert page.new_count.accessibleName() == f"新词：剩余0/{len(entries)}"
-    assert "没有待完成的单词" in table.empty_text
+    assert table.empty_text == ""
+    assert page.completion_notice.isVisible()
+    assert page.completion_notice.title.text() == "当前时段任务已完成！"
     for key in (Qt.Key.Key_Return, Qt.Key.Key_Enter, Qt.Key.Key_Space, Qt.Key.Key_S):
         qtbot.keyClick(table, key)
     assert not table.currentIndex().isValid()

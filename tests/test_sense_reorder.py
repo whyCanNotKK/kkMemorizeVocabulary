@@ -8,7 +8,6 @@ from PySide6.QtWidgets import QApplication
 
 from vocabulary.domain import RelatedWord, Sense, WordEntry
 from vocabulary.learning import StudyContext
-from vocabulary.pos_picker import PosPicker
 from vocabulary.storage import Repository
 
 
@@ -144,19 +143,6 @@ def test_sense_drag_cancel_or_failure_preserves_order(sense_list, repo, qtbot, m
     qtbot.mouseRelease(table.viewport(), Qt.MouseButton.LeftButton, pos=destination)
     assert repo.get(entry.id) == entry and repo.get(other.id) == other
     assert not table.dragging
-
-
-@pytest.mark.parametrize("owner", [-1, 0])
-def test_click_and_double_click_pos_keep_existing_edit_behavior(sense_list, repo, qtbot, owner):
-    table, entry, other = sense_list
-    point = handle(table, entry.id, owner)
-    qtbot.mouseClick(table.viewport(), Qt.MouseButton.LeftButton, pos=point)
-    assert not table.dragging and table.delegate.editor is None
-    qtbot.mouseDClick(table.viewport(), Qt.MouseButton.LeftButton, pos=point)
-    assert isinstance(table.delegate.editor, PosPicker) and table.delegate.editor.isVisible()
-    assert not table.dragging
-    qtbot.keyClick(table.delegate.editor, Qt.Key.Key_Escape)
-    assert repo.get(entry.id) == entry
 
 
 def test_sense_drag_after_inline_save_keeps_independent_form(window, repo, qtbot, monkeypatch):

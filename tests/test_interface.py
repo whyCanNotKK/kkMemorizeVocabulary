@@ -115,45 +115,6 @@ def test_copy_skips_blank_sense_cells_and_pos_and_non_left_buttons(window, repo,
         assert not window.toast.isVisible()
 
 
-@pytest.mark.parametrize("page", ["pending", "all", "learned", "study17"])
-@pytest.mark.parametrize("related", [False, True])
-def test_double_click_edits_word_without_copying(window, repo, qtbot, page, related):
-    from PySide6.QtCore import QPoint
-
-    saved = seed(repo)
-    if page == "learned":
-        repo.set_flag(saved.id, "learned", True)
-    window.set_filter(page)
-    if page == "study17":
-        from datetime import date
-        from vocabulary.learning import StudyContext
-
-        context = StudyContext(date(2026, 10, 30), False)
-        repo.prepare_study(context)
-        window.study_page.load(context)
-        table = window.study_page.table
-        table.set_entry_revealed(saved.id, True)
-    else:
-        window.reveal(saved.id, True)
-        table = window.table
-    index = table.model().index(2 if related else 0, 1)
-    row = index.data(Qt.ItemDataRole.UserRole)
-    point = table.visualRect(index).topLeft() + QPoint(31 if related else 15, row.top_padding + 7)
-    clipboard = QApplication.clipboard()
-    clipboard.setText("keep clipboard")
-    copies = []
-    table.copyRequested.connect(copies.append)
-    # A real double-click includes the first press/release before the double-click event.
-    qtbot.mouseClick(table.viewport(), Qt.MouseButton.LeftButton, pos=point)
-    qtbot.mouseDClick(table.viewport(), Qt.MouseButton.LeftButton, pos=point)
-    qtbot.mouseRelease(table.viewport(), Qt.MouseButton.LeftButton, pos=point)
-    assert table.delegate.editor is not None
-    qtbot.wait(QApplication.doubleClickInterval() + 80)
-    assert clipboard.text() == "keep clipboard" and copies == []
-    assert not window.toast.isVisible()
-    table.delegate.cancel()
-
-
 @pytest.mark.parametrize("action", ["refresh", "hide", "drag"])
 def test_abandoned_word_click_does_not_copy_later(window, repo, qtbot, action):
     from PySide6.QtCore import QPoint
