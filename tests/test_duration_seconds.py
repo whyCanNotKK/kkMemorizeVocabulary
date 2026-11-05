@@ -65,7 +65,7 @@ def test_v6_migration_rounds_existing_records_and_reopen_does_not_convert_again(
             after = upgraded.connection.execute('SELECT * FROM study_task_history ORDER BY id').fetchall()
             for original, converted in zip(before, after):
                 assert tuple(converted) == (*original[:5], original[5] // 1000 + int(original[5] % 1000 >= 500), *original[6:])
-            assert upgraded.connection.execute('PRAGMA user_version').fetchone()[0] == 7
+            assert upgraded.connection.execute('PRAGMA user_version').fetchone()[0] == 8
         finally:
             upgraded.close()
 

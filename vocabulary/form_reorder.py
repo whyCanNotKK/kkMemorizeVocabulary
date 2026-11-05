@@ -1,6 +1,6 @@
 """Drag previews for existing form widgets; the owner applies the final order."""
 from PySide6.QtCore import QEasingCurve, QEvent, QObject, QPoint, QRectF, Qt, QTimer, QVariantAnimation, Signal
-from PySide6.QtGui import QColor, QPainter
+from PySide6.QtGui import QColor, QPainter, QPixmap, QRegion
 from PySide6.QtWidgets import QApplication, QWidget
 
 from .drag_reorder import ANIMATION_MS, edge_scroll_delta, group_positions, insertion_index
@@ -132,8 +132,8 @@ class FormReorderDrag(QObject):
         top = self.items[self.source].mapTo(self.scroll.viewport(), QPoint()).y()
         self.grab_offset = self.candidate[1].y() - top
         self.positions = group_positions(self.groups, self.base)
-        self.backgrounds = {block: block.grab() for block in blocks}
-        self.images = {item: item.grab() for item in self.items}
+        self.backgrounds = {block: self._snapshot(block) for block in blocks}
+        self.images = {item: self._snapshot(item) for item in self.items}
         self.active = True
         self.handle.setCursor(Qt.CursorShape.ClosedHandCursor)
         self.activeChanged.emit(True)
@@ -142,6 +142,17 @@ class FormReorderDrag(QObject):
         self.preview.raise_()
         self.scroll.viewport().setCursor(Qt.CursorShape.ClosedHandCursor)
         self.timer.start()
+
+    @staticmethod
+    def _snapshot(widget):
+        # QWidget.grab() forces DrawWindowBackground, which fills transparent
+        # containers with the platform's light Window palette during rendering.
+        ratio = widget.devicePixelRatioF()
+        image = QPixmap(round(widget.width() * ratio), round(widget.height() * ratio))
+        image.setDevicePixelRatio(ratio)
+        image.fill(Qt.GlobalColor.transparent)
+        widget.render(image, QPoint(), QRegion(), QWidget.RenderFlag.DrawChildren)
+        return image
 
     def _update_target(self):
         top = self.point.y() - self.grab_offset + self.scroll.verticalScrollBar().value()

@@ -553,7 +553,7 @@ def test_completing_final_study_word_leaves_clean_empty_list(review_list, window
     assert not table.currentIndex().isValid()
     assert not table.selectionModel().hasSelection()
     assert table.hasFocus()
-    assert page.new_count.accessibleName() == f"新词：{len(entries)}/{len(entries)}"
+    assert page.new_count.accessibleName() == f"新词：剩余0/{len(entries)}"
     assert "没有待完成的单词" in table.empty_text
     for key in (Qt.Key.Key_Return, Qt.Key.Key_Enter, Qt.Key.Key_Space, Qt.Key.Key_S):
         qtbot.keyClick(table, key)

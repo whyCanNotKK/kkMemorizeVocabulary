@@ -143,10 +143,10 @@ def test_empty_snapshot_clears_progress_and_replaces_markers_but_keeps_words(sou
     assert source.study_backup().study_last_add_new_vocabulary is None
 
 
-@pytest.mark.parametrize('version', [1, 2, 3, 4])
+@pytest.mark.parametrize('version', [1, 2, 3, 4, 5])
 def test_old_study_file_is_rejected(document, version):
     document['version'] = version
-    with pytest.raises(ValidationError, match='version: 5'):
+    with pytest.raises(ValidationError, match='version: 6'):
         parse_study_backup(json.dumps(document))
 
 
@@ -189,7 +189,7 @@ def test_invalid_backup_rejected_before_import(document, corruption):
 def test_duplicate_json_keys_custom_groups_and_bad_stage_dates(document):
     content = json.dumps(document)
     with pytest.raises(ValidationError):
-        parse_study_backup(content.replace('"version": 5', '"version": 5, "version": 5'))
+        parse_study_backup(content.replace('"version": 6', '"version": 6, "version": 6'))
     large_group = deepcopy(document)
     for i in range(10):
         name = f'beta{i}'

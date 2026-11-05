@@ -17,6 +17,8 @@ def entry_description(entry):
     for word, indent in [(entry, "")] + [(child, "    ") for child in entry.related]:
         if indent:
             lines.append(indent + word.text)
+        if word.phonetic:
+            lines.append(indent + word.phonetic)
         for sense in word.senses:
             translations = sense.translation.split("\n")
             lines.append(f"{indent}{sense.pos} {translations[0]}")
@@ -48,6 +50,8 @@ class EntryDescription(QWidget):
         for word, related in [(entry, False)] + [(child, True) for child in entry.related]:
             if related:
                 self._add_line(indent_width, None, word.text, badge_width, badge_height)
+            if word.phonetic:
+                self._add_line(indent_width if related else 0, None, word.phonetic, badge_width, badge_height)
             for sense in word.senses:
                 self._add_line(indent_width if related else 0, sense.pos, sense.translation,
                                badge_width, badge_height)

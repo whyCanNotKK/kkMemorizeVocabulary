@@ -15,8 +15,9 @@ from .theme import MUTED, draw_related_arrow, draw_symbol, icon
 from .pos_picker import pos_shortcut
 
 INPUT_HEIGHT = 36
-WORD_WIDTH = 192
-POS_WIDTH = 104
+WORD_WIDTH = 144
+PHONETIC_WIDTH = 108
+POS_WIDTH = 78
 INPUT_SPACING = 10
 
 
@@ -132,6 +133,8 @@ class PosCombo(QComboBox):
             self.addItem(f"{number}    {code}    {label}", code)
         self.setFixedWidth(POS_WIDTH)
         self.setFixedHeight(INPUT_HEIGHT)
+        self.setStyleSheet("QComboBox { padding: 7px 3px; padding-right: 0px; }"
+                          "QComboBox::drop-down { width: 18px; }")
         self.view().setWordWrap(False)
         self.view().setTextElideMode(Qt.TextElideMode.ElideNone)
         self.view().setItemDelegate(QStyledItemDelegate(self.view()))
@@ -335,7 +338,7 @@ class WordBlock(QFrame):
     heightChanged = Signal()
     cursorMoved = Signal()
 
-    def __init__(self, text="", senses=None, related=False, parent=None):
+    def __init__(self, text="", senses=None, related=False, parent=None, *, phonetic=""):
         super().__init__(parent)
         self.setObjectName("wordBlock")
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Maximum)
@@ -357,19 +360,25 @@ class WordBlock(QFrame):
         self.word.setPlaceholderText("关联词" if related else "输入主词")
         self.word.setFixedSize(WORD_WIDTH, INPUT_HEIGHT)
         self.word.setAccessibleName("关联词" if related else "主词")
+        word_column = QWidget()
+        word_column.setFixedWidth(WORD_WIDTH)
+        word_layout = QHBoxLayout(word_column)
+        word_layout.setContentsMargins(0, 0, 0, 0)
+        word_layout.setSpacing(6)
         if related:
-            word_column = QWidget()
-            word_column.setFixedWidth(WORD_WIDTH)
-            word_layout = QHBoxLayout(word_column)
-            word_layout.setContentsMargins(0, 0, 0, 0)
-            word_layout.setSpacing(6)
             self.indicator = RelatedIndicator()
             word_layout.addWidget(self.indicator)
             self.word.setFixedWidth(WORD_WIDTH - 22)
             word_layout.addWidget(self.word)
-            inputs.addWidget(word_column, 0, Qt.AlignmentFlag.AlignTop)
         else:
-            inputs.addWidget(self.word, 0, Qt.AlignmentFlag.AlignTop)
+            word_layout.addWidget(self.word)
+        self.phonetic = QLineEdit(phonetic)
+        self.phonetic.setFixedSize(PHONETIC_WIDTH, INPUT_HEIGHT)
+        self.phonetic.setPlaceholderText("音标（可选）")
+        self.phonetic.setAccessibleName("关联词音标" if related else "主词音标")
+        self.phonetic.textChanged.connect(self.changed)
+        inputs.addWidget(word_column, 0, Qt.AlignmentFlag.AlignTop)
+        inputs.addWidget(self.phonetic, 0, Qt.AlignmentFlag.AlignTop)
         right = QVBoxLayout()
         right.setSpacing(7)
         right.setAlignment(Qt.AlignmentFlag.AlignTop)
@@ -449,13 +458,13 @@ class WordBlock(QFrame):
         self.structureChanged.emit()
 
     def value(self):
-        return RelatedWord(self.word.text(), [row.value() for row in self.rows])
+        return RelatedWord(self.word.text(), [row.value() for row in self.rows], self.phonetic.text())
 
     def has_content(self):
-        return bool(self.word.text().strip() or any(row.has_content() for row in self.rows))
+        return bool(self.word.text().strip() or self.phonetic.text().strip() or any(row.has_content() for row in self.rows))
 
     def input_order(self):
-        result = [self.word]
+        result = [self.word, self.phonetic]
         for row in self.rows:
             result.extend([row.pos, row.translation])
         return result

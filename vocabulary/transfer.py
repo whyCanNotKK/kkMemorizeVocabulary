@@ -9,7 +9,7 @@ from .domain import POS_OPTIONS, RelatedWord, Sense, ValidationError, WordEntry
 
 
 FORMAT = "kkMemorizeVocabulary"
-VERSION = 2
+VERSION = 3
 
 
 @dataclass
@@ -54,6 +54,12 @@ def _array(value, label, nonempty=False):
     return value
 
 
+def _phonetic(value, label):
+    if not isinstance(value, str):
+        raise ValidationError(f"{label}：音标必须是文本（允许为空）。")
+    return value
+
+
 def _senses(value, label):
     senses = []
     for number, item in enumerate(_array(value, label, nonempty=True), 1):
@@ -79,7 +85,7 @@ def parse_entries(content: str) -> list[WordEntry]:
     entries = []
     for number, word in enumerate(_array(document["words"], "words"), 1):
         label = f"主词 {number}"
-        fields = ("text", "important", "learned", "senses", "related")
+        fields = ("text", "phonetic", "important", "learned", "senses", "related")
         _object(word, fields + (("sort_order",) if isinstance(word, dict) and "sort_order" in word else ()), label)
         order = word.get("sort_order")
         if "sort_order" in word and (type(order) is not int or order < 1):
@@ -90,12 +96,14 @@ def parse_entries(content: str) -> list[WordEntry]:
         related = []
         for index, child in enumerate(_array(word["related"], label + " 关联词"), 1):
             location = f"{label} 关联词 {index}"
-            _object(child, ("text", "senses"), location)
+            _object(child, ("text", "phonetic", "senses"), location)
             related.append(RelatedWord(_text(child["text"], location + " 名称"),
-                                       _senses(child["senses"], location + " 释义")))
+                                       _senses(child["senses"], location + " 释义"),
+                                       _phonetic(child["phonetic"], location)))
         entries.append(WordEntry(_text(word["text"], label + " 名称"),
                                  _senses(word["senses"], label + " 释义"), related,
-                                 word["important"], word["learned"], sort_order=order))
+                                 word["important"], word["learned"], sort_order=order,
+                                 phonetic=_phonetic(word["phonetic"], label)))
     return entries
 
 

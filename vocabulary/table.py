@@ -5,7 +5,7 @@ import time
 
 import shiboken6
 from PySide6.QtCore import QAbstractTableModel, QEasingCurve, QEvent, QItemSelection, QItemSelectionModel, QModelIndex, QPoint, QPointF, QPersistentModelIndex, QRect, QRectF, QSize, Qt, QTimer, QVariantAnimation, Signal
-from PySide6.QtGui import QColor, QFont, QFontMetricsF, QPainter, QPainterPath, QPen, QTextDocument, QTextOption
+from PySide6.QtGui import QColor, QCursor, QFont, QFontMetricsF, QPainter, QPainterPath, QPen, QTextDocument, QTextOption
 from PySide6.QtWidgets import (
     QAbstractItemView, QAbstractSlider, QApplication, QHeaderView, QLineEdit, QPlainTextEdit,
     QPushButton, QStyle, QStyledItemDelegate, QStyleOptionViewItem, QTableView,
@@ -15,6 +15,8 @@ from .domain import POS_OPTIONS, WordEntry
 from .drag_reorder import ANIMATION_MS, edge_scroll_delta, group_positions, insertion_index
 from .review_navigation import navigation_step
 from .table_style import WordGroupStyle
+from .table_header import WordTableHeader
+from .word_name_editor import WordNameEditor
 from .theme import ACCENT, GOLD, MUTED, TEXT, draw_related_arrow, draw_symbol
 from .widgets import ExpandingTextEdit
 from .pos_picker import PosPicker
@@ -180,18 +182,32 @@ class WordDelegate(QStyledItemDelegate):
         font.setWeight(QFont.Weight.DemiBold if row.owner == -1 else QFont.Weight.Normal)
         left = 26 if row.owner >= 0 else 10
         area = QRectF(rect).adjusted(left, row.top_padding, -10, -row.bottom_padding)
+        phonetic = self.phonetic_layout(index, rect, base_font)
+        if phonetic is not None:
+            area.setRight(phonetic[2].left() - 8)
         metrics = QFontMetricsF(font)
-        text = metrics.elidedText(index.data() or "", Qt.TextElideMode.ElideRight, area.width())
+        text = metrics.elidedText(index.data() or "", Qt.TextElideMode.ElideRight, max(0, area.width()))
+        return font, text, area
+
+    def phonetic_layout(self, index, rect, base_font):
+        row = index.data(Qt.ItemDataRole.UserRole)
+        if row is None or row.sense != 0 or not row.word.phonetic or not self.view.phonetic_visible(index):
+            return None
+        font = QFont(base_font)
+        font.setPixelSize(12)
+        font.setWeight(QFont.Weight.Normal)
+        metrics = QFontMetricsF(font)
+        width = min(metrics.horizontalAdvance(row.word.phonetic), max(0, (rect.width() - 36) * 0.48))
+        area = QRectF(rect.right() - 10 - width, rect.top() + row.top_padding + 2,
+                      width, metrics.height())
+        text = metrics.elidedText(row.word.phonetic, Qt.TextElideMode.ElideRight, width)
         return font, text, area
 
     def word_hit(self, index, point):
         row = index.data(Qt.ItemDataRole.UserRole)
         if index.column() != 1 or row is None or row.sense != 0:
             return False
-        rect = self.view.visualRect(index)
-        font, text, area = self.word_layout(index, rect, self.view.font())
-        bounds = QFontMetricsF(font).boundingRect(area, Qt.AlignmentFlag.AlignTop, text)
-        return bool(text) and bounds.intersected(area).intersected(QRectF(rect)).contains(point)
+        return QRectF(self.view.visualRect(index)).contains(point)
 
     def pos_rect(self, index, rect):
         row = index.data(Qt.ItemDataRole.UserRole)
@@ -223,6 +239,7 @@ class WordDelegate(QStyledItemDelegate):
         painter.save()
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         rect = QRectF(option.rect)
+        painter.setClipRect(rect, Qt.ClipOperation.IntersectClip)
         top = row.top_padding
         self.word_style.paint(painter, option, index)
         column = index.column()
@@ -261,6 +278,12 @@ class WordDelegate(QStyledItemDelegate):
                     draw_related_arrow(painter, x, y)
                     painter.setPen(QColor("#bdc8d5"))
                 painter.drawText(area, Qt.AlignmentFlag.AlignTop, text)
+                phonetic = self.phonetic_layout(index, rect, option.font)
+                if phonetic is not None:
+                    font, text, area = phonetic
+                    painter.setFont(font)
+                    painter.setPen(QColor("#788493"))
+                    painter.drawText(area, Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignTop, text)
             elif column == 2:
                 badge = self.pos_rect(index, rect)
                 painter.setPen(QPen(QColor("#465463"), 1))
@@ -300,7 +323,8 @@ class WordDelegate(QStyledItemDelegate):
             editor = ExpandingTextEdit(parent)
             editor.contentHeightChanged.connect(lambda height: self._resize_text_editor(editor))
         else:
-            editor = QLineEdit(parent)
+            editor = WordNameEditor(parent)
+            editor.phonetic.installEventFilter(self)
         editor.setContextMenuPolicy(Qt.ContextMenuPolicy.PreventContextMenu)
         if isinstance(editor, QPlainTextEdit):
             editor.viewport().setContextMenuPolicy(Qt.ContextMenuPolicy.PreventContextMenu)
@@ -331,7 +355,10 @@ class WordDelegate(QStyledItemDelegate):
 
     def setEditorData(self, editor, index):
         value = index.data(Qt.ItemDataRole.EditRole) or ""
-        if isinstance(editor, PosPicker):
+        if isinstance(editor, WordNameEditor):
+            editor.setText(value)
+            editor.phonetic.setText(index.data(Qt.ItemDataRole.UserRole).word.phonetic)
+        elif isinstance(editor, PosPicker):
             editor.set_pos(value)
             QTimer.singleShot(0, lambda: self._show_pos(editor))
         elif isinstance(editor, QPlainTextEdit):
@@ -340,6 +367,15 @@ class WordDelegate(QStyledItemDelegate):
             editor.setText(value)
 
     def updateEditorGeometry(self, editor, option, index):
+        if isinstance(editor, WordNameEditor):
+            row = index.data(Qt.ItemDataRole.UserRole)
+            rect = option.rect.adjusted(3, max(0, row.top_padding - 2), -3, 0)
+            rect.setHeight(36)
+            if rect.bottom() > self.view.viewport().height():
+                rect.moveBottom(self.view.viewport().height())
+            editor.setGeometry(rect)
+            editor.place_phonetic()
+            return
         if isinstance(editor, PosPicker):
             rect = self.pos_rect(index, option.rect).toRect()
             editor.setGeometry(rect)
@@ -367,6 +403,8 @@ class WordDelegate(QStyledItemDelegate):
         pass
 
     def _value(self, editor):
+        if isinstance(editor, WordNameEditor):
+            return editor.text(), editor.phonetic.text()
         if isinstance(editor, PosPicker):
             return editor.currentData() or ""
         if isinstance(editor, QPlainTextEdit):
@@ -386,10 +424,12 @@ class WordDelegate(QStyledItemDelegate):
                 if isinstance(editor, PosPicker):
                     QTimer.singleShot(0, lambda: self._show_pos(editor))
                 else:
-                    QTimer.singleShot(0, editor.setFocus)
+                    QTimer.singleShot(0, lambda: self._restore_editor_focus(editor))
                 return False
             if isinstance(editor, PosPicker):
                 editor.hidePopup()
+            if isinstance(editor, WordNameEditor):
+                editor.panel.hide()
             self.editor, self.edit_index = None, None
             if index.isValid():
                 self.view.resizeRowToContents(index.row())
@@ -399,11 +439,17 @@ class WordDelegate(QStyledItemDelegate):
         finally:
             self._committing = False
 
+    def _restore_editor_focus(self, editor):
+        if self.editor is editor and shiboken6.isValid(editor):
+            editor.setFocus()
+
     def cancel(self):
         editor = self.editor
         if editor and shiboken6.isValid(editor):
             if isinstance(editor, PosPicker):
                 editor.hidePopup()
+            if isinstance(editor, WordNameEditor):
+                editor.panel.hide()
             index = QModelIndex(self.edit_index)
             self.editor, self.edit_index = None, None
             if index.isValid():
@@ -415,6 +461,8 @@ class WordDelegate(QStyledItemDelegate):
         if self.editor is not editor or not shiboken6.isValid(editor) or self._committing:
             return
         focus = QApplication.focusWidget()
+        if isinstance(editor, WordNameEditor) and editor.owns_focus(focus):
+            return
         if focus is editor or (focus and editor.isAncestorOf(focus)):
             return
         if QApplication.activePopupWidget() or QApplication.activeModalWidget():
@@ -429,7 +477,9 @@ class WordDelegate(QStyledItemDelegate):
             self.editor.hidePopup()
             self.view.move_editor(-1 if backwards else 1)
             return True
-        if editor is self.editor:
+        if (editor is self.editor or
+                isinstance(self.editor, WordNameEditor) and editor is self.editor.phonetic):
+            field, editor = editor, self.editor
             if event.type() == QEvent.Type.KeyPress:
                 key = event.key()
                 if key == Qt.Key.Key_Escape:
@@ -439,6 +489,13 @@ class WordDelegate(QStyledItemDelegate):
                     return True
                 if key in (Qt.Key.Key_Tab, Qt.Key.Key_Backtab):
                     backwards = key == Qt.Key.Key_Backtab or bool(event.modifiers() & Qt.KeyboardModifier.ShiftModifier)
+                    if isinstance(editor, WordNameEditor):
+                        if not backwards and field is editor:
+                            editor.phonetic.setFocus(Qt.FocusReason.TabFocusReason)
+                            return True
+                        if backwards and field is editor.phonetic:
+                            editor.setFocus(Qt.FocusReason.BacktabFocusReason)
+                            return True
                     self.view.move_editor(-1 if backwards else 1)
                     return True
                 if key in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
@@ -459,6 +516,11 @@ class WordDelegate(QStyledItemDelegate):
 
 
 class WordTable(QTableView):
+    DEFAULT_WORD_WIDTH = 206
+    MIN_WORD_WIDTH = 34
+    MIN_TRANSLATION_WIDTH = 80
+    DEFAULT_ACTION_WIDTHS = {(False, True): 154, (False, False): 120, (True, False): 54}
+
     editPreparationRequested = Signal(int)
     copyRequested = Signal(str)
     revealRequested = Signal(int, bool)
@@ -471,6 +533,10 @@ class WordTable(QTableView):
     def __init__(self, model, before_edit, parent=None):
         super().__init__(parent)
         self._selecting_group = False
+        self._hovered_index = QPersistentModelIndex()
+        self._action_widths = {}
+        self._width_mode = None
+        self._adjusting_columns = False
         self.show_drag_handle = True
         self.reorder_enabled = True
         self.search_active = False
@@ -503,16 +569,24 @@ class WordTable(QTableView):
         # Hidden header section hints still constrain resizeRowsToContents().
         self.verticalHeader().setStyleSheet("QHeaderView::section { padding: 0; border: none; }")
         self.verticalHeader().setMinimumSectionSize(18)
+        self.setHorizontalHeader(WordTableHeader(self))
         header = self.horizontalHeader()
         header.setDefaultAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
-        header.setMinimumSectionSize(34)
+        header.setMinimumSectionSize(self.MIN_WORD_WIDTH)
         self.pos_badge_width = max(self.fontMetrics().horizontalAdvance(pos) for pos, _ in POS_OPTIONS) + 12
-        for column, width in ((0, 38), (1, 206),
+        for column, width in ((0, 38), (1, self.DEFAULT_WORD_WIDTH),
                               (2, self.pos_badge_width + 2 * WordGroupStyle.POS_MARGIN),
-                              (4, 120)):
+                              (4, self.minimum_action_width())):
             header.setSectionResizeMode(column, QHeaderView.ResizeMode.Fixed)
             self.setColumnWidth(column, width)
         header.setSectionResizeMode(3, QHeaderView.ResizeMode.Stretch)
+        self._row_resize_timer = QTimer(self)
+        self._row_resize_timer.setSingleShot(True)
+        self._row_resize_timer.timeout.connect(self._resize_column_rows)
+        self._column_layout_timer = QTimer(self)
+        self._column_layout_timer.setSingleShot(True)
+        self._column_layout_timer.timeout.connect(self._fit_columns)
+        header.sectionResized.connect(self._column_resized)
         self._just_revealed = (None, 0)
         self.shuffle_button = QPushButton(header)
         from .theme import icon
@@ -535,6 +609,95 @@ class WordTable(QTableView):
         self._drag_scroll.timeout.connect(self._auto_scroll_drag)
         self.model().modelAboutToBeReset.connect(self.cancel_drag)
         self.model().modelAboutToBeReset.connect(self._cancel_pending_copy)
+        self.verticalScrollBar().valueChanged.connect(self._update_hover)
+        self.horizontalScrollBar().valueChanged.connect(self._update_hover)
+
+    def _column_resized(self, column, old, new):
+        if column == 3:
+            self._row_resize_timer.start(0)
+        if column == 4 and self._width_mode is not None:
+            self._action_widths[self._width_mode] = new
+        if column in (0, 1, 2, 4) and not self._adjusting_columns:
+            self._column_layout_timer.start(0)
+
+    def minimum_action_width(self):
+        return self.DEFAULT_ACTION_WIDTHS[self.study_mode, self.show_drag_handle]
+
+    def _resize_column_rows(self):
+        with self.preserve_view():
+            self.resizeRowsToContents()
+
+    def _fit_columns(self):
+        """Keep the translation usable, reclaim action whitespace before word width."""
+        if self._adjusting_columns or not self.isVisible():
+            return
+        available = (self.viewport().width() - self.columnWidth(0) - self.columnWidth(2)
+                     - self.MIN_TRANSLATION_WIDTH)
+        minimum_actions = self.minimum_action_width()
+        if available < self.MIN_WORD_WIDTH + minimum_actions:
+            # Initial/hidden geometry has not been assigned its real window size yet.
+            return
+        word = max(self.MIN_WORD_WIDTH, self.columnWidth(1))
+        actions = max(minimum_actions, self.columnWidth(4))
+        excess = max(0, word + actions - available)
+        reclaimed = min(excess, actions - minimum_actions)
+        actions -= reclaimed
+        word -= excess - reclaimed
+        self._adjusting_columns = True
+        try:
+            self.setColumnWidth(4, actions)
+            self.setColumnWidth(1, word)
+        finally:
+            self._adjusting_columns = False
+
+    def resize_boundary(self, column, position):
+        """Move one divider to the nearest legal position without moving the other."""
+        width = self.viewport().width()
+        fixed = self.columnWidth(0)
+        if column == 1:
+            lower = fixed + self.MIN_WORD_WIDTH
+            upper = width - self.columnWidth(4) - self.columnWidth(2) - self.MIN_TRANSLATION_WIDTH
+            section = 1
+        elif column == 3:
+            lower = fixed + self.columnWidth(1) + self.columnWidth(2) + self.MIN_TRANSLATION_WIDTH
+            upper = width - self.minimum_action_width()
+            section = 4
+        else:
+            return
+        if lower > upper:
+            return
+        target = max(lower, min(round(position), upper))
+        self._adjusting_columns = True
+        try:
+            self.setColumnWidth(section, target - fixed if section == 1 else width - target)
+        finally:
+            self._adjusting_columns = False
+
+    def reset_boundary(self, column):
+        target = (self.columnWidth(0) + self.DEFAULT_WORD_WIDTH if column == 1 else
+                  self.viewport().width() - self.minimum_action_width())
+        self.resize_boundary(column, target)
+
+    def phonetic_visible(self, index):
+        row = index.data(Qt.ItemDataRole.UserRole)
+        if row is None:
+            return False
+        target = (row.entry.id, row.owner)
+        for candidate in (self.currentIndex(), self._hovered_index):
+            item = candidate.data(Qt.ItemDataRole.UserRole) if candidate.isValid() else None
+            if item is not None and (item.entry.id, item.owner) == target:
+                return True
+        return False
+
+    def _update_hover(self, *args, point=None):
+        point = self.viewport().mapFromGlobal(QCursor.pos()) if point is None else point
+        index = self.indexAt(point) if self.viewport().rect().contains(point) else QModelIndex()
+        self._hovered_index = QPersistentModelIndex(index)
+        self.viewport().update()
+
+    def currentChanged(self, current, previous):
+        super().currentChanged(current, previous)
+        self.viewport().update()
 
     def _cancel_pending_copy(self):
         self._copy_timer.stop()
@@ -560,7 +723,10 @@ class WordTable(QTableView):
         self.show_drag_handle = page not in {"all", "study17"}
         self.reorder_enabled = self.show_drag_handle and not searching
         self.search_active = searching
-        self.setColumnWidth(4, 54 if self.study_mode else (154 if self.show_drag_handle else 120))
+        mode = (self.study_mode, self.show_drag_handle)
+        self._width_mode = mode
+        self.setColumnWidth(4, self._action_widths.get(mode, self.minimum_action_width()))
+        self._column_layout_timer.start(0)
         self.shuffle_button.setVisible(page == "pending" and not searching)
         self.shuffle_button.setEnabled(not searching and count >= 2)
         self.viewport().update()
@@ -695,6 +861,8 @@ class WordTable(QTableView):
             return
         if 0 <= position < len(fields):
             self.edit_field(fields[position])
+            if step < 0 and isinstance(self.delegate.editor, WordNameEditor):
+                self.delegate.editor.phonetic.setFocus(Qt.FocusReason.BacktabFocusReason)
         else:
             self.setFocus()
 
@@ -765,7 +933,7 @@ class WordTable(QTableView):
             event.accept()
             return
         if event.button() == Qt.MouseButton.RightButton:
-            if index.isValid() and not self.related_handle_hit(index, event.position().toPoint()):
+            if index.isValid():
                 self._edit_pointer_field(index)
             event.accept()
             return
@@ -789,6 +957,8 @@ class WordTable(QTableView):
                     index = self.model().index(matching, column)
                     row = index.data(Qt.ItemDataRole.UserRole)
             if related_hit or sense_hit:
+                if related_hit:
+                    self._copy_press = (QPersistentModelIndex(index), event.position().toPoint())
                 event.accept()
                 self.setCurrentIndex(index)
                 self.setFocus()
@@ -1086,9 +1256,6 @@ class WordTable(QTableView):
             return
         index = self.indexAt(event.position().toPoint())
         if index.isValid():
-            if self.related_handle_hit(index, event.position().toPoint()):
-                event.accept()
-                return
             row = index.data(Qt.ItemDataRole.UserRole)
             if row.entry.id == self._just_revealed[0] and time.monotonic() - self._just_revealed[1] < 0.5:
                 event.accept()
@@ -1123,6 +1290,11 @@ class WordTable(QTableView):
             self.delegate.editor.showPopup()
 
     def viewportEvent(self, event):
+        if event.type() == QEvent.Type.MouseMove:
+            self._update_hover(point=event.position().toPoint())
+        elif event.type() == QEvent.Type.Leave:
+            self._hovered_index = QPersistentModelIndex()
+            self.viewport().update()
         if event.type() == QEvent.Type.ToolTip:
             from PySide6.QtWidgets import QToolTip
             index = self.indexAt(event.pos())
@@ -1156,7 +1328,14 @@ class WordTable(QTableView):
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
-        QTimer.singleShot(0, self.resizeRowsToContents)
+        if hasattr(self, "_column_layout_timer"):
+            self._column_layout_timer.start(0)
+            self._row_resize_timer.start(0)
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        self._column_layout_timer.start(0)
+        self._row_resize_timer.start(0)
 
     def paintEvent(self, event):
         if self._drag_active:

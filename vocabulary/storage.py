@@ -72,11 +72,11 @@ class Repository:
         row = self.connection.execute("SELECT * FROM words WHERE id=?", (entry_id,)).fetchone()
         if row is None:
             raise ValueError("该单词已不存在。")
-        children = [RelatedWord(child["text"], self._senses("related_id", child["id"]))
+        children = [RelatedWord(child["text"], self._senses("related_id", child["id"]), child["phonetic"])
                     for child in self.connection.execute(
                         "SELECT * FROM related_words WHERE word_id=? ORDER BY position,id", (entry_id,))]
         return WordEntry(row["text"], self._senses("word_id", entry_id), children,
-                         bool(row["important"]), bool(row["learned"]), entry_id, row["sort_order"])
+                         bool(row["important"]), bool(row["learned"]), entry_id, row["sort_order"], row["phonetic"])
 
     def list_entries(self) -> list[WordEntry]:
         return [self.get(row[0]) for row in self.connection.execute(
@@ -136,13 +136,13 @@ class Repository:
         if entry.id is None:
             entry.sort_order = self._next_order(counters, entry.learned)
             cursor = self.connection.execute(
-                "INSERT INTO words(id,text,normalized_text,important,learned,sort_order) VALUES (?,?,?,?,?,?)",
-                (forced_id, entry.text, normalized, entry.important, entry.learned, entry.sort_order))
+                "INSERT INTO words(id,text,normalized_text,important,learned,sort_order,phonetic) VALUES (?,?,?,?,?,?,?)",
+                (forced_id, entry.text, normalized, entry.important, entry.learned, entry.sort_order, entry.phonetic))
             entry.id = cursor.lastrowid
         else:
-            cursor = self.connection.execute("""UPDATE words SET text=?,normalized_text=?,important=?,
+            cursor = self.connection.execute("""UPDATE words SET text=?,normalized_text=?,important=?,phonetic=?,
                 updated_at=strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id=?""",
-                (entry.text, normalized, entry.important, entry.id))
+                (entry.text, normalized, entry.important, entry.phonetic, entry.id))
             if cursor.rowcount != 1:
                 raise ValueError("该单词已不存在，当前输入已保留。")
             self.connection.execute("DELETE FROM senses WHERE word_id=?", (entry.id,))
@@ -152,7 +152,8 @@ class Repository:
             [(entry.id, s.pos, s.translation, i) for i, s in enumerate(entry.senses)])
         for i, child in enumerate(entry.related):
             cursor = self.connection.execute(
-                "INSERT INTO related_words(word_id,text,position) VALUES (?,?,?)", (entry.id, child.text, i))
+                "INSERT INTO related_words(word_id,text,position,phonetic) VALUES (?,?,?,?)",
+                (entry.id, child.text, i, child.phonetic))
             self.connection.executemany(
                 "INSERT INTO senses(related_id,pos,translation,position) VALUES (?,?,?,?)",
                 [(cursor.lastrowid, s.pos, s.translation, j) for j, s in enumerate(child.senses)])

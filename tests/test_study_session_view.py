@@ -43,15 +43,15 @@ def test_marks_do_not_write_duration_and_history_reads_only_saved_time(window, r
     panel.set_collapsed(False)
     ticks = [0]
     page.timer.clock = lambda: ticks[0]
-    assert page.review_count.accessibleName() == '复习：0/2'
-    assert page.new_count.accessibleName() == '新词：0/1'
+    assert page.review_count.accessibleName() == '复习：剩余2/2'
+    assert page.new_count.accessibleName() == '新词：剩余1/1'
     page.toggle_timer()
     repo.connection.execute('''CREATE TRIGGER no_duration_on_mark BEFORE UPDATE OF duration_seconds ON study_task_history
         BEGIN SELECT RAISE(ABORT,'duration was updated'); END''')
     ticks[0] = 5_400_000_000
     page.complete(words[0].id, 'study')
     assert len(page.tasks) == 2
-    assert page.new_count.accessibleName() == '新词：1/1'
+    assert page.new_count.accessibleName() == '新词：剩余0/1'
     assert page.elapsed_label.text() == '5 s'
     assert repo.study_task_history(AM).duration_seconds == 0
     panel.update_live()
@@ -62,7 +62,7 @@ def test_marks_do_not_write_duration_and_history_reads_only_saved_time(window, r
     page.toggle_timer()
     ticks[0] += 1_600_000_000
     page.complete(words[1].id, 'study')
-    assert page.review_count.accessibleName() == '复习：1/2'
+    assert page.review_count.accessibleName() == '复习：剩余1/2'
     assert repo.study_task_history(AM).duration_seconds == 5
     page.complete(words[2].id, 'study')
     assert repo.study_task_history(AM).duration_seconds == 7

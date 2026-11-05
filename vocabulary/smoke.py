@@ -59,6 +59,7 @@ def run_smoke(app, window, directory: Path):
         else:
             block = window.blocks[0]
             block.word.setText("serendipity")
+            block.phonetic.setText("/ˌserənˈdɪpəti/")
             block.rows[0].pos.setFocus()
             QTest.keyClick(block.rows[0].pos, Qt.Key.Key_1)
             block.rows[0].translation.setPlainText("意外发现美好事物的能力\n机缘巧合")
@@ -67,6 +68,7 @@ def run_smoke(app, window, directory: Path):
             child = window.blocks[-1]
             assert window.remove_related_button.isVisible()
             child.word.setText("serendipitous")
+            child.phonetic.setText("/ˌserənˈdɪpɪtəs/")
             child.rows[0].pos.setFocus()
             QTest.keyClick(child.rows[0].pos, Qt.Key.Key_3)
             child.rows[0].translation.setPlainText("偶然发现的；机缘巧合的")
@@ -80,6 +82,7 @@ def run_smoke(app, window, directory: Path):
             QTest.qWait(30)
             saved = repo.list_entries()[0]
             assert saved.text == "serendipity" and len(saved.related) == 2
+            assert saved.phonetic == "/ˌserənˈdɪpəti/" and saved.related[0].phonetic == "/ˌserənˈdɪpɪtəs/"
             assert not any(row.hidden for row in window.model.rows)
             bar = window.table.verticalScrollBar()
             assert bar.value() == bar.maximum()

@@ -3,6 +3,7 @@ import sqlite3
 
 import pytest
 from PySide6.QtCore import QModelIndex, Qt
+from PySide6.QtWidgets import QApplication
 
 from vocabulary.domain import RelatedWord, Sense, WordEntry
 from vocabulary.learning import StudyContext
@@ -62,13 +63,19 @@ def test_tab_traverses_all_fields_in_both_directions_and_stops_at_edges(edit_lis
     for target in expected:
         assert table.delegate.editor is not None
         assert field(table) == target
-        qtbot.keyClick(table.delegate.editor, Qt.Key.Key_Tab)
+        if target[3] == 1:
+            qtbot.keyClick(table.delegate.editor, Qt.Key.Key_Tab)
+            assert table.delegate.editor.phonetic.hasFocus()
+        qtbot.keyClick(QApplication.focusWidget(), Qt.Key.Key_Tab)
         qtbot.wait(5)  # pending refresh must not destroy the next editor
     assert table.delegate.editor is None
     last = expected[-1]
     table.edit_field(last)
     for target in reversed(expected):
         assert field(table) == target
+        if target[3] == 1:
+            qtbot.keyClick(table.delegate.editor.phonetic, Qt.Key.Key_Tab, Qt.KeyboardModifier.ShiftModifier)
+            assert table.delegate.editor.hasFocus()
         qtbot.keyClick(table.delegate.editor, Qt.Key.Key_Tab, Qt.KeyboardModifier.ShiftModifier)
         qtbot.wait(5)
     assert table.delegate.editor is None
@@ -81,6 +88,7 @@ def test_tab_saves_and_backtab_reads_latest_value(edit_list, repo, qtbot):
     table.edit(table.model().index(0, 1))
     table.delegate.editor.setText('renamed')
     qtbot.keyClick(table.delegate.editor, Qt.Key.Key_Tab)
+    qtbot.keyClick(table.delegate.editor.phonetic, Qt.Key.Key_Tab)
     assert repo.get(entries[0].id).text == 'renamed'
     assert field(table) == (entries[0].id, -1, 0, 2)
     table.delegate.editor.set_pos('adj.')
@@ -146,6 +154,7 @@ def test_tab_does_not_edit_wrong_entry_when_saved_name_stops_matching_search(win
     table.edit(table.model().index(0, 1))
     table.delegate.editor.setText('renamed')
     qtbot.keyClick(table.delegate.editor, Qt.Key.Key_Tab)
+    qtbot.keyClick(table.delegate.editor.phonetic, Qt.Key.Key_Tab)
     assert repo.get(entry.id).text == 'renamed'
     assert table.delegate.editor is None
     assert table.model().rows[0].entry.text == 'alphabet'
@@ -165,7 +174,7 @@ def test_edit_completion_trims_outer_whitespace_and_preserves_internal_content(e
             editor.setText(padded)
         else:
             editor.setPlainText(padded)
-        qtbot.keyClick(editor, Qt.Key.Key_Tab if column == 1 else Qt.Key.Key_Return)
+        qtbot.keyClick(editor, Qt.Key.Key_Return)
         saved = repo.get(entries[0].id)
         word = saved if owner == -1 else saved.related[owner]
         assert (word.text if column == 1 else word.senses[0].translation) == expected

@@ -129,16 +129,16 @@ class StudyPage(QWidget):
             self.table.update_spans()
 
     def update_task_count(self):
+        review = sum(task.is_review for task in self.tasks)
         history = self.timer.history
-        review_total = history.review_total if history else sum(task.is_review for task in self.tasks)
-        new_total = history.new_total if history else len(self.tasks) - review_total
-        for label, text, done, total in (
-                (self.review_count, '复习', history.review_done if history else 0, review_total),
-                (self.new_count, '新词', history.new_done if history else 0, new_total)):
+        for label, text, remaining, total in (
+                (self.review_count, '复习', review, history.review_total if history else review),
+                (self.new_count, '新词', len(self.tasks) - review,
+                 history.new_total if history else len(self.tasks) - review)):
             label.setText(f'<span style="color:{MUTED}">{text}：</span>'
-                          f'<span style="color:{ACCENT};font-size:22px;font-weight:700">{done}</span>'
+                          f'<span style="color:{ACCENT};font-size:22px;font-weight:700">{remaining}</span>'
                           f'<span style="color:{MUTED}">/{total}</span>')
-            label.setAccessibleName(f'{text}：{done}/{total}')
+            label.setAccessibleName(f'{text}：剩余{remaining}/{total}')
 
     def update_elapsed(self):
         duration = format_study_duration(self.timer.duration_seconds())

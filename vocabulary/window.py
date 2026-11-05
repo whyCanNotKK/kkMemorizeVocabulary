@@ -9,7 +9,7 @@ from PySide6.QtWidgets import (
     QPlainTextEdit, QScrollArea, QVBoxLayout, QWidget,
 )
 
-from .domain import SHORTCUT_LABELS, DuplicateWord, ValidationError, WordEntry, merge_entry_draft
+from .domain import SHORTCUT_LABELS, DuplicateWord, ValidationError, WordEntry
 from .busy_overlay import BusyOverlay
 from .draft_reset_dialog import DraftResetDialog
 from .import_dialog import ImportConflictDialog
@@ -25,7 +25,7 @@ from .study_transfer import StudyBackup, read_study_backup, read_word_or_study_f
 from .theme import ACCENT, GOLD, MUTED, icon
 from .transfer import write_entries
 from .transfer_jobs import run_repository_task
-from .widgets import INPUT_SPACING, POS_WIDTH, WORD_WIDTH, FloatingNotice, WordBlock, button, confirm_remove
+from .widgets import INPUT_SPACING, PHONETIC_WIDTH, POS_WIDTH, WORD_WIDTH, FloatingNotice, WordBlock, button, confirm_remove
 
 
 class MainWindow(QMainWindow):
@@ -169,7 +169,7 @@ class MainWindow(QMainWindow):
         labels = QHBoxLayout()
         labels.setContentsMargins(0, 0, 6, 0)
         labels.setSpacing(INPUT_SPACING)
-        for text, width in (("单词", WORD_WIDTH), ("词性", POS_WIDTH), ("翻译", 0)):
+        for text, width in (("单词", WORD_WIDTH), ("音标", PHONETIC_WIDTH), ("词性", POS_WIDTH), ("翻译", 0)):
             label = QLabel(text)
             label.setObjectName("muted")
             if width:
@@ -386,12 +386,23 @@ class MainWindow(QMainWindow):
             self.search_box.setText(getattr(self, "_applied_search", ""))
             self.search_box.blockSignals(False)
             return
+        current = self.table.currentIndex()
+        row = current.data(Qt.ItemDataRole.UserRole)
+        anchor = None
+        if row is not None and self.table.selectionModel().isSelected(current):
+            anchor = (row.entry.id, row.owner, row.sense, current.column())
         self._applied_search = self.search_box.text()
         for hidden in self._search_hidden.values():
             hidden.clear()
         self._filter_scroll[self.filter_name] = 0
         self.refresh()
-        self.table.verticalScrollBar().setValue(0)
+        target = self.table._entry_index(*anchor) if anchor else None
+        if target is not None and target.isValid():
+            self.table.setCurrentIndex(target)
+            self.table.ensure_entry_visible(anchor[0])
+        else:
+            self.table.verticalScrollBar().setValue(0)
+        self._filter_scroll[self.filter_name] = self.table.verticalScrollBar().value()
 
     def move_word(self, entry_id, target_index):
         if self.filter_name == "all" or self.search_box.text().strip():
@@ -504,8 +515,8 @@ class MainWindow(QMainWindow):
         self.global_hide_button.setToolTip(
             f"显示/隐藏 所有释义 · {self.shortcuts.labels()['toggle_visibility']}")
 
-    def add_block(self, text="", senses=None, related=False, *, position=None):
-        block = WordBlock(text, senses, related)
+    def add_block(self, text="", senses=None, related=False, *, position=None, phonetic=""):
+        block = WordBlock(text, senses, related, phonetic=phonetic)
         block.changed.connect(self.form_changed)
         block.structureChanged.connect(self.update_tab_order)
         block.heightChanged.connect(self.schedule_editor_resize)
@@ -533,9 +544,9 @@ class MainWindow(QMainWindow):
         self.collapse_button.setToolTip(label)
         self.collapse_button.setAccessibleName(label)
         entry = entry or WordEntry()
-        self.add_block(entry.text, entry.senses)
+        self.add_block(entry.text, entry.senses, phonetic=entry.phonetic)
         for child in entry.related:
-            self.add_block(child.text, child.senses, True)
+            self.add_block(child.text, child.senses, True, phonetic=child.phonetic)
         self.star_button.setChecked(entry.important)
         self.star_changed()
         self._baseline = deepcopy(self.form_value())
@@ -559,7 +570,7 @@ class MainWindow(QMainWindow):
             return WordEntry()
         main = self.blocks[0].value()
         return WordEntry(main.text, main.senses, [block.value() for block in self.blocks[1:]],
-                         self.star_button.isChecked(), id=self.edit_id)
+                         self.star_button.isChecked(), id=self.edit_id, phonetic=main.phonetic)
 
     def is_dirty(self):
         return hasattr(self, "_baseline") and self.form_value() != self._baseline
@@ -749,8 +760,6 @@ class MainWindow(QMainWindow):
         is_new = self.edit_id is None
         try:
             draft = self.form_value()
-            if not is_new:
-                draft = merge_entry_draft(self._baseline, draft, self.repository.get(self.edit_id))
             saved = self.repository.save(draft)
         except DuplicateWord as error:
             self.duplicate_id = error.entry_id
@@ -858,7 +867,10 @@ class MainWindow(QMainWindow):
             entry = self.repository.get(row.entry.id)
             target = entry if row.owner == -1 else entry.related[row.owner]
             if column == 1:
-                target.text = value
+                if isinstance(value, tuple):
+                    target.text, target.phonetic = value
+                else:
+                    target.text = value
             elif column == 2:
                 target.senses[row.sense].pos = value
             elif column == 3:

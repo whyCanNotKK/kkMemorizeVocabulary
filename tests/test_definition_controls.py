@@ -182,12 +182,17 @@ def test_definition_drag_preserves_widgets_and_saves_order(window, repo, qtbot, 
     qtbot.mouseMove(drag, drag.mapFromGlobal(viewport.mapToGlobal(destination)), delay=20)
     assert window.form_drag.active and window.shortcuts.suspended
     assert block.rows == rows and not window.form_drag.preview.grab().isNull()
+    # Rounded input corners and tool gaps must retain the dark panel background.
+    image = window.form_drag.images[rows[0]].toImage()
+    corner = image.pixelColor(0, 0)
+    assert corner.alpha() == 0 or max(corner.red(), corner.green(), corner.blue()) < 100
     qtbot.mouseRelease(drag, Qt.MouseButton.LeftButton,
                        pos=drag.mapFromGlobal(viewport.mapToGlobal(destination)))
     assert block.rows == [rows[1], rows[2], rows[0]]
     assert other.value() == other_value and not window.shortcuts.suspended
     assert rows[0].translation.toPlainText() == ("child first" if related else "first")
-    assert block.word.nextInFocusChain() is rows[1].pos
+    assert block.word.nextInFocusChain() is block.phonetic
+    assert block.phonetic.nextInFocusChain() is rows[1].pos
     assert window._save_form()
     saved = repo.get(entry.id) if editing else repo.list_entries()[0]
     senses = saved.related[0].senses if related else saved.senses

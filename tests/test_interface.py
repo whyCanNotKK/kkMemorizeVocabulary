@@ -92,7 +92,7 @@ def test_click_word_copies_full_name_with_bottom_notice(window, repo, qtbot):
     qtbot.waitUntil(lambda: clipboard.text() == long_word)
 
 
-def test_copy_requires_left_click_on_visible_word_text(window, repo, qtbot):
+def test_copy_skips_blank_sense_cells_and_pos_and_non_left_buttons(window, repo, qtbot):
     from PySide6.QtCore import QPoint
 
     saved = seed(repo)
@@ -103,10 +103,6 @@ def test_copy_requires_left_click_on_visible_word_text(window, repo, qtbot):
     main = table.visualRect(window.model.index(0, 1))
     child = table.visualRect(window.model.index(2, 1))
     for point in (
-            main.topLeft() + QPoint(2, 14),  # Left padding.
-            main.topLeft() + QPoint(15, 2),  # Above the text.
-            QPoint(main.right() - 5, main.center().y()),  # Trailing whitespace.
-            child.topLeft() + QPoint(16, 10),  # Related-word arrow.
             table.visualRect(window.model.index(1, 1)).center(),  # Extra sense.
             table.visualRect(window.model.index(0, 2)).center(),  # Part of speech.
     ):
@@ -480,8 +476,12 @@ def test_tab_reverse_newline_and_star_space(window, qtbot):
     block = window.blocks[0]
     block.word.setFocus()
     qtbot.keyClick(block.word, Qt.Key.Key_Tab)
+    assert block.phonetic.hasFocus()
+    qtbot.keyClick(block.phonetic, Qt.Key.Key_Tab)
     assert block.rows[0].pos.hasFocus()
     qtbot.keyClick(block.rows[0].pos, Qt.Key.Key_Tab, Qt.KeyboardModifier.ShiftModifier)
+    assert block.phonetic.hasFocus()
+    qtbot.keyClick(block.phonetic, Qt.Key.Key_Tab, Qt.KeyboardModifier.ShiftModifier)
     assert block.word.hasFocus()
     block.add_sense()
     qtbot.wait(10)

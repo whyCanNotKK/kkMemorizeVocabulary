@@ -30,7 +30,7 @@ def test_defaults_and_preferences_survive_restart_without_changing_other_setting
         assert reopened.study_draw_settings() == StudyDrawSettings(12, 4)
         assert reopened.shortcuts()['save'] == 'Alt+S'
         assert reopened.study_backup().group_counter == 0
-        assert reopened.connection.execute('PRAGMA user_version').fetchone()[0] == 7
+        assert reopened.connection.execute('PRAGMA user_version').fetchone()[0] == 8
     finally:
         reopened.close()
 

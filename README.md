@@ -16,7 +16,7 @@ The installer includes the required runtime; you do not need to install Python s
 
 **No vocabulary list or dictionary is bundled. You need to enter or import your own words and definitions.**
 
-- **Enter words:** fill in the word, part of speech and definition in the entry form, then save. Multiple definitions and related words are supported.
+- **Enter words:** fill in the word, part of speech and definition in the entry form, then save. Optional phonetic transcriptions, multiple definitions and related words are supported.
 - **Import words:** use the import button to load a JSON vocabulary file supported by this app. You can export your entries for reuse or backup.
 
 Once words are in **待记** (To learn), open **十七天背单词** to start studying.

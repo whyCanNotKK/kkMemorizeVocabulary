@@ -48,7 +48,8 @@ def test_json_roundtrip_complete_entries_and_restart(repo, tmp_path):
 
 @pytest.mark.parametrize("change", [
     lambda d: d.update(version=1),
-    lambda d: d.update(version=3),
+    lambda d: d.update(version=2),
+    lambda d: d.update(version=4),
     lambda d: d.update(version=True),
     lambda d: d.update(format="unknown"),
     lambda d: d.update(words={}),
@@ -146,7 +147,7 @@ def test_identical_import_ignores_metadata_and_trimmed_edges_without_writing(rep
     lambda w: w['related'][0]['senses'].reverse(),
     lambda w: w['related'][0]['senses'].pop(),
     lambda w: w['related'].reverse(),
-    lambda w: w['related'].append({'text': 'new', 'senses': [{'pos': 'n.', 'translation': '新'}]}),
+    lambda w: w['related'].append({'text': 'new', 'phonetic': '', 'senses': [{'pos': 'n.', 'translation': '新'}]}),
     lambda w: w['related'].pop(),
     lambda w: w.update(important=True),
     lambda w: w.update(learned=False),

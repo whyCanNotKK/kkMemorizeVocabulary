@@ -192,15 +192,21 @@ def test_v2_migration_and_newer_version_rejected(tmp_path):
     repo = Repository(path)
     entry = add(repo)[0]
     repo.write_shortcuts({'save': 'Alt+S'})
-    repo.connection.executescript('DROP TABLE study_task_history; DROP TABLE memorize_vocabulary_17day; PRAGMA user_version=2;')
+    repo.connection.executescript('''
+        DROP TABLE study_task_history;
+        DROP TABLE memorize_vocabulary_17day;
+        ALTER TABLE words DROP COLUMN phonetic;
+        ALTER TABLE related_words DROP COLUMN phonetic;
+        PRAGMA user_version=2;
+    ''')
     repo.close()
     repo = Repository(path)
     try:
-        assert repo.connection.execute('PRAGMA user_version').fetchone()[0] == 7
+        assert repo.connection.execute('PRAGMA user_version').fetchone()[0] == 8
         assert repo.get(entry.id) == entry
         assert repo.shortcuts()['save'] == 'Alt+S'
         assert len(repo.prepare_study(AM)) == 1
-        repo.connection.execute('PRAGMA user_version=8')
+        repo.connection.execute('PRAGMA user_version=9')
     finally:
         repo.close()
     with pytest.raises(RuntimeError):

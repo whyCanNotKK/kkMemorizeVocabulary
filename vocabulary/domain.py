@@ -1,4 +1,3 @@
-from copy import deepcopy
 from dataclasses import dataclass, field
 
 
@@ -31,6 +30,7 @@ class Sense:
 class RelatedWord:
     text: str = ""
     senses: list[Sense] = field(default_factory=lambda: [Sense()])
+    phonetic: str = ""
 
 
 @dataclass
@@ -42,12 +42,13 @@ class WordEntry:
     learned: bool = False
     id: int | None = None
     sort_order: int | None = None
+    phonetic: str = ""
 
 
 def same_entry_content(left: WordEntry, right: WordEntry) -> bool:
     """Compare cleaned entry content, including ordered senses and related words."""
-    return (left.text, left.senses, left.related, left.important, left.learned) == (
-        right.text, right.senses, right.related, right.important, right.learned)
+    return (left.text, left.phonetic, left.senses, left.related, left.important, left.learned) == (
+        right.text, right.phonetic, right.senses, right.related, right.important, right.learned)
 
 
 class ValidationError(ValueError):
@@ -58,20 +59,6 @@ class DuplicateWord(ValidationError):
     def __init__(self, entry_id: int):
         self.entry_id = entry_id
         super().__init__("这个主词已经存在，当前输入已保留。")
-
-
-def merge_entry_draft(baseline: WordEntry, draft: WordEntry, current: WordEntry) -> WordEntry:
-    """Preserve independent saved changes; reject competing edits to the same part."""
-    merged = deepcopy(current)
-    for name, label in (("text", "主词名"), ("senses", "主词释义"),
-                        ("related", "关联词"), ("important", "重点")):
-        before, edited, latest = (getattr(entry, name) for entry in (baseline, draft, current))
-        if edited == before:
-            continue
-        if latest != before and latest != edited:
-            raise ValidationError(f"{label}已在列表中修改，当前草稿已保留，请核对后再保存。")
-        setattr(merged, name, deepcopy(edited))
-    return merged
 
 
 def clean_senses(senses: list[Sense], label: str) -> list[Sense]:
@@ -96,11 +83,12 @@ def clean_entry(entry: WordEntry) -> WordEntry:
         raise ValidationError("请先输入主词。")
     related = []
     for index, item in enumerate(entry.related, 1):
-        if not item.text.strip() and not any(s.pos or s.translation.strip() for s in item.senses):
+        if not item.text.strip() and not item.phonetic.strip() and not any(s.pos or s.translation.strip() for s in item.senses):
             continue
         if not item.text.strip():
             raise ValidationError(f"关联词 {index}：请填写单词。")
-        related.append(RelatedWord(item.text.strip(), clean_senses(item.senses, f"关联词 {index}")))
+        related.append(RelatedWord(item.text.strip(), clean_senses(item.senses, f"关联词 {index}"),
+                                   item.phonetic.strip()))
     return WordEntry(text, clean_senses(entry.senses, "主词"), related,
-                     entry.important, entry.learned, entry.id, entry.sort_order)
+                     entry.important, entry.learned, entry.id, entry.sort_order, entry.phonetic.strip())
 

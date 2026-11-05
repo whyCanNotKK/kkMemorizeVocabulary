@@ -33,7 +33,7 @@ def test_list_edit_keeps_form_and_widget_identity(window, repo, qtbot, monkeypat
     assert window.blocks[0] is block and window.form_value() == draft
 
 
-def test_same_word_list_edit_and_form_changes_merge_without_lost_updates(window, repo, qtbot):
+def test_form_save_overwrites_list_changes_even_for_unchanged_draft_fields(window, repo, qtbot):
     entry = repo.save(WordEntry("word", [Sense("n.", "saved")]))
     window.reset_form(entry)
     window.blocks[0].word.setText("renamed in draft")
@@ -44,10 +44,10 @@ def test_same_word_list_edit_and_form_changes_merge_without_lost_updates(window,
     assert window.blocks[0].rows[0].translation.toPlainText() == "saved"
     assert window._save_form()
     saved = repo.get(entry.id)
-    assert saved.text == "renamed in draft" and saved.senses[0].translation == "list change"
+    assert saved.text == "renamed in draft" and saved.senses[0].translation == "saved"
 
 
-def test_same_part_conflict_is_only_reported_on_explicit_form_save(window, repo, qtbot, monkeypatch):
+def test_form_save_overwrites_same_part_list_edit(window, repo, qtbot, monkeypatch):
     entry = repo.save(WordEntry("word", [Sense("n.", "saved")]))
     window.reset_form(entry)
     window.blocks[0].rows[0].translation.setPlainText("draft change")
@@ -58,9 +58,9 @@ def test_same_part_conflict_is_only_reported_on_explicit_form_save(window, repo,
     window.table.delegate.editor.setPlainText("list change")
     qtbot.keyClick(window.table.delegate.editor, Qt.Key.Key_Return)
     assert window.form_value() == draft
-    assert not window._save_form()
-    assert window.form_value() == draft and window.is_dirty()
-    assert repo.get(entry.id).senses[0].translation == "list change"
+    assert window._save_form()
+    assert repo.get(entry.id).senses[0].translation == "draft change"
+    assert window.model.rows[0].entry.senses[0].translation == "draft change"
 
 
 @pytest.mark.parametrize("choice", ["保存", "放弃", "取消"])
@@ -91,4 +91,4 @@ def test_reopening_same_word_and_flags_do_not_reset_draft(window, repo, monkeypa
         window.list_action(entry.id, action)
         assert window.blocks[0] is block and window.form_value() == draft
     assert window._save_form()
-    assert repo.get(entry.id).learned and not repo.get(entry.id).important
+    assert repo.get(entry.id).learned and repo.get(entry.id).important

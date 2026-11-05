@@ -11,7 +11,7 @@ from .transfer import parse_entries, serialize_entries, write_text_atomically
 
 
 FORMAT = 'kkMemorizeVocabulary.study17'
-VERSION = 5
+VERSION = 6
 RECORD_FIELDS = ('group_number', 'stage', 'morning_done', 'afternoon_done', 'last_completed_on')
 
 
