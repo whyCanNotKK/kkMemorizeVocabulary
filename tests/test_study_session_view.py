@@ -226,6 +226,7 @@ def test_loading_completed_record_hides_timer_immediately(window, repo, monkeypa
     window.set_filter('study17')
     page = window.study_page
     assert page.timer.history.status == 1
+    assert page.completion_notice.isVisible()
     assert all(control.isHidden() for control in (page.elapsed_icon, page.elapsed_label, page.timer_button))
 
 
@@ -243,6 +244,7 @@ def test_empty_incomplete_task_does_not_hide_timer(window, repo, monkeypatch, st
     else:
         assert page.timer.history is None
     assert not page.tasks and not page.timer_button.isEnabled()
+    assert not page.completion_notice.isVisible()
     assert all(control.isVisible() for control in (page.elapsed_icon, page.elapsed_label, page.timer_button))
 
 
@@ -258,5 +260,6 @@ def test_failed_completion_keeps_timer_visible(window, repo, monkeypatch):
         page.complete(entry.id, 'study')
     assert all(control.isVisible() for control in (page.elapsed_icon, page.elapsed_label, page.timer_button))
     assert page.tasks
+    assert not page.completion_notice.isVisible()
     page.complete(entry.id, 'study')
     assert all(control.isHidden() for control in (page.elapsed_icon, page.elapsed_label, page.timer_button))

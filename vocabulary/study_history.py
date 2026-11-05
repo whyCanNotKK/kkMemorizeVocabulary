@@ -153,6 +153,12 @@ class StudyHistoryPanel(QFrame):
         header_layout.setColumnStretch(0, 1)
         header_layout.setColumnStretch(2, 1)
         header_layout.setColumnMinimumWidth(2, self.title.sizeHint().width())
+        self.total_count = QLabel()
+        self.total_count.setTextFormat(Qt.TextFormat.RichText)
+        self.total_count.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        self.total_count.setToolTip('包括已经背完的和正在背的')
+        header_layout.addWidget(self.total_count, 0, 2, Qt.AlignmentFlag.AlignRight)
+        self.update_total_count(0)
         layout.addWidget(header)
         self.model = HistoryModel(self)
         self.table = QTableView()
@@ -199,8 +205,8 @@ class StudyHistoryPanel(QFrame):
         label = f'{"展开" if collapsed else "收起"}背单词记录区域'
         self.collapse_button.setToolTip(label)
         self.collapse_button.setAccessibleName(label)
+        self.refresh()
         if not collapsed:
-            self.refresh()
             if self.isVisible():
                 self._live.start()
         else:
@@ -216,11 +222,20 @@ class StudyHistoryPanel(QFrame):
                 height = min(height, parent.height() // 2)
         self.setFixedHeight(height)
 
+    def update_total_count(self, count):
+        self.total_count.setText(f'<span style="color:{MUTED}">合计 </span>'
+                                 f'<span style="color:{ACCENT};font-size:22px;font-weight:700">{count}</span>'
+                                 f'<span style="color:{MUTED}"> 个单词</span>')
+        self.total_count.setAccessibleName(f'合计 {count} 个单词')
+
     def refresh(self):
-        if self.collapsed or not self.isVisible():
+        if not self.isVisible():
             return
         position = self.table.verticalScrollBar().value()
         try:
+            self.update_total_count(self.repository.study_participant_count())
+            if self.collapsed:
+                return
             self.model.load(self.repository.study_task_histories(), StudyContext.now(), self.timer.context)
         except Exception as error:
             self.timer.error.emit(str(error))

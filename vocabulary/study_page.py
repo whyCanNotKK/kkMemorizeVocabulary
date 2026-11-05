@@ -4,6 +4,7 @@ from PySide6.QtWidgets import QHBoxLayout, QLabel, QVBoxLayout, QWidget
 
 from .learning import StudyContext, format_study_duration
 from .study_timer import StudyTimer
+from .study_completion import StudyCompletionNotice
 from .table import WordTable, WordTableModel
 from .theme import ACCENT, MUTED, icon
 from .widgets import button
@@ -76,6 +77,9 @@ class StudyPage(QWidget):
         self.table = WordTable(self.model, lambda: True)
         self.table.set_page_state("study17", False, 0)
         self.table.empty_text = "当前时段没有待完成的单词\n切换日期或时段后，请点击刷新"
+        self.completion_notice = StudyCompletionNotice(
+            self.refresh_button.icon(), self.refresh_button.iconSize(), self.table.viewport())
+        self.completion_notice.refreshRequested.connect(self.reload)
         self.table.revealRequested.connect(self.reveal)
         self.table.actionRequested.connect(self.complete)
         layout.addWidget(self.table)
@@ -127,6 +131,12 @@ class StudyPage(QWidget):
             self.table.setColumnWidth(0, max(38, width))
             self.model.populate([task.entry for task in visible], self.revealed)
             self.table.update_spans()
+        completed = self.timer.history is not None and bool(self.timer.history.status)
+        show_notice = completed and self.model.rowCount() == 0
+        self.table.empty_text = ('' if show_notice else
+                                 "当前时段没有待完成的单词\n切换日期或时段后，请点击刷新")
+        self.completion_notice.setVisible(show_notice)
+        self.table.viewport().update()
 
     def update_task_count(self):
         review = sum(task.is_review for task in self.tasks)

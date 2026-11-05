@@ -384,6 +384,9 @@ class Repository:
         return self.connection.execute(f"""SELECT COUNT(*) FROM memorize_vocabulary_17day
             WHERE ({self._study_due_clause()}) OR last_completed_on=?""", (day, day)).fetchone()[0]
 
+    def study_participant_count(self) -> int:
+        return self.connection.execute('SELECT COUNT(*) FROM memorize_vocabulary_17day').fetchone()[0]
+
     def has_study_progress(self) -> bool:
         return (self.connection.execute('SELECT 1 FROM memorize_vocabulary_17day LIMIT 1').fetchone() is not None
                 or self.connection.execute('SELECT 1 FROM study_task_history LIMIT 1').fetchone() is not None)

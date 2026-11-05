@@ -4,7 +4,9 @@ from datetime import date, timedelta
 import pytest
 from PySide6.QtCore import Qt
 
+from vocabulary.domain import RelatedWord, Sense, WordEntry
 from vocabulary.learning import StudyContext, StudyTaskHistory
+from vocabulary.storage import Repository
 from vocabulary.study_history import HistoryModel
 
 
@@ -87,6 +89,81 @@ def test_period_icons_are_colored_with_tooltips_and_keep_their_own_records(qapp)
     assert images[0] != images[1]
     assert text(model, 0, 4) == '1 min'
     assert text(model, 1, 4) == '1 h'
+
+
+def test_participant_count_includes_finished_future_and_learned_words_but_not_related(repo):
+    assert repo.study_participant_count() == 0
+    entries = [repo.save(WordEntry(f'word-{i}', [Sense('n.', '')],
+                                  [RelatedWord('child', [Sense('n.', '')])], learned=i == 2))
+               for i in range(4)]
+    with repo.connection:
+        repo.connection.executemany('''INSERT INTO memorize_vocabulary_17day
+            (word_id,group_number,stage,last_completed_on) VALUES (?,?,?,?)''', [
+                (entries[0].id, 1, 1, None), (entries[1].id, 1, 15, DAY.isoformat()),
+                (entries[2].id, 2, 0, DAY.isoformat())])
+    assert repo.study_participant_count() == 3
+    assert len(repo.study_tasks(AM)) == 1
+    reopened = Repository(repo.path)
+    try:
+        assert reopened.study_participant_count() == 3
+    finally:
+        reopened.close()
+
+
+@pytest.mark.parametrize('collapsed', [False, True])
+def test_history_header_count_stays_visible_with_matching_counter_style(window, repo, monkeypatch, collapsed, tmp_path, qtbot):
+    monkeypatch.setattr(StudyContext, 'now', classmethod(lambda cls: PM))
+    window.resize(860, 640)
+    qtbot.wait(10)
+    entry = repo.save(WordEntry('word', [Sense('n.', '')]))
+    window.set_filter('study17')
+    panel = window.history_panel
+    panel.set_collapsed(collapsed)
+    assert panel.total_count.isVisible()
+    assert panel.total_count.accessibleName() == '合计 0 个单词'
+    with repo.connection:
+        repo.connection.execute('''INSERT INTO memorize_vocabulary_17day
+            (word_id,group_number,stage,last_completed_on) VALUES (?,1,0,?)''', (entry.id, DAY.isoformat()))
+    panel.refresh()
+    qtbot.wait(20)
+    assert panel.total_count.accessibleName() == '合计 1 个单词'
+    assert panel.total_count.toolTip() == '包括已经背完的和正在背的'
+    assert panel.total_count.textFormat() == Qt.TextFormat.RichText
+    for label in (panel.total_count, window.study_page.review_count, window.study_page.new_count):
+        assert 'font-size:22px;font-weight:700' in label.text()
+    assert panel.total_count.geometry().left() > panel.collapse_button.geometry().right()
+    assert panel.total_count.sizeHint().width() <= panel.total_count.width()
+    assert panel.geometry().bottom() < window.centralWidget().height()
+    window.grab().save(str(tmp_path / 'history-total.png'))
+
+
+def test_history_total_updates_on_draw_completion_clear_restore_delete_and_reentry(window, repo, monkeypatch):
+    now = [PM]
+    monkeypatch.setattr(StudyContext, 'now', classmethod(lambda cls: now[0]))
+    entry = repo.save(WordEntry('word', [Sense('n.', '词')]))
+    window.set_filter('study17')
+    page, panel = window.study_page, window.history_panel
+    assert panel.collapsed and panel.total_count.accessibleName() == '合计 0 个单词'
+    now[0] = AM
+    page.reload()
+    assert panel.total_count.accessibleName() == '合计 1 个单词'
+    backup = repo.study_backup()
+    page.complete(entry.id, 'study')
+    now[0] = PM
+    page.reload()
+    page.complete(entry.id, 'study')
+    assert not page.tasks and panel.total_count.accessibleName() == '合计 1 个单词'
+    window.clear_content('delete study record')
+    assert panel.total_count.accessibleName() == '合计 0 个单词'
+    repo.replace_study_progress(backup)
+    page.load(PM)
+    assert panel.total_count.accessibleName() == '合计 1 个单词'
+    repo.delete(entry.id, PM)
+    page.load(PM)
+    assert panel.total_count.accessibleName() == '合计 0 个单词'
+    window.set_filter('pending')
+    window.set_filter('study17')
+    assert panel.total_count.accessibleName() == '合计 0 个单词'
 
 
 def test_panel_starts_collapsed_keeps_independent_state_and_does_not_create_tasks(window, repo, monkeypatch, qtbot):
