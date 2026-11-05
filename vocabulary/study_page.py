@@ -64,13 +64,13 @@ class StudyPage(QWidget):
         self.completed_button.setCheckable(True)
         self.completed_button.clicked.connect(self.toggle_completed)
         toolbar.addWidget(self.completed_button)
+        layout.addLayout(toolbar)
         self.timer.changed.connect(self.update_timer_button)
         self.timer.changed.connect(self.update_task_count)
         self.timer.changed.connect(self.update_elapsed)
         self.update_timer_button()
         self.update_task_count()
         self.update_completed_button()
-        layout.addLayout(toolbar)
         self.model = WordTableModel(edit_callback, self)
         self.model.study_groups = {}
         self.table = WordTable(self.model, lambda: True)
@@ -234,13 +234,16 @@ class StudyPage(QWidget):
 
     def update_timer_button(self):
         history = self.timer.history
+        completed = history is not None and bool(history.status)
+        for control in (self.elapsed_icon, self.elapsed_label, self.timer_button):
+            control.setVisible(not completed)
         text = ('暂停' if self.timer.running else '继续' if history is not None else '开始背单词')
-        if history is not None and history.status:
+        if completed:
             text = '任务已完成'
         self.timer_button.setIcon(icon('pause' if self.timer.running else 'play'))
         self.timer_button.setToolTip(text)
         self.timer_button.setAccessibleName(text)
-        self.timer_button.setEnabled(bool(self.tasks) and not (history is not None and history.status))
+        self.timer_button.setEnabled(bool(self.tasks) and not completed)
 
     def start_timer(self):
         try:

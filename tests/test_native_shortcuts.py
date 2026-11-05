@@ -116,15 +116,15 @@ def test_native_visibility_shortcut_fires_once_and_follows_remapping(window, qtb
     window.blocks[0].word.setFocus()
     bridge.refresh()
     bridge.dispatch_key(0xA2, True)
-    assert bridge.dispatch_key(ord("E"), True)
-    assert bridge.dispatch_key(ord("E"), True)
-    bridge.dispatch_key(ord("E"), False)
+    assert bridge.dispatch_key(ord("S"), True)
+    assert bridge.dispatch_key(ord("S"), True)
+    bridge.dispatch_key(ord("S"), False)
     bridge.dispatch_key(0xA2, False)
     qtbot.wait(20)
     assert not window.global_hidden
     window.shortcuts.update(dict(window.shortcuts.values, toggle_visibility="Alt+E"))
     bridge.dispatch_key(0xA2, True)
-    assert not bridge.dispatch_key(ord("E"), True)
+    assert not bridge.dispatch_key(ord("S"), True)
     bridge.dispatch_key(0xA2, False)
     bridge.dispatch_key(0xA4, True)
     assert bridge.dispatch_key(ord("E"), True)
@@ -132,6 +132,26 @@ def test_native_visibility_shortcut_fires_once_and_follows_remapping(window, qtb
     bridge.dispatch_key(0xA4, False)
     qtbot.wait(20)
     assert window.global_hidden
+
+
+def test_native_edit_shortcut_loads_selected_word_once(window, repo, qtbot, native, monkeypatch):
+    entry = repo.save(WordEntry('edit', [Sense('n.', '编辑')]))
+    window.refresh()
+    window.table.setCurrentIndex(window.model.index(0, 1))
+    window.table.setFocus()
+    calls = []
+    original = window.list_action
+    monkeypatch.setattr(window, 'list_action', lambda *args: (calls.append(args), original(*args)))
+    bridge, api = native
+    bridge.refresh()
+    bridge.dispatch_key(0xA2, True)
+    assert bridge.dispatch_key(ord('E'), True)
+    assert bridge.dispatch_key(ord('E'), True)
+    bridge.dispatch_key(ord('E'), False)
+    bridge.dispatch_key(0xA2, False)
+    qtbot.wait(20)
+    assert calls == [(entry.id, 'edit')]
+    assert window.edit_id == entry.id and window.blocks[0].word.hasFocus()
 
 
 def test_native_delete_shortcut_targets_focused_definition(window, qtbot, native, monkeypatch):

@@ -682,10 +682,9 @@ class WordTable(QTableView):
         row = index.data(Qt.ItemDataRole.UserRole)
         if row is None:
             return False
-        target = (row.entry.id, row.owner)
         for candidate in (self.currentIndex(), self._hovered_index):
             item = candidate.data(Qt.ItemDataRole.UserRole) if candidate.isValid() else None
-            if item is not None and (item.entry.id, item.owner) == target:
+            if item is not None and item.entry.id == row.entry.id:
                 return True
         return False
 

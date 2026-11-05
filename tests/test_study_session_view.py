@@ -27,9 +27,10 @@ def mixed_words(repo):
 
 
 @pytest.mark.parametrize('seconds,text', [
-    (0, '0 s'), (1, '1 s'), (59, '59 s'), (60, '1 min 0 s'), (61, '1 min 1 s'),
-    (3599, '59 min 59 s'), (3600, '1 h 0 min'), (3661, '1 h 1 min'),
-    (7199, '1 h 59 min'), (7200, '2 h 0 min'), (90061, '25 h 1 min'),
+    (0, '0 s'), (1, '1 s'), (59, '59 s'), (60, '1 min'), (61, '1 min 1 s'),
+    (120, '2 min'), (3599, '59 min 59 s'), (3600, '1 h'), (3601, '1 h'),
+    (3659, '1 h'), (3661, '1 h 1 min'), (7199, '1 h 59 min'), (7200, '2 h'),
+    (86400, '24 h'), (90061, '25 h 1 min'),
 ])
 def test_duration_format_boundaries(seconds, text):
     assert format_study_duration(seconds) == text
@@ -182,3 +183,80 @@ def test_live_elapsed_clock_ticks_without_writing_history_and_stops_only_its_dis
     window.set_filter('study17')
     assert page.elapsed_label.text() == '1 min 34 s'
     assert repo.study_task_history(AM).duration_seconds == 42
+
+
+def test_completed_task_hides_timer_and_restores_it_for_next_period(window, repo, monkeypatch, qtbot):
+    entry = repo.save(WordEntry('word', [Sense('n.', '释义')]))
+    context = [AM]
+    monkeypatch.setattr(StudyContext, 'now', classmethod(lambda cls: context[0]))
+    window.set_filter('study17')
+    page = window.study_page
+    controls = (page.elapsed_icon, page.elapsed_label, page.timer_button)
+    assert all(control.isVisible() for control in controls)
+    page.toggle_timer()
+    assert page.timer.running and all(control.isVisible() for control in controls)
+    page.toggle_timer()
+    assert not page.timer.running and all(control.isVisible() for control in controls)
+    page.complete(entry.id, 'study')
+    assert repo.study_task_history(AM).status == 1
+    assert not page.timer.running
+    assert all(control.isHidden() for control in controls)
+    assert page.refresh_button.isVisible() and page.period_label.isVisible()
+    assert page.review_count.isVisible() and page.new_count.isVisible()
+    assert page.completed_button.isVisible()
+    page.toggle_completed(True)
+    assert page.model.rowCount() > 0 and all(control.isHidden() for control in controls)
+    assert page.reload() and all(control.isHidden() for control in controls)
+    window.set_filter('pending')
+    window.set_filter('study17')
+    assert all(control.isHidden() for control in controls)
+    context[0] = PM
+    assert page.reload()
+    assert all(control.isVisible() for control in controls)
+    assert page.timer_button.isEnabled() and page.timer_button.toolTip() == '开始背单词'
+    page.complete(entry.id, 'study')
+    assert all(control.isHidden() for control in controls)
+
+
+def test_loading_completed_record_hides_timer_immediately(window, repo, monkeypatch):
+    entry = repo.save(WordEntry('word', [Sense('n.', '释义')]))
+    repo.prepare_study(AM)
+    repo.complete_study(entry.id, AM)
+    monkeypatch.setattr(StudyContext, 'now', classmethod(lambda cls: AM))
+    window.set_filter('study17')
+    page = window.study_page
+    assert page.timer.history.status == 1
+    assert all(control.isHidden() for control in (page.elapsed_icon, page.elapsed_label, page.timer_button))
+
+
+@pytest.mark.parametrize('started', [False, True])
+def test_empty_incomplete_task_does_not_hide_timer(window, repo, monkeypatch, started):
+    entry = repo.save(WordEntry('word', [Sense('n.', '释义')])) if started else None
+    monkeypatch.setattr(StudyContext, 'now', classmethod(lambda cls: AM))
+    window.set_filter('study17')
+    page = window.study_page
+    if started:
+        page.toggle_timer()
+        repo.delete(entry.id, AM)
+        assert page.load(AM)
+        assert page.timer.history.status == 0
+    else:
+        assert page.timer.history is None
+    assert not page.tasks and not page.timer_button.isEnabled()
+    assert all(control.isVisible() for control in (page.elapsed_icon, page.elapsed_label, page.timer_button))
+
+
+def test_failed_completion_keeps_timer_visible(window, repo, monkeypatch):
+    entry = repo.save(WordEntry('word', [Sense('n.', '释义')]))
+    monkeypatch.setattr(StudyContext, 'now', classmethod(lambda cls: AM))
+    window.set_filter('study17')
+    page = window.study_page
+    def fail(*args, **kwargs):
+        raise OSError('locked')
+    with monkeypatch.context() as patch:
+        patch.setattr(repo, 'complete_study', fail)
+        page.complete(entry.id, 'study')
+    assert all(control.isVisible() for control in (page.elapsed_icon, page.elapsed_label, page.timer_button))
+    assert page.tasks
+    page.complete(entry.id, 'study')
+    assert all(control.isHidden() for control in (page.elapsed_icon, page.elapsed_label, page.timer_button))

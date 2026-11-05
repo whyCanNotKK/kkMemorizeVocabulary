@@ -16,6 +16,7 @@ from .unsaved_input_dialog import UnsavedInputDialog
 from .import_dialog import ImportConflictDialog
 from .input_focus import InputFocusPolicy
 from .form_reorder import FormReorderDrag
+from .form_focus import FormFocusContext
 from .shortcuts import SettingsDialog, ShortcutManager
 from .table import WordTable, WordTableModel
 from .review_navigation import ReviewKeyRouter
@@ -181,7 +182,6 @@ class MainWindow(QMainWindow):
         editor_layout.addWidget(self.form_scroll, 1)
 
         self.add_related_button = button("新增关联词", quiet=True)
-        self.add_related_button.hide()
         self.add_related_button.clicked.connect(self.add_related)
         self.remove_related_button = button("删除关联词", quiet=True)
         self.remove_related_button.clicked.connect(self.remove_focused_related)
@@ -221,6 +221,7 @@ class MainWindow(QMainWindow):
             "remove_sense": self.remove_sense,
             "save": self.save_current,
             "important": self.toggle_form_star,
+            "edit_selected": self.edit_selected,
         }
         callbacks = {
             name: lambda action=action: self.run_form_action(action) for name, action in form_actions.items()
@@ -240,6 +241,9 @@ class MainWindow(QMainWindow):
         self.form_drag.relatedMoved.connect(self.move_form_related)
         self.form_drag.senseMoved.connect(lambda block, source, target: block.move_sense(source, target))
         self.form_drag.activeChanged.connect(self.form_drag_changed)
+        self.form_focus = FormFocusContext(self.editor_panel, self)
+        self.form_focus.changed.connect(self.related_context_changed)
+        self.form_focus.blankPressed.connect(self.clear_related_target)
         self.reset_form()
         self.refresh()
         QApplication.instance().focusChanged.connect(self.focus_changed)
@@ -546,15 +550,31 @@ class MainWindow(QMainWindow):
         self.update_tab_order()
 
     def update_related_actions(self):
-        owner = QApplication.focusWidget()
-        while owner is not None and owner is not self.editor_panel:
-            owner = owner.parentWidget()
-        form_focused = owner is self.editor_panel
-        self.add_related_button.setVisible(form_focused)
+        form_focused = self.form_focus.active and QApplication.focusWidget() is not self.editor_panel
+        self.add_related_button.setVisible(True)
         target = self.related_action_block()
-        can_remove = form_focused and target in self.blocks[1:]
+        can_remove = len(self.blocks) > 1
         self.remove_related_button.setEnabled(can_remove)
         self.remove_related_button.setVisible(can_remove)
+        keys = self.shortcuts.labels()
+        remove_label = ('删除关联词' if target in self.blocks[1:] or not can_remove else '删除末尾关联词')
+        for control, key, label in ((self.add_related_button, 'add_related', '新增关联词'),
+                                    (self.remove_related_button, 'remove_related', remove_label)):
+            control.setText(f'{label}  {keys[key]}' if form_focused else label)
+            control.setToolTip(f'{label} · {keys[key]}' if form_focused else label)
+            control.setAccessibleName(label)
+
+    def related_context_changed(self):
+        if self._closing:
+            return
+        if not self.form_focus.active:
+            self._related_focus_target = None
+        self.update_related_actions()
+
+    def clear_related_target(self):
+        self._related_focus_target = self.active_block = None
+        self._last_form_focus = self._collapsed_focus = None
+        self.update_related_actions()
 
     def form_value(self):
         if not self.blocks:
@@ -617,12 +637,9 @@ class MainWindow(QMainWindow):
         target = next((block for block in self.blocks if new is block or
                        (new is not None and block.isAncestorOf(new))), None)
         self.active_block = target
-        owner = new
-        while owner is not None and owner is not self.editor_panel:
-            owner = owner.parentWidget()
         if target is not None:
             self._related_focus_target = target
-        elif owner is not self.editor_panel:
+        elif new not in (self.add_related_button, self.remove_related_button):
             self._related_focus_target = None
         keys = self.shortcuts.labels()
         self.update_related_actions()
@@ -663,12 +680,7 @@ class MainWindow(QMainWindow):
     def refresh_shortcut_labels(self):
         keys = self.shortcuts.labels()
         self.update_visibility_button()
-        for control, key in ((self.add_related_button, "add_related"),
-                             (self.remove_related_button, "remove_related")):
-            label = SHORTCUT_LABELS[key]
-            control.setText(f"{label}  {keys[key]}")
-            control.setToolTip(f"{label} · {keys[key]}")
-            control.setAccessibleName(label)
+        self.update_related_actions()
         self.save_button.setText(f"{'保存修改' if self.edit_id else '保存'}  {keys['save']}")
         for block in self.blocks:
             block.set_shortcuts(keys)
@@ -687,13 +699,15 @@ class MainWindow(QMainWindow):
         target = self.related_action_block()
         if not self._can_change_form():
             return
-        position = self.blocks.index(target) + 1 if target in self.blocks else 1
+        position = self.blocks.index(target) + 1 if target in self.blocks else len(self.blocks)
         block = self.add_block(related=True, position=position)
         self.form_changed()
         self.update_tab_order()
         QTimer.singleShot(0, lambda: self.restore_input_focus(block.word))
 
     def related_action_block(self):
+        if not self.form_focus.active:
+            return None
         target = self.focused_block()
         if target is not None:
             return target
@@ -703,7 +717,11 @@ class MainWindow(QMainWindow):
         return None
 
     def remove_focused_related(self):
+        if not self.form_focus.active:
+            return
         target = self.related_action_block()
+        if target not in self.blocks[1:]:
+            target = self.blocks[-1] if len(self.blocks) > 1 else None
         if target in self.blocks[1:] and self._can_change_form():
             self.remove_related(target)
 
@@ -873,6 +891,14 @@ class MainWindow(QMainWindow):
             return False
         self.show_notice("修改已保存")
         return True
+
+    def edit_selected(self):
+        if self.filter_name == 'study17':
+            return
+        index = self.table.currentIndex()
+        row = index.data(Qt.ItemDataRole.UserRole)
+        if row is not None and self.table.selectionModel().isSelected(index):
+            self.list_action(row.entry.id, 'edit')
 
     def list_action(self, entry_id, action):
         if not self.current_table().delegate.submit():

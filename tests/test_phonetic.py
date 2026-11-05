@@ -128,39 +128,55 @@ def test_form_phonetics_save_and_overwrite_list_while_preserving_progress(window
 
 
 @pytest.mark.parametrize("page", ["pending", "all", "learned", "study17"])
-def test_hover_and_keyboard_show_independent_phonetics(window, repo, qtbot, monkeypatch, page):
-    first, second = repo.save(word()), repo.save(word("another"))
+@pytest.mark.parametrize("empty_main", [False, True])
+def test_hover_and_keyboard_show_whole_word_groups(window, repo, qtbot, monkeypatch, page, empty_main):
+    draft = word()
+    if empty_main:
+        draft.phonetic = ""
+    draft.related.append(RelatedWord("silent", [Sense("n.", "无音标")]))
+    first, second, third = repo.save(draft), repo.save(word("another")), repo.save(word("unrelated"))
     monkeypatch.setattr(StudyContext, "now", classmethod(lambda cls: StudyContext(date(2026, 11, 5), False)))
     if page == "learned":
-        for entry in (first, second):
+        for entry in (first, second, third):
             repo.set_flag(entry.id, "learned", True)
     window.set_filter(page)
     table = window.current_table()
     if page == "study17":
-        table.set_entry_revealed(first.id, True)
-        table.set_entry_revealed(second.id, True)
+        for entry in (first, second, third):
+            table.set_entry_revealed(entry.id, True)
     else:
-        window.reveal(first.id, True)
-        window.reveal(second.id, True)
+        for entry in (first, second, third):
+            window.reveal(entry.id, True)
     model = table.model()
-    main = model.index(0, 1)
-    child = model.index(2, 1)
-    other = model.index(3, 1)
-    # Keyboard navigation selects one word, mouse position reveals another.
+
+    def group_visible(entry, expected):
+        for number, row in enumerate(model.rows):
+            if row.entry.id != entry.id or row.sense != 0:
+                continue
+            index = model.index(number, 1)
+            assert table.phonetic_visible(index) == expected
+            layout = table.delegate.phonetic_layout(index, table.visualRect(index), table.font())
+            assert (layout is not None) == (expected and bool(row.word.phonetic))
+
+    # Selecting the main word and hovering another group's child shows both full groups.
     table.select_entry(first.id)
+    other = table._entry_index(second.id, owner=0, column=3)
     qtbot.mouseMove(table.viewport(), table.visualRect(other).center())
-    assert table.phonetic_visible(main) and table.phonetic_visible(other)
-    assert not table.phonetic_visible(child)
-    assert table.delegate.phonetic_layout(main, table.visualRect(main), table.font())[1] == first.phonetic
-    # Hovering another sense of the same word reveals its word-name row.
-    table.setCurrentIndex(child)
-    qtbot.mouseMove(table.viewport(), table.visualRect(model.index(1, 3)).center())
-    assert table.phonetic_visible(main) and table.phonetic_visible(child)
-    assert not table.phonetic_visible(other)
+    group_visible(first, True)
+    group_visible(second, True)
+    group_visible(third, False)
+    # Even a child with no phonetic activates all other phonetics in its group.
+    table.setCurrentIndex(table._entry_index(first.id, owner=1))
+    sense = table._entry_index(first.id, sense=1, column=3)
+    qtbot.mouseMove(table.viewport(), table.visualRect(sense).center())
+    group_visible(first, True)
+    group_visible(second, False)
     QApplication.sendEvent(table.viewport(), QEvent(QEvent.Type.Leave))
-    assert not table.phonetic_visible(main) and table.phonetic_visible(child)
+    group_visible(first, True)
+    group_visible(second, False)
     table.setCurrentIndex(QModelIndex())
-    assert not table.phonetic_visible(child)
+    for entry in (first, second, third):
+        group_visible(entry, False)
 
 
 def test_long_word_and_phonetic_render_separately_but_share_word_click_region(window, repo, qtbot):

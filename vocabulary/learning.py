@@ -80,9 +80,9 @@ def format_study_duration(seconds: int) -> str:
         return f'{seconds} s'
     minutes, remaining = divmod(seconds, 60)
     if minutes < 60:
-        return f'{minutes} min {remaining} s'
+        return f'{minutes} min' + (f' {remaining} s' if remaining else '')
     hours, minutes = divmod(minutes, 60)
-    return f'{hours} h {minutes} min'
+    return f'{hours} h' + (f' {minutes} min' if minutes else '')
 
 
 def next_stage(stage: int) -> int:

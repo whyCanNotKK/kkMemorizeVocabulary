@@ -630,10 +630,12 @@ def test_setting_recorder_persists_and_escape_cancels(window, repo, qtbot):
     dialog = SettingsDialog(window.shortcuts, window)
     qtbot.addWidget(dialog)
     dialog.show()
+    dialog.activateWindow()
+    qtbot.waitUntil(dialog.isActiveWindow)
     dialog.record("add_related")
     qtbot.keyClick(dialog.editors["add_related"], Qt.Key.Key_N, Qt.KeyboardModifier.AltModifier)
     assert repo.shortcuts()["add_related"] == "Alt+N"
-    assert "Alt+N" in window.add_related_button.text()
+    assert window.add_related_button.text() == "新增关联词"
     dialog.record("add_related")
     qtbot.keyClick(dialog.editors["add_related"], Qt.Key.Key_Escape)
     assert repo.shortcuts()["add_related"] == "Alt+N"

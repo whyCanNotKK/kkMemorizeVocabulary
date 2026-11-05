@@ -34,6 +34,11 @@ class Repository:
         self.max_learned_sort_order = maxima.get(1, 0)
         with self.connection:
             configured = self.shortcuts()
+            # Upgrade the previous visibility default once, when adding the edit action.
+            if ('edit_selected' not in configured and configured.get('toggle_visibility') == 'Ctrl+E'
+                    and 'Ctrl+S' not in configured.values()):
+                self.connection.execute("UPDATE settings SET value=? WHERE key=?", ('Ctrl+S', 'toggle_visibility'))
+                configured['toggle_visibility'] = 'Ctrl+S'
             used = set(configured.values())
             for action, default in DEFAULT_SHORTCUTS.items():
                 if action in configured:

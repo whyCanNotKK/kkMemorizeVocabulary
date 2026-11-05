@@ -2,7 +2,7 @@ from functools import lru_cache
 import math
 
 from PySide6.QtCore import QPointF, QRectF, Qt
-from PySide6.QtGui import QColor, QFont, QFontDatabase, QIcon, QPainter, QPen, QPixmap, QPolygonF
+from PySide6.QtGui import QColor, QFont, QFontDatabase, QIcon, QPainter, QPainterPath, QPen, QPixmap, QPolygonF
 
 
 BG = "#171b22"
@@ -139,6 +139,20 @@ def draw_symbol(p: QPainter, name: str, rect: QRectF, color: str):
         p.drawPolygon(QPolygonF([QPointF(-10, 0), QPointF(-5, -6), QPointF(5, -6),
                                 QPointF(10, 0), QPointF(5, 6), QPointF(-5, 6)]))
         p.drawEllipse(QRectF(-3, -3, 6, 6))
+    elif name == "sun":
+        p.setBrush(QColor(color))
+        p.drawEllipse(QRectF(-4, -4, 8, 8))
+        for i in range(8):
+            angle = i * math.pi / 4
+            p.drawLine(QPointF(7 * math.cos(angle), 7 * math.sin(angle)),
+                       QPointF(10 * math.cos(angle), 10 * math.sin(angle)))
+    elif name == "moon":
+        disk, cutout = QPainterPath(), QPainterPath()
+        disk.addEllipse(QRectF(-8, -8, 16, 16))
+        cutout.addEllipse(QRectF(-2, -10, 15, 15))
+        p.setPen(Qt.PenStyle.NoPen)
+        p.setBrush(QColor(color))
+        p.drawPath(disk.subtracted(cutout))
     elif name == "task_cross":
         p.drawLine(QPointF(-6, -6), QPointF(6, 6))
         p.drawLine(QPointF(-6, 6), QPointF(6, -6))

@@ -222,7 +222,8 @@ def test_interactive_clicks_and_input_drafts_keep_their_focus_behavior(window, q
     qtbot.mouseClick(editor, Qt.MouseButton.LeftButton)
     assert editor.hasFocus()
     qtbot.mouseClick(window.centralWidget(), Qt.MouseButton.LeftButton, pos=QPoint(4, 4))
-    assert editor.hasFocus() and editor.text() == 'unfinished draft'
+    assert not editor.hasFocus() and editor.text() == 'unfinished draft'
+    assert window.add_related_button.text() == '新增关联词'
     window.global_hide_button.setFocus()
     qtbot.mouseClick(window.table.viewport(), Qt.MouseButton.LeftButton, pos=QPoint(15, 20))
     assert not window.global_hide_button.hasFocus() and window.table.hasFocus()

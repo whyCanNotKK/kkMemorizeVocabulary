@@ -13,11 +13,11 @@ def entry():
 
 
 def field(block, name):
-    return block.word if name == "word" else getattr(block.rows[-1], name)
+    return getattr(block, name) if name in ("word", "phonetic") else getattr(block.rows[-1], name)
 
 
 @pytest.mark.parametrize("source", [0, 1, 2])
-@pytest.mark.parametrize("input_name", ["word", "pos", "translation"])
+@pytest.mark.parametrize("input_name", ["word", "phonetic", "pos", "translation"])
 @pytest.mark.parametrize("trigger", ["button", "shortcut"])
 def test_add_inserts_after_focused_word_without_rebuilding_existing_inputs(
         window, qtbot, source, input_name, trigger):
@@ -42,7 +42,7 @@ def test_add_inserts_after_focused_word_without_rebuilding_existing_inputs(
 
 
 @pytest.mark.parametrize("source", [1, 2, 3])
-@pytest.mark.parametrize("input_name", ["word", "pos", "translation"])
+@pytest.mark.parametrize("input_name", ["word", "phonetic", "pos", "translation"])
 @pytest.mark.parametrize("trigger", ["button", "shortcut"])
 def test_remove_targets_focused_related_word(window, qtbot, monkeypatch, source, input_name, trigger):
     window.reset_form(entry())
@@ -62,10 +62,10 @@ def test_remove_targets_focused_related_word(window, qtbot, monkeypatch, source,
     assert window.blocks[min(source, len(window.blocks) - 1)].word.hasFocus()
 
 
-def test_remove_no_target_and_cancel_never_delete_last(window, qtbot, monkeypatch):
+def test_remove_outside_form_and_cancel_preserve_related_words(window, qtbot, monkeypatch):
     window.reset_form(entry())
     before = list(window.blocks)
-    for target in (window.blocks[0].word, window.search_box, window.table, window.save_button):
+    for target in (window.search_box, window.table):
         target.setFocus()
         qtbot.keyClick(target, Qt.Key.Key_M, Qt.KeyboardModifier.ControlModifier)
         assert window.blocks == before
@@ -78,6 +78,7 @@ def test_remove_no_target_and_cancel_never_delete_last(window, qtbot, monkeypatc
 def test_related_focus_order_persists_and_remapped_hints_match(window, repo, qtbot, monkeypatch):
     saved = repo.save(entry())
     window.reset_form(saved)
+    window.blocks[1].word.setFocus()
     window.shortcuts.update(dict(window.shortcuts.values, add_related="Alt+N", remove_related="Alt+M"))
     assert window.add_related_button.toolTip() == "新增关联词 · Alt+N"
     assert window.remove_related_button.toolTip() == "删除关联词 · Alt+M"

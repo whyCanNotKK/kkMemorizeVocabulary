@@ -23,23 +23,27 @@ def test_shuffle_hides_during_search_and_returns_when_cleared(window):
     assert window.table.shuffle_button.isVisible()
 
 
-def test_related_actions_only_show_while_form_owns_focus(window, qtbot):
+def test_related_actions_follow_form_context_and_target(window, qtbot):
     window.reset_form(draft())
     window.search_box.setFocus()
-    assert not window.add_related_button.isVisible()
-    assert not window.remove_related_button.isVisible()
+    assert window.add_related_button.isVisible()
+    assert window.add_related_button.text() == '新增关联词'
+    assert window.remove_related_button.isVisible()
+    assert window.remove_related_button.text() == '删除末尾关联词'
     for target in (window.blocks[0].word, window.blocks[0].rows[0].pos,
                    window.blocks[0].rows[0].translation):
         target.setFocus()
         assert window.add_related_button.isVisible()
-        assert not window.remove_related_button.isVisible()
+        assert window.remove_related_button.isVisible()
+        assert window.remove_related_button.text().startswith('删除末尾关联词')
     window.blocks[1].word.setFocus()
     assert window.remove_related_button.isVisible()
     window.add_related_button.setFocus()
     assert window.remove_related_button.isVisible()
     window.save_button.setFocus()
     assert window.add_related_button.isVisible()
-    assert not window.remove_related_button.isVisible()
+    assert window.remove_related_button.isVisible()
+    assert window.remove_related_button.text().startswith('删除末尾关联词')
     combo = window.blocks[1].rows[0].pos
     combo.setFocus()
     combo.showPopup()
@@ -47,8 +51,10 @@ def test_related_actions_only_show_while_form_owns_focus(window, qtbot):
     assert window.remove_related_button.isVisible()
     combo.hidePopup()
     window.table.setFocus()
-    assert not window.add_related_button.isVisible()
-    assert not window.remove_related_button.isVisible()
+    assert window.add_related_button.isVisible()
+    assert window.add_related_button.text() == '新增关联词'
+    assert window.remove_related_button.isVisible()
+    assert window.remove_related_button.text() == '删除末尾关联词'
     window.blocks[0].rows[0].translation.setFocus()
     dialog = QDialog(window)
     qtbot.addWidget(dialog)
@@ -57,8 +63,10 @@ def test_related_actions_only_show_while_form_owns_focus(window, qtbot):
     dialog.activateWindow()
     dialog.setFocus()
     qtbot.waitUntil(dialog.hasFocus)
-    assert not window.add_related_button.isVisible()
-    assert not window.remove_related_button.isVisible()
+    assert window.add_related_button.isVisible()
+    assert window.add_related_button.text() == '新增关联词'
+    assert window.remove_related_button.isVisible()
+    assert window.remove_related_button.text() == '删除末尾关联词'
 
 
 def test_related_blocks_have_no_remove_button_and_footer_removes_focused(window, qtbot, monkeypatch):
@@ -161,7 +169,7 @@ def test_settings_describe_definition_shortcuts(window, qtbot):
     qtbot.addWidget(dialog)
     labels = {label.text() for label in dialog.findChildren(QLabel)}
     assert {"新增关联词", "删除关联词", "新增释义", "删除释义",
-            "设置单词‘重点/非重点’", "保存单词"} <= labels
+            "单词 重点/非重点", "保存单词"} <= labels
 
 
 @pytest.mark.parametrize("related", [False, True])

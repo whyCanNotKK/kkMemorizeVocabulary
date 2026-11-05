@@ -92,7 +92,7 @@ def test_shortcuts_restart_does_not_overwrite_user_settings(repo):
     second = Repository(repo.path)
     try:
         assert second.shortcuts()["add_related"] == "Alt+N"
-        assert len(second.shortcuts()) == 7
+        assert len(second.shortcuts()) == 8
     finally:
         second.close()
 
@@ -100,12 +100,12 @@ def test_shortcuts_restart_does_not_overwrite_user_settings(repo):
 def test_new_visibility_shortcut_is_added_to_old_settings_without_conflicts(repo):
     with repo.connection:
         repo.connection.execute("DELETE FROM settings WHERE key='toggle_visibility'")
-    repo.write_shortcuts({"save": "Ctrl+E"})
+    repo.write_shortcuts({"save": "Ctrl+S"})
     second = Repository(repo.path)
     try:
         values = second.shortcuts()
-        assert values["save"] == "Ctrl+E"
-        assert values["toggle_visibility"] == "Ctrl+Shift+E"
+        assert values["save"] == "Ctrl+S"
+        assert values["toggle_visibility"] == "Ctrl+Shift+S"
         assert len(set(values.values())) == len(values)
         second.write_shortcuts({"toggle_visibility": "Alt+E"})
     finally:
@@ -122,7 +122,7 @@ def test_missing_visibility_shortcut_gets_default_on_restart(repo):
         repo.connection.execute("DELETE FROM settings WHERE key='toggle_visibility'")
     second = Repository(repo.path)
     try:
-        assert second.shortcuts()["toggle_visibility"] == "Ctrl+E"
+        assert second.shortcuts()["toggle_visibility"] == "Ctrl+S"
     finally:
         second.close()
 

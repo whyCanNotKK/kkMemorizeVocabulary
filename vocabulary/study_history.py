@@ -13,6 +13,7 @@ from .widgets import button
 
 class HistoryModel(QAbstractTableModel):
     HEADERS = ('日期', '时段', '开始时间', '结束时间', '有效用时', '复习词', '新词', '状态')
+    PERIODS = (('sun', GOLD, '上午'), ('moon', '#a5baf3', '下午'))
     STATUS = {
         'missing': ('task_cross', MUTED, '完全没背单词'),
         'completed': ('task_check', ACCENT, '已完成'),
@@ -44,10 +45,11 @@ class HistoryModel(QAbstractTableModel):
         return 0 if parent.isValid() else len(self.HEADERS)
 
     def period(self, row):
-        omitted = (self.last - self.today.day).days * 2
-        if not self.today.afternoon and row >= omitted:
+        if not self.today.afternoon:
+            if row == 0:
+                return self.last, 0
             row += 1
-        return self.last - timedelta(days=row // 2), 1 - row % 2
+        return self.last - timedelta(days=row // 2), row % 2
 
     def task_status(self, day, afternoon, record):
         if record is None:
@@ -67,8 +69,9 @@ class HistoryModel(QAbstractTableModel):
             return None
         day, afternoon = self.period(index.row())
         record = self.records.get((day.isoformat(), afternoon))
-        if index.column() == 7:
-            name, color, text = self.STATUS[self.task_status(day, afternoon, record)]
+        if index.column() in (1, 7):
+            name, color, text = (self.PERIODS[afternoon] if index.column() == 1 else
+                                 self.STATUS[self.task_status(day, afternoon, record)])
             if role == Qt.ItemDataRole.DecorationRole:
                 return icon(name, color)
             if role in (Qt.ItemDataRole.ToolTipRole, Qt.ItemDataRole.AccessibleTextRole):
@@ -87,10 +90,8 @@ class HistoryModel(QAbstractTableModel):
         if role != Qt.ItemDataRole.DisplayRole:
             return None
         if index.column() == 0:
-            return day.isoformat() if afternoon or (day == self.today.day and not self.today.afternoon) else ''
-        if index.column() == 1:
-            return '下午' if afternoon else '上午'
-        if index.column() == 7:
+            return day.isoformat() if not afternoon else ''
+        if index.column() in (1, 7):
             return ''
         if record is None:
             return '—'
@@ -109,15 +110,17 @@ class HistoryModel(QAbstractTableModel):
 
 class HistoryDelegate(QStyledItemDelegate):
     def paint(self, painter, option, index):
-        if index.column() == 7:
+        if index.column() in (1, 7):
             painter.fillRect(option.rect, index.data(Qt.ItemDataRole.BackgroundRole))
             target = QRect(0, 0, 20, 20)
             target.moveCenter(option.rect.center())
             index.data(Qt.ItemDataRole.DecorationRole).paint(painter, target)
         else:
             super().paint(painter, option, index)
-        # A shared background and one separator after morning bind each day's pair.
-        if not index.model().period(index.row())[1]:
+        # The merged date cell and the last period share a day-bottom separator.
+        model, row = index.model(), index.row()
+        if (index.column() == 0 or row + 1 == model.rowCount()
+                or model.period(row)[0] != model.period(row + 1)[0]):
             painter.save()
             painter.setPen(QPen(QColor('#36404e')))
             painter.drawLine(option.rect.bottomLeft(), option.rect.bottomRight())
@@ -154,6 +157,7 @@ class StudyHistoryPanel(QFrame):
         self.model = HistoryModel(self)
         self.table = QTableView()
         self.table.setModel(self.model)
+        self.model.modelReset.connect(self.update_date_spans)
         self.table.setIconSize(QSize(20, 20))
         self.table.setItemDelegate(HistoryDelegate(self.table))
         self.table.setShowGrid(False)
@@ -174,6 +178,18 @@ class StudyHistoryPanel(QFrame):
         self._live.setInterval(1000)
         self._live.timeout.connect(self.update_live)
         self.set_collapsed(True)
+
+    def update_date_spans(self):
+        self.table.clearSpans()
+        row = 0
+        while row < self.model.rowCount():
+            day, _ = self.model.period(row)
+            end = row + 1
+            while end < self.model.rowCount() and self.model.period(end)[0] == day:
+                end += 1
+            if end - row > 1:
+                self.table.setSpan(row, 0, end - row, 1)
+            row = end
 
     def set_collapsed(self, collapsed):
         self.collapsed = collapsed
