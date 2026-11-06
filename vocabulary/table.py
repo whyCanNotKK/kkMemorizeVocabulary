@@ -2,13 +2,14 @@ from dataclasses import dataclass
 from contextlib import contextmanager
 import math
 import time
+from html import escape
 
 import shiboken6
 from PySide6.QtCore import QAbstractTableModel, QEasingCurve, QEvent, QItemSelection, QItemSelectionModel, QModelIndex, QPoint, QPointF, QPersistentModelIndex, QRect, QRectF, QSize, Qt, QTimer, QVariantAnimation, Signal
 from PySide6.QtGui import QColor, QCursor, QFont, QFontMetricsF, QPainter, QPainterPath, QPen, QTextDocument, QTextOption
 from PySide6.QtWidgets import (
     QAbstractItemView, QAbstractSlider, QApplication, QHeaderView, QLineEdit, QPlainTextEdit,
-    QPushButton, QStyle, QStyledItemDelegate, QStyleOptionViewItem, QTableView,
+    QPushButton, QStyle, QStyledItemDelegate, QStyleOptionViewItem, QTableView, QToolTip,
 )
 
 from .domain import POS_OPTIONS, WordEntry
@@ -143,6 +144,22 @@ def text_document(text, font, width):
     return document
 
 
+def word_tooltip_markup(text, font, maximum_width):
+    """Preserve spacing and explicitly wrap even a word wider than the screen."""
+    metrics = QFontMetricsF(font)
+    lines = []
+    for paragraph in text.split('\n'):
+        line = ''
+        for character in paragraph:
+            if line and metrics.horizontalAdvance(line + character) > maximum_width:
+                lines.append(line)
+                line = ''
+            line += character
+        lines.append(line)
+    content = '<br>'.join(escape(line).replace(' ', '&nbsp;') for line in lines)
+    return '<p style="white-space:pre; margin:0">' + content + '</p>'
+
+
 class WordDelegate(QStyledItemDelegate):
     editingChanged = Signal(bool)
 
@@ -176,32 +193,57 @@ class WordDelegate(QStyledItemDelegate):
 
     def word_layout(self, index, rect, base_font):
         """Use the same word geometry for painting and pointer hit testing."""
+        return self.name_layout(index, rect, base_font)[0]
+
+    def name_layout(self, index, rect, base_font):
+        """Measure the current cell once, giving the word priority over phonetics."""
         row = index.data(Qt.ItemDataRole.UserRole)
         font = QFont(base_font)
         font.setPixelSize(15 if row.owner == -1 else 13)
         font.setWeight(QFont.Weight.DemiBold if row.owner == -1 else QFont.Weight.Normal)
         left = 26 if row.owner >= 0 else 10
         area = QRectF(rect).adjusted(left, row.top_padding, -10, -row.bottom_padding)
-        phonetic = self.phonetic_layout(index, rect, base_font)
-        if phonetic is not None:
-            area.setRight(phonetic[2].left() - 8)
         metrics = QFontMetricsF(font)
-        text = metrics.elidedText(index.data() or "", Qt.TextElideMode.ElideRight, max(0, area.width()))
-        return font, text, area
+        original = index.data() or ''
+        width = metrics.horizontalAdvance(original)
+        if row.sense != 0:
+            return (font, '', area), None, ''
+        if width > area.width():
+            text = metrics.elidedText(original, Qt.TextElideMode.ElideRight, max(0, area.width()))
+            tip = original + ('    ' + row.word.phonetic if row.word.phonetic else '')
+            return (font, text, area), None, tip
+        phonetic = row.word.phonetic
+        if not phonetic:
+            return (font, original, area), None, ''
+        phonetic_font = QFont(base_font)
+        phonetic_font.setPixelSize(12)
+        phonetic_font.setWeight(QFont.Weight.Normal)
+        phonetic_metrics = QFontMetricsF(phonetic_font)
+        available = max(0, area.width() - width - 8)
+        phonetic_width = phonetic_metrics.horizontalAdvance(phonetic)
+        tip = phonetic if phonetic_width > available else ''
+        visible = self.view.phonetic_visible(index)
+        layout = None
+        if visible and (phonetic_width <= available or available >= phonetic_metrics.horizontalAdvance('…')):
+            phonetic_width = min(phonetic_width, available)
+            phonetic_area = QRectF(rect.right() - 10 - phonetic_width,
+                                   rect.top() + row.top_padding + 2,
+                                   phonetic_width, phonetic_metrics.height())
+            text = phonetic_metrics.elidedText(phonetic, Qt.TextElideMode.ElideRight, phonetic_width)
+            layout = phonetic_font, text, phonetic_area
+            area.setRight(phonetic_area.left() - 8)
+        return (font, original, area), layout, tip
 
     def phonetic_layout(self, index, rect, base_font):
         row = index.data(Qt.ItemDataRole.UserRole)
-        if row is None or row.sense != 0 or not row.word.phonetic or not self.view.phonetic_visible(index):
+        if row is None:
             return None
-        font = QFont(base_font)
-        font.setPixelSize(12)
-        font.setWeight(QFont.Weight.Normal)
-        metrics = QFontMetricsF(font)
-        width = min(metrics.horizontalAdvance(row.word.phonetic), max(0, (rect.width() - 36) * 0.48))
-        area = QRectF(rect.right() - 10 - width, rect.top() + row.top_padding + 2,
-                      width, metrics.height())
-        text = metrics.elidedText(row.word.phonetic, Qt.TextElideMode.ElideRight, width)
-        return font, text, area
+        return self.name_layout(index, rect, base_font)[1]
+
+    def word_tooltip(self, index):
+        if index.column() != 1 or index.data(Qt.ItemDataRole.UserRole) is None:
+            return ''
+        return self.name_layout(index, self.view.visualRect(index), self.view.font())[2]
 
     def word_hit(self, index, point):
         row = index.data(Qt.ItemDataRole.UserRole)
@@ -613,6 +655,8 @@ class WordTable(QTableView):
         self.horizontalScrollBar().valueChanged.connect(self._update_hover)
 
     def _column_resized(self, column, old, new):
+        if column == 1:
+            QToolTip.hideText()
         if column == 3:
             self._row_resize_timer.start(0)
         if column == 4 and self._width_mode is not None:
@@ -1295,7 +1339,6 @@ class WordTable(QTableView):
             self._hovered_index = QPersistentModelIndex()
             self.viewport().update()
         if event.type() == QEvent.Type.ToolTip:
-            from PySide6.QtWidgets import QToolTip
             index = self.indexAt(event.pos())
             if index.isValid():
                 row = index.data(Qt.ItemDataRole.UserRole)
@@ -1316,6 +1359,12 @@ class WordTable(QTableView):
                 elif row.hidden and index.column() in (2, 3):
                     if self.delegate.mask_hit(index, event.pos()):
                         text = "点击查看词性、翻译和关联词"
+                elif index.column() == 1:
+                    text = self.delegate.word_tooltip(index)
+                    if text:
+                        screen = QApplication.screenAt(event.globalPos()) or self.screen()
+                        text = word_tooltip_markup(text, self.font(),
+                                                   max(1, screen.availableGeometry().width() - 48))
                 else:
                     text = index.data(Qt.ItemDataRole.ToolTipRole) or ""
                 if text:

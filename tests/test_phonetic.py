@@ -179,7 +179,7 @@ def test_hover_and_keyboard_show_whole_word_groups(window, repo, qtbot, monkeypa
         group_visible(entry, False)
 
 
-def test_long_word_and_phonetic_render_separately_but_share_word_click_region(window, repo, qtbot):
+def test_long_word_hides_phonetic_and_keeps_complete_word_click_region(window, repo, qtbot):
     entry = word("verylongword" * 12)
     entry.phonetic *= 10
     entry = repo.save(entry)
@@ -189,12 +189,12 @@ def test_long_word_and_phonetic_render_separately_but_share_word_click_region(wi
     index = table.currentIndex()
     rect = table.visualRect(index)
     _, text, word_area = table.delegate.word_layout(index, rect, table.font())
-    _, phonetic, phonetic_area = table.delegate.phonetic_layout(index, rect, table.font())
-    assert text.endswith("…") and phonetic.endswith("…")
-    assert word_area.right() < phonetic_area.left()
-    assert table.delegate.word_hit(index, phonetic_area.center())
+    assert text.endswith("…")
+    assert table.delegate.phonetic_layout(index, rect, table.font()) is None
+    assert table.delegate.word_tooltip(index) == entry.text + '    ' + entry.phonetic
+    assert table.delegate.word_hit(index, word_area.center())
     copies = []
     table.copyRequested.connect(copies.append)
-    qtbot.mouseClick(table.viewport(), Qt.MouseButton.LeftButton, pos=phonetic_area.center().toPoint())
+    qtbot.mouseClick(table.viewport(), Qt.MouseButton.LeftButton, pos=word_area.center().toPoint())
     qtbot.wait(QApplication.doubleClickInterval() + 20)
     assert copies == [entry.text]
