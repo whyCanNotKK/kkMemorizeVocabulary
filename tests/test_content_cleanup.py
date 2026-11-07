@@ -150,6 +150,8 @@ def test_cleanup_warning_defaults_to_cancel(window, repo, qtbot, action):
         warning = QApplication.activeModalWidget()
         try:
             assert isinstance(warning, DraftResetDialog)
+            # A modal widget can be visible before Qt activates its window.
+            qtbot.waitUntil(warning.isActiveWindow)
             assert warning.cancel_button.hasFocus() and warning.cancel_button.isDefault()
             assert '不可恢复' in warning.findChild(QLabel).text()
             if action == 'confirm':
@@ -162,7 +164,7 @@ def test_cleanup_warning_defaults_to_cancel(window, repo, qtbot, action):
             if warning is not None and warning.isVisible():
                 warning.reject()
 
-    QTimer.singleShot(30, respond)
+    QTimer.singleShot(0, respond)
     dialog.confirm_cleanup()
     if action == 'confirm':
         assert not repo.list_entries() and not repo.study_backup().records

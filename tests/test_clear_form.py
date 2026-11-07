@@ -36,6 +36,7 @@ def test_draft_reset_requires_explicit_confirmation_at_anchor(window, repo, qtbo
             assert ("取消当前编辑？" if editing else "清空当前输入？") in {
                 label.text() for label in dialog.findChildren(QLabel)}
             assert {control.text() for control in dialog.findChildren(QPushButton)} == {"确认", "取消"}
+            qtbot.waitUntil(dialog.isActiveWindow)
             assert dialog.cancel_button.hasFocus() and dialog.cancel_button.isDefault()
             cancel_rect = QRect(dialog.cancel_button.mapToGlobal(QPoint()), dialog.cancel_button.size())
             assert cancel_rect == anchor
@@ -59,7 +60,7 @@ def test_draft_reset_requires_explicit_confirmation_at_anchor(window, repo, qtbo
             errors.append(error)
             dialog.reject()
 
-    QTimer.singleShot(30, answer)
+    QTimer.singleShot(0, answer)
     qtbot.mouseClick(button, Qt.MouseButton.LeftButton)
     assert not errors, errors
     assert repo.list_entries() == saved_entries
