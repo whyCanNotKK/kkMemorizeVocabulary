@@ -50,7 +50,8 @@ class StudyContext:
 class StudyTask:
     entry: WordEntry
     group_number: int
-    is_review: bool = False
+    stage: int
+    is_review: bool
 
 
 @dataclass(frozen=True)
@@ -75,14 +76,20 @@ def study_timestamp(instant: datetime | None = None) -> str:
     return instant.astimezone(BEIJING).isoformat(timespec='seconds')
 
 
-def format_study_duration(seconds: int) -> str:
+def study_duration_parts(seconds: int) -> tuple[tuple[str, int], ...]:
     if seconds < 60:
-        return f'{seconds} s'
+        return (('s', seconds),)
     minutes, remaining = divmod(seconds, 60)
     if minutes < 60:
-        return f'{minutes} min' + (f' {remaining} s' if remaining else '')
+        parts = (('m', minutes),)
+        return parts + (('s', remaining),) if remaining else parts
     hours, minutes = divmod(minutes, 60)
-    return f'{hours} h' + (f' {minutes} min' if minutes else '')
+    parts = (('h', hours),)
+    return parts + (('m', minutes),) if minutes else parts
+
+
+def format_study_duration(seconds: int) -> str:
+    return ' '.join(f'{value} {unit}' for unit, value in study_duration_parts(seconds))
 
 
 def next_stage(stage: int) -> int:

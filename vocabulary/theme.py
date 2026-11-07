@@ -1,7 +1,7 @@
 from functools import lru_cache
 import math
 
-from PySide6.QtCore import QPointF, QRectF, Qt
+from PySide6.QtCore import QByteArray, QBuffer, QIODevice, QPointF, QRectF, Qt
 from PySide6.QtGui import QColor, QFont, QFontDatabase, QIcon, QPainter, QPainterPath, QPen, QPixmap, QPolygonF
 
 
@@ -122,6 +122,24 @@ def draw_symbol(p: QPainter, name: str, rect: QRectF, color: str):
         p.drawPolyline(QPolygonF([QPointF(-6, -6), QPointF(-5, 8), QPointF(5, 8), QPointF(6, -6)]))
         p.drawLine(QPointF(-2, -2), QPointF(-2, 5))
         p.drawLine(QPointF(2, -2), QPointF(2, 5))
+    elif name == "copy":
+        p.drawRoundedRect(QRectF(-3, -4, 11, 13), 1.5, 1.5)
+        p.drawPolyline(QPolygonF([QPointF(-6, 5), QPointF(-8, 5), QPointF(-8, -9),
+                                  QPointF(4, -9), QPointF(4, -7)]))
+    elif name == "mouse_right":
+        body = QPainterPath()
+        body.addRoundedRect(QRectF(-8, -11, 16, 22), 6, 6)
+        p.save()
+        p.setClipPath(body, Qt.ClipOperation.IntersectClip)
+        p.fillRect(QRectF(0, -11, 8, 9), QColor(ACCENT))
+        p.restore()
+        p.drawPath(body)
+        p.drawLine(QPointF(-8, -2), QPointF(8, -2))
+        p.drawLine(QPointF(0, -11), QPointF(0, -2))
+    elif name == "enter_key":
+        p.drawRoundedRect(QRectF(-11, -9, 22, 18), 3, 3)
+        p.drawPolyline(QPolygonF([QPointF(5, -4), QPointF(5, 2), QPointF(-5, 2)]))
+        p.drawPolyline(QPolygonF([QPointF(-2, -1), QPointF(-5, 2), QPointF(-2, 5)]))
     elif name == "edit":
         p.drawPolygon(QPolygonF([QPointF(-7, 7), QPointF(-5, 1), QPointF(5, -9),
                                 QPointF(9, -5), QPointF(-1, 5)]))
@@ -232,4 +250,32 @@ def icon(name: str, color: str = MUTED, disabled_color: str | None = None) -> QI
     if disabled_color is not None:
         result.addPixmap(render(disabled_color), QIcon.Mode.Disabled)
     return result
+
+
+@lru_cache(maxsize=2)
+def _tooltip_icon_url(name: str) -> str:
+    image = QByteArray()
+    buffer = QBuffer(image)
+    buffer.open(QIODevice.OpenModeFlag.WriteOnly)
+    icon(name, TEXT).pixmap(18, 18).save(buffer, "PNG")
+    buffer.close()
+    encoded = bytes(image.toBase64()).decode("ascii")
+    return f"data:image/png;base64,{encoded}"
+
+
+def _tooltip_with_icon(text: str, icon_name: str, *, alt: str, suffix: str = "") -> str:
+    # In Qt rich text, middle places these padded icons below the text's visible center.
+    # Align the image box to the line top so the drawn icon centers on the glyphs.
+    return (f'<p style="white-space:nowrap; margin:0">{text}'
+            f'<img width="18" height="18" style="vertical-align:top" alt="{alt}" '
+            f'src="{_tooltip_icon_url(icon_name)}"/>{suffix}</p>')
+
+
+def copy_word_tooltip() -> str:
+    return _tooltip_with_icon("整词复制 · Ctrl+1-9 · ", "mouse_right",
+                              alt="鼠标右键", suffix="单词区域空白处")
+
+
+def study_mark_tooltip() -> str:
+    return _tooltip_with_icon("记下 · ", "enter_key", alt="回车")
 

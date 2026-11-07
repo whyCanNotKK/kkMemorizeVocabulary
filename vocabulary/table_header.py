@@ -16,13 +16,13 @@ class WordTableHeader(QHeaderView):
         painter = QPainter(self.viewport())
         painter.setPen(QPen(QColor(150, 161, 177, 100), 1))
         top = max(0, (self.height() - 14) // 2)
-        for column in (1, 3):
+        for column in self.table.resizable_boundaries():
             edge = self.sectionViewportPosition(column) + self.sectionSize(column)
             for offset in (-2, 2):
                 painter.drawLine(edge + offset, top, edge + offset, top + 13)
 
     def _boundary_at(self, point):
-        for column in (1, 3):
+        for column in self.table.resizable_boundaries():
             edge = self.sectionViewportPosition(column) + self.sectionSize(column)
             if abs(point.x() - edge) <= 5:
                 return column
@@ -41,14 +41,16 @@ class WordTableHeader(QHeaderView):
             if not self._prepare_resize():
                 return
             edge = self.sectionViewportPosition(column) + self.sectionSize(column)
-            self._resize_drag = (column, event.position().x(), edge)
+            translation_edge = self.sectionViewportPosition(3) + self.sectionSize(3)
+            self._resize_drag = (column, event.position().x(), edge, translation_edge)
             return
         super().mousePressEvent(event)
 
     def mouseMoveEvent(self, event):
         if self._resize_drag is not None:
-            column, origin, edge = self._resize_drag
-            self.table.resize_boundary(column, edge + event.position().x() - origin)
+            column, origin, edge, translation_edge = self._resize_drag
+            self.table.resize_boundary(column, edge + event.position().x() - origin,
+                                       translation_edge=translation_edge)
             event.accept()
             return
         super().mouseMoveEvent(event)

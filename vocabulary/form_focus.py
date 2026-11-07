@@ -13,9 +13,10 @@ class FormFocusContext(QObject):
     changed = Signal()
     blankPressed = Signal()
 
-    def __init__(self, panel, window):
+    def __init__(self, panel, window, right_blank_action=None):
         super().__init__(window)
         self.panel, self.window = panel, window
+        self.right_blank_action = right_blank_action
         self.active = False
         panel.setFocusPolicy(Qt.FocusPolicy.ClickFocus)
         app = QApplication.instance()
@@ -78,6 +79,10 @@ class FormFocusContext(QObject):
         elif kind == QEvent.Type.MouseButtonPress and isinstance(source, QWidget):
             hit = source.childAt(event.position().toPoint()) or source
             inside = self.panel.isVisible() and self.contains(hit)
+            if (inside and event.button() == Qt.MouseButton.RightButton and self.right_blank_action
+                    and not self._interactive(hit, self.panel)
+                    and self.right_blank_action(event.globalPosition().toPoint())):
+                return True
             self._set_active(inside)
             if inside and not self._interactive(hit, self.panel):
                 self.blankPressed.emit()

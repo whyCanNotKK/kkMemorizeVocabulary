@@ -1,6 +1,9 @@
 import pytest
+from PySide6.QtWidgets import QApplication
+
 from vocabulary.native_shortcuts import WindowHotkeys
 from vocabulary.domain import RelatedWord, Sense, WordEntry
+from vocabulary.word_clipboard import decode
 
 
 class KeyboardStub:
@@ -97,18 +100,38 @@ def test_queued_native_chord_is_discarded_after_configuration_changes(window, qt
     assert len(window.blocks[0].rows) == 1
 
 
-@pytest.mark.parametrize("modifier_key", [0xA4, 0xA2], ids=["alt", "ctrl"])
-def test_native_digits_switch_tabs_before_ime(window, qtbot, native, modifier_key):
+def test_native_alt_digits_switch_tabs_before_ime(window, qtbot, native):
     bridge, api = native
     for number, page in [(2, "all"), (3, "learned"), (4, "study17"), (1, "pending")]:
         window.setFocus()
         bridge.refresh()
-        bridge.dispatch_key(modifier_key, True)
+        bridge.dispatch_key(0xA4, True)
         assert bridge.dispatch_key(ord(str(number)), True)
         assert bridge.dispatch_key(ord(str(number)), False)
-        bridge.dispatch_key(modifier_key, False)
+        bridge.dispatch_key(0xA4, False)
         qtbot.wait(20)
         assert window.filter_name == page
+
+
+@pytest.mark.parametrize("digit", [ord("1"), 0x61], ids=["top-row", "numpad"])
+def test_native_copy_digits_are_scoped_and_dispatched_once(window, qtbot, native, monkeypatch, digit):
+    window.reset_form(WordEntry("draft", [Sense("n.", "")]))
+    bridge, api = native
+    calls = []
+    copy = window.copy_whole_word
+    monkeypatch.setattr(window, "copy_whole_word", lambda *args: (calls.append(args), copy(*args)))
+    window.blocks[0].word.setFocus()
+    bridge.refresh()
+    bridge.dispatch_key(0xA2, True)
+    assert bridge.dispatch_key(digit, True)
+    assert bridge.dispatch_key(digit, True)
+    assert bridge.dispatch_key(digit, False)
+    qtbot.waitUntil(lambda: len(calls) == 1)
+    assert decode(QApplication.clipboard().text()).text == "draft"
+    window.search_box.setFocus()
+    assert not bridge.dispatch_key(digit, True)
+    bridge.dispatch_key(0xA2, False)
+    assert window.filter_name == "pending"
 
 
 def test_native_visibility_shortcut_fires_once_and_follows_remapping(window, qtbot, native):

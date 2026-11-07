@@ -27,10 +27,10 @@ def mixed_words(repo):
 
 
 @pytest.mark.parametrize('seconds,text', [
-    (0, '0 s'), (1, '1 s'), (59, '59 s'), (60, '1 min'), (61, '1 min 1 s'),
-    (120, '2 min'), (3599, '59 min 59 s'), (3600, '1 h'), (3601, '1 h'),
-    (3659, '1 h'), (3661, '1 h 1 min'), (7199, '1 h 59 min'), (7200, '2 h'),
-    (86400, '24 h'), (90061, '25 h 1 min'),
+    (0, '0 s'), (1, '1 s'), (59, '59 s'), (60, '1 m'), (61, '1 m 1 s'),
+    (120, '2 m'), (3599, '59 m 59 s'), (3600, '1 h'), (3601, '1 h'),
+    (3659, '1 h'), (3661, '1 h 1 m'), (7199, '1 h 59 m'), (7200, '2 h'),
+    (86400, '24 h'), (90061, '25 h 1 m'),
 ])
 def test_duration_format_boundaries(seconds, text):
     assert format_study_duration(seconds) == text
@@ -83,10 +83,10 @@ def test_completed_words_are_below_pending_revealed_and_have_no_mark_actions(win
     roots = [row for row in page.model.rows if row.first]
     assert [row.entry.id for row in roots] == [words[1].id, words[2].id, words[0].id]
     assert all(not row.hidden for row in page.model.rows if row.entry.id == words[0].id)
-    index = next(page.model.index(i, 4) for i, row in enumerate(page.model.rows)
+    index = next(page.model.index(i, page.model.action_column) for i, row in enumerate(page.model.rows)
                  if row.first and row.entry.id == words[0].id)
-    assert index.data(Qt.ItemDataRole.AccessibleTextRole) == ''
-    assert page.table.action_rects(page.table.visualRect(index)) == []
+    assert index.data(Qt.ItemDataRole.AccessibleTextRole) == '复制单词完整内容'
+    assert [action for action, _ in page.table.action_rects(page.table.visualRect(index))] == ['copy']
     requests = []
     page.table.actionRequested.connect(lambda *args: requests.append(args))
     page.table.select_entry(words[0].id, scroll=True)
@@ -121,6 +121,31 @@ def test_completed_query_survives_stage_advancement_and_keeps_counter_categories
     assert [task.is_review for task in completed] == [False, True, True]
     assert repo.study_task_history(PM).new_done == 1
     assert repo.study_task_history(PM).review_done == 2
+
+
+def test_study_stage_column_shows_the_stored_stage_before_and_after_completion(window, repo, monkeypatch):
+    words = mixed_words(repo)
+    for word in words:
+        repo.complete_study(word.id, AM)
+    monkeypatch.setattr(StudyContext, 'now', classmethod(lambda cls: PM))
+    window.set_filter('study17')
+    page = window.study_page
+    model = page.model
+    assert [model.headerData(i, Qt.Orientation.Horizontal) for i in range(model.columnCount())] == [
+        '组', '单词', '词性', '翻译', '周期', '操作']
+    assert window.model.columnCount() == 5
+    assert all(row.hidden for row in model.rows)
+    assert [model.index(i, 4).data() for i in range(model.rowCount())] == ['1', '2', '15']
+    assert model.index(0, 4).data(Qt.ItemDataRole.TextAlignmentRole) == Qt.AlignmentFlag.AlignCenter
+    assert not model.flags(model.index(0, 4)) & Qt.ItemFlag.ItemIsEditable
+
+    page.toggle_completed(True)
+    page.complete(words[2].id, 'study')
+    for reload in (False, True):
+        if reload:
+            assert page.load(PM)
+        stages = [model.index(i, 4).data() for i, row in enumerate(model.rows) if row.entry.id == words[2].id]
+        assert stages == ['0', None, None]
 
 
 def test_session_buttons_order_and_group_column_has_no_tooltip(window, repo, monkeypatch, qtbot):
@@ -181,7 +206,7 @@ def test_live_elapsed_clock_ticks_without_writing_history_and_stops_only_its_dis
     assert not page._clock_display.isActive() and page.timer.running
     ticks[0] += 50_000_000_000
     window.set_filter('study17')
-    assert page.elapsed_label.text() == '1 min 34 s'
+    assert page.elapsed_label.text() == '1 m 34 s'
     assert repo.study_task_history(AM).duration_seconds == 42
 
 

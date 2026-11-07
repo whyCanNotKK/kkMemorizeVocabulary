@@ -2,7 +2,7 @@ import math
 
 from PySide6.QtCore import (
     QEasingCurve, QEvent, QParallelAnimationGroup, QPauseAnimation, QPoint,
-    QPropertyAnimation, QSequentialAnimationGroup, QRectF, QSize, Qt, Signal, QTimer,
+    QPropertyAnimation, QSequentialAnimationGroup, QRectF, QSignalBlocker, QSize, Qt, Signal, QTimer,
 )
 from PySide6.QtGui import QColor, QKeyEvent, QPainter, QPalette, QPen
 from PySide6.QtWidgets import (
@@ -12,8 +12,9 @@ from PySide6.QtWidgets import (
 )
 
 from .domain import POS_OPTIONS, SHORTCUT_LABELS, RelatedWord, Sense, normalize_pos
-from .theme import MUTED, draw_related_arrow, draw_symbol, icon
+from .theme import MUTED, copy_word_tooltip, draw_related_arrow, draw_symbol, icon
 from .pos_picker import pos_shortcut
+from .word_paste import handle_word_paste, set_word_field
 
 INPUT_HEIGHT = 36
 WORD_WIDTH = 144
@@ -368,11 +369,23 @@ class SenseRow(QWidget):
         layout.addWidget(self.pos, 0, Qt.AlignmentFlag.AlignTop)
         layout.addWidget(self.translation, 1)
         self.drag_handle = SenseDragHandle()
+        self.copy_button = button("", quiet=True)
+        self.copy_button.setFixedSize(28, INPUT_HEIGHT)
+        self.copy_button.setIconSize(QSize(18, 18))
+        self.copy_button.setIcon(icon("copy"))
+        self.copy_button.setStyleSheet("QPushButton { padding: 0; }")
+        self.copy_button.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.copy_button.setToolTip(copy_word_tooltip())
+        self.copy_button.setAccessibleName("复制单词完整内容")
+        size_policy = self.copy_button.sizePolicy()
+        size_policy.setRetainSizeWhenHidden(True)
+        self.copy_button.setSizePolicy(size_policy)
         self.add_button = button("", quiet=True)
         self.remove_button = button("", quiet=True)
         tools = QHBoxLayout()
         tools.setContentsMargins(0, 0, 0, 0)
         tools.setSpacing(2)
+        tools.addWidget(self.copy_button)
         tools.addWidget(self.drag_handle)
         for control, symbol, name, callback in (
                 (self.add_button, "plus_circle", SHORTCUT_LABELS["add_sense"], self.addRequested.emit),
@@ -425,6 +438,8 @@ class WordBlock(QFrame):
     structureChanged = Signal()
     heightChanged = Signal()
     cursorMoved = Signal()
+    copyRequested = Signal()
+    pasteRejected = Signal(str)
 
     def __init__(self, text="", senses=None, related=False, parent=None, *, phonetic=""):
         super().__init__(parent)
@@ -432,6 +447,7 @@ class WordBlock(QFrame):
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Maximum)
         self.related = related
         self.rows = []
+        self._paste_undo = None
         self._keys = {}
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
@@ -444,7 +460,8 @@ class WordBlock(QFrame):
             outer.addWidget(separator)
         inputs = QHBoxLayout()
         inputs.setSpacing(INPUT_SPACING)
-        self.word = QLineEdit(text)
+        self.word = QLineEdit()
+        set_word_field(self.word, text)
         self.word.setPlaceholderText("关联词" if related else "单词")
         self.word.setFixedSize(WORD_WIDTH, INPUT_HEIGHT)
         self.word.setAccessibleName("关联词" if related else "主词")
@@ -460,11 +477,14 @@ class WordBlock(QFrame):
             word_layout.addWidget(self.word)
         else:
             word_layout.addWidget(self.word)
-        self.phonetic = QLineEdit(phonetic)
+        self.phonetic = QLineEdit()
+        set_word_field(self.phonetic, phonetic)
         self.phonetic.setFixedSize(PHONETIC_WIDTH, INPUT_HEIGHT)
         self.phonetic.setPlaceholderText("音标")
         self.phonetic.setAccessibleName("关联词音标" if related else "主词音标")
         self.phonetic.textChanged.connect(self.changed)
+        self.word.installEventFilter(self)
+        self.phonetic.installEventFilter(self)
         inputs.addWidget(word_column, 0, Qt.AlignmentFlag.AlignTop)
         inputs.addWidget(self.phonetic, 0, Qt.AlignmentFlag.AlignTop)
         right = QVBoxLayout()
@@ -482,6 +502,8 @@ class WordBlock(QFrame):
 
     def _append_sense(self, sense):
         row = SenseRow(sense)
+        row.translation.installEventFilter(self)
+        row.copy_button.clicked.connect(self.copyRequested)
         row.changed.connect(self.changed)
         row.heightChanged.connect(self.heightChanged)
         row.translation.cursorPositionChanged.connect(self.cursorMoved)
@@ -513,21 +535,72 @@ class WordBlock(QFrame):
         if row.has_content() and not confirm_remove(self, "移除这条释义？"):
             return
         index = self.rows.index(row)
-        self.rows.remove(row)
-        self.sense_layout.removeWidget(row)
-        row.hide()
-        row.deleteLater()
+        self._remove_row(row)
         self._refresh_actions()
         self.changed.emit()
         self.structureChanged.emit()
         self.rows[min(index, len(self.rows) - 1)].translation.setFocus()
+
+    def _remove_row(self, row):
+        self.rows.remove(row)
+        self.sense_layout.removeWidget(row)
+        row.hide()
+        row.deleteLater()
+
+    def eventFilter(self, field, event):
+        if (self._paste_undo is not None and event.type() == QEvent.Type.KeyPress
+                and event.key() == Qt.Key.Key_Escape
+                and event.modifiers() == Qt.KeyboardModifier.NoModifier):
+            word, self._paste_undo = self._paste_undo, None
+            self.replace_content(word, field)
+            return True
+        if handle_word_paste(event, lambda word: self._paste_content(word, field), self.pasteRejected.emit):
+            return True
+        return super().eventFilter(field, event)
+
+    def _paste_content(self, word, field):
+        self._paste_undo = self.value()
+        self.replace_content(word, field)
+
+    def replace_content(self, word, field):
+        focus_removed = any(row.translation is field for row in self.rows[len(word.senses):])
+        with QSignalBlocker(self):
+            set_word_field(self.word, word.text)
+            set_word_field(self.phonetic, word.phonetic)
+            for row in self.rows[len(word.senses):]:
+                self._remove_row(row)
+            for row, sense in zip(self.rows, word.senses):
+                row.pos.set_pos(sense.pos)
+                row.translation.setPlainText(sense.translation)
+            for sense in word.senses[len(self.rows):]:
+                self._append_sense(sense)
+            self._refresh_actions()
+        self.changed.emit()
+        self.structureChanged.emit()
+        if focus_removed:
+            self.rows[-1].translation.setFocus()
+
+    def copy_blank_hit(self, global_point):
+        if len(self.rows) < 2:
+            return False
+        point = self.mapFromGlobal(global_point)
+        last = self.rows[-1]
+        bottom = last.mapTo(self, last.rect().bottomLeft()).y()
+        if not self.rect().contains(point) or point.y() > bottom:
+            return False
+        for widget in (self.word, self.phonetic, self.rows[0].copy_button):
+            rect = widget.rect().translated(widget.mapTo(self, QPoint()))
+            if rect.left() <= point.x() <= rect.right() and point.y() > rect.bottom():
+                return True
+        return False
 
     def set_shortcuts(self, keys):
         self._keys = keys
         self._refresh_actions()
 
     def _refresh_actions(self):
-        for row in self.rows:
+        for index, row in enumerate(self.rows):
+            row.copy_button.setVisible(index == 0)
             row.add_button.setToolTip(SHORTCUT_LABELS["add_sense"] + (f" · {self._keys['add_sense']}" if self._keys else ""))
             row.remove_button.setToolTip(SHORTCUT_LABELS["remove_sense"] + (f" · {self._keys['remove_sense']}" if self._keys else ""))
             row.remove_button.setEnabled(len(self.rows) > 1)
@@ -542,6 +615,7 @@ class WordBlock(QFrame):
         for index, row in enumerate(self.rows):
             self.sense_layout.removeWidget(row)
             self.sense_layout.insertWidget(index, row)
+        self._refresh_actions()
         self.changed.emit()
         self.structureChanged.emit()
 

@@ -2,12 +2,34 @@ from PySide6.QtCore import QEvent, QObject, QSignalBlocker, Qt, Signal
 from PySide6.QtGui import QKeySequence, QShortcut
 from PySide6.QtWidgets import QAbstractButton, QApplication, QDialog, QFrame, QHBoxLayout, QLabel, QLineEdit, QMessageBox, QScrollArea, QSpinBox, QVBoxLayout, QWidget
 
-from .domain import CLEANUP_COMMANDS, DEFAULT_SHORTCUTS, SHORTCUT_LABELS, ValidationError
+from .domain import CLEANUP_COMMANDS, DEFAULT_SHORTCUTS, SHORTCUT_LABELS, ValidationError, shortcut_candidates
 from .cleanup_input import CleanupInput
 from .draft_reset_dialog import DraftResetDialog
 from .learning import StudyDrawSettings
 from .native_shortcuts import WindowHotkeys
 from .widgets import button
+
+
+RESERVED_DIGITS = {f"{modifier}+{keypad}{number}"
+                   for modifier in ("Alt", "Ctrl") for keypad in ("", "Num+")
+                   for number in range(1, 10)}
+
+
+def repair_reserved_shortcuts(values):
+    resets = {action: DEFAULT_SHORTCUTS[action] for action, value in values.items()
+              if QKeySequence(value).toString(QKeySequence.SequenceFormat.PortableText) in RESERVED_DIGITS}
+    if not resets:
+        return {}
+    occupied = set(resets.values())
+    displaced = [action for action in DEFAULT_SHORTCUTS
+                 if action not in resets and values.get(action) in occupied]
+    occupied.update(value for action, value in values.items() if action not in resets and action not in displaced)
+    for action in displaced:
+        value = next(candidate for candidate in shortcut_candidates(DEFAULT_SHORTCUTS[action])
+                     if candidate not in occupied)
+        resets[action] = value
+        occupied.add(value)
+    return resets
 
 
 def normalize_shortcut(value: str) -> str:
@@ -25,6 +47,8 @@ def normalize_shortcut(value: str) -> str:
                Qt.Key.Key_Meta, Qt.Key.Key_Tab, Qt.Key.Key_Backtab, Qt.Key.Key_Escape, Qt.Key.Key_Space):
         raise ValidationError("这个按键用于固定导航，请选择其他组合。")
     normalized = sequence.toString(QKeySequence.SequenceFormat.PortableText)
+    if normalized in RESERVED_DIGITS:
+        raise ValidationError("Alt+1～9 和 Ctrl+1～9（含数字键盘）为保留快捷键。")
     reserved = {"Ctrl+A", "Ctrl+C", "Ctrl+V", "Ctrl+X", "Ctrl+Z", "Ctrl+Y", "Alt+F4"}
     if normalized in reserved:
         raise ValidationError("这个快捷键已保留给文字编辑或系统操作。")
@@ -40,13 +64,18 @@ class ShortcutManager(QObject):
 
     changed = Signal()
 
-    def __init__(self, repository, window, callbacks, fixed=None):
+    def __init__(self, repository, window, callbacks, fixed=None, scoped=None):
         super().__init__(window)
         self.repository, self.window, self.callbacks = repository, window, callbacks
         self.fixed_bindings = {sequence: action for action, sequences in (fixed or {}).items()
                                for sequence in sequences}
+        self.scoped = scoped or {}
         self.bindings = []
         self.values = repository.shortcuts()
+        repairs = repair_reserved_shortcuts(self.values)
+        if repairs:
+            repository.write_shortcuts(repairs)
+            self.values = repository.shortcuts()
         self.suspended = False
         self.validate(self.values)
         self._apply(self.values)
@@ -58,19 +87,28 @@ class ShortcutManager(QObject):
             self.native.context_changed()
         if event.type() in (QEvent.Type.ShortcutOverride, QEvent.Type.KeyPress):
             app = QApplication.instance()
-            if (not self.suspended and app.activeWindow() is self.window
-                    and not app.activeModalWidget() and not app.activePopupWidget()
-                    and isinstance(target, QWidget)
-                    and (target is self.window or self.window.isAncestorOf(target))):
+            if not self.suspended and not app.activeModalWidget() and isinstance(target, QWidget):
+                popup = app.activePopupWidget()
+                if popup is not None and (target is popup or popup.isAncestorOf(target)):
+                    target = popup.parentWidget()
+                active = app.activeWindow()
+                if (target is None or (active is not self.window and (popup is None or active is not popup))
+                        or not (target is self.window or self.window.isAncestorOf(target))):
+                    return False
                 sequence = QKeySequence(event.keyCombination()).toString(
                     QKeySequence.SequenceFormat.PortableText).replace("Enter", "Return")
                 action = self.active_bindings.get(sequence)
-                if action is not None:
+                if (action is not None and (popup is None or action in self.scoped)
+                        and self.action_enabled(action, target)):
                     event.accept()
                     if event.type() == QEvent.Type.KeyPress and not event.isAutoRepeat():
                         self.callbacks[action]()
                     return True
         return False
+
+    def action_enabled(self, action, focus):
+        predicate = self.scoped.get(action)
+        return predicate is None or predicate(focus)
 
     @staticmethod
     def validate(values):
@@ -94,6 +132,9 @@ class ShortcutManager(QObject):
         new = []
         try:
             for value, action in self._combined_bindings(values).items():
+                # Scoped bindings are handled before widget input, including in owned popups.
+                if action in self.scoped:
+                    continue
                 shortcut = QShortcut(self.window)
                 sequences = [QKeySequence(value)]
                 if "Return" in value:
@@ -367,6 +408,7 @@ class SettingsDialog(QDialog):
         try:
             self.manager.update(values)
         except Exception as error:
+            self.cancel_recording()
             QMessageBox.critical(self, "快捷键修改失败", str(error))
             return
         self.cancel_recording()

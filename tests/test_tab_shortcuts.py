@@ -6,10 +6,9 @@ from PySide6.QtWidgets import QApplication
 from vocabulary.domain import Sense, ValidationError, WordEntry
 
 
-@pytest.fixture(params=[Qt.KeyboardModifier.AltModifier, Qt.KeyboardModifier.ControlModifier],
-                ids=["alt", "ctrl"])
-def modifier(request):
-    return request.param
+@pytest.fixture
+def modifier():
+    return Qt.KeyboardModifier.AltModifier
 
 
 def press_tab(window, qtbot, number, modifier):
@@ -91,7 +90,7 @@ def test_tab_shortcuts_suspend_and_do_not_repeat(window, qtbot, modifier):
             window.shortcuts.update(dict(window.shortcuts.values, save=f"{prefix}+{number}"))
 
 
-def test_aliases_dispatch_once_through_the_same_tab_switch(window, qtbot, monkeypatch):
+def test_only_alt_digits_dispatch_tab_switch_once(window, qtbot, monkeypatch):
     calls = []
     original = window.set_filter
 
@@ -103,7 +102,7 @@ def test_aliases_dispatch_once_through_the_same_tab_switch(window, qtbot, monkey
     for modifier in (Qt.KeyboardModifier.AltModifier, Qt.KeyboardModifier.ControlModifier):
         for number in (2, 3, 4, 1):
             press_tab(window, qtbot, number, modifier)
-    assert calls == ["all", "learned", "study17", "pending"] * 2
+    assert calls == ["all", "learned", "study17", "pending"]
 
 
 def test_form_title_tracks_editing_and_reset(window, repo):

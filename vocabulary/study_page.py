@@ -1,4 +1,6 @@
 """Study projection with a frozen date/period and a separate live task clock."""
+from dataclasses import replace
+
 from PySide6.QtCore import QModelIndex, QSize, Qt, QTimer, Signal
 from PySide6.QtWidgets import QHBoxLayout, QLabel, QVBoxLayout, QWidget
 
@@ -72,8 +74,7 @@ class StudyPage(QWidget):
         self.update_timer_button()
         self.update_task_count()
         self.update_completed_button()
-        self.model = WordTableModel(edit_callback, self)
-        self.model.study_groups = {}
+        self.model = WordTableModel(edit_callback, self, study=True)
         self.table = WordTable(self.model, lambda: True)
         self.table.set_page_state("study17", False, 0)
         self.table.empty_text = "当前时段没有待完成的单词\n切换日期或时段后，请点击刷新"
@@ -123,7 +124,7 @@ class StudyPage(QWidget):
         self.update_elapsed()
         visible = self.tasks + (self.completed_tasks if self.show_completed else [])
         with self.table.preserve_view():
-            self.model.study_groups = {task.entry.id: task.group_number for task in visible}
+            self.model.study_tasks = {task.entry.id: task for task in visible}
             self.model.study_completed_ids = {task.entry.id for task in self.completed_tasks}
             # Group numbers can grow beyond the original star column's width.
             width = max((self.table.fontMetrics().horizontalAdvance(str(task.group_number)) + 20
@@ -217,15 +218,16 @@ class StudyPage(QWidget):
             # A first mark creates history and applies progress in one transaction.
             # Do not create the record separately as a prerequisite of this write.
             duration = self.timer.duration_seconds()
-            history = self.repository.complete_study(word_id, self.context, duration_seconds=duration)
-            if not history:
+            result = self.repository.complete_study(word_id, self.context, duration_seconds=duration)
+            if not result:
                 self.load(self.context)
                 return
+            history, stage = result
             self.timer.completed(history)
         except Exception as error:
             self.error.emit(str(error))
             return
-        completed = self.tasks[position]
+        completed = replace(self.tasks[position], stage=stage)
         self.tasks = [task for task in self.tasks if task.entry.id != word_id]
         if self.show_completed:
             self.completed_tasks.append(completed)

@@ -82,7 +82,7 @@ def test_related_focus_order_persists_and_remapped_hints_match(window, repo, qtb
     window.shortcuts.update(dict(window.shortcuts.values, add_related="Alt+N", remove_related="Alt+M"))
     assert window.add_related_button.toolTip() == "新增关联词 · Alt+N"
     assert window.remove_related_button.toolTip() == "删除关联词 · Alt+M"
-    assert window.remove_related_button.text() == "删除关联词  Alt+M"
+    assert window.remove_related_button.text() == "删除关联词 · Alt+M"
     dialog = SettingsDialog(window.shortcuts, window)
     qtbot.addWidget(dialog)
     labels = {label.text() for label in dialog.findChildren(QLabel)}

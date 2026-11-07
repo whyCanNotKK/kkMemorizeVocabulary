@@ -2,7 +2,9 @@ from dataclasses import replace
 from datetime import date, timedelta
 
 import pytest
-from PySide6.QtCore import Qt
+from PySide6.QtCore import QRect, Qt
+from PySide6.QtGui import QImage, QPainter
+from PySide6.QtWidgets import QStyleOptionViewItem
 
 from vocabulary.domain import RelatedWord, Sense, WordEntry
 from vocabulary.learning import StudyContext, StudyTaskHistory
@@ -61,7 +63,7 @@ def test_gaps_are_virtual_dates_descending_and_periods_paired(qapp):
     assert text(model, 1, 0) == ''  # Date is shared visually by the pair.
     assert status(model, 2) == status(model, 3) == '完全没背单词'
     assert text(model, 4, 4) == '1 s'
-    assert text(model, 4, 5) == '3/7' and text(model, 4, 6) == '2/5'
+    assert text(model, 4, 5) == '3 / 7' and text(model, 4, 6) == '2 / 5'
     assert model.HEADERS == ('日期', '时段', '开始时间', '结束时间', '有效用时', '复习词', '新词', '状态')
     assert model.data(model.index(0, 0), Qt.ItemDataRole.BackgroundRole) == model.data(
         model.index(1, 0), Qt.ItemDataRole.BackgroundRole)
@@ -87,7 +89,7 @@ def test_period_icons_are_colored_with_tooltips_and_keep_their_own_records(qapp)
                    for color in pixels)
         images.append(image)
     assert images[0] != images[1]
-    assert text(model, 0, 4) == '1 min'
+    assert text(model, 0, 4) == '1 m'
     assert text(model, 1, 4) == '1 h'
 
 
@@ -206,7 +208,7 @@ def test_history_live_timer_and_completion_refresh(window, repo, monkeypatch, qt
     assert repo.study_task_history(AM).duration_seconds == 0  # Displaying history does not write time.
     page.complete(word.id, 'study')
     assert status(panel.model, 0) == '已完成'
-    assert text(panel.model, 0, 6) == '1/1'
+    assert text(panel.model, 0, 6) == '1 / 1'
     assert text(panel.model, 0, 4) == '1 s'
     qtbot.wait(20)
     window.grab().save(str(tmp_path / 'study-history.png'))
@@ -273,11 +275,11 @@ def test_date_spans_rebuild_after_refresh_and_day_changes(window, monkeypatch):
     assert panel.table.rowSpan(0, 0) == 1
 
 
-@pytest.mark.parametrize('kind,label', [
-    ('missing', '完全没背单词'), ('completed', '已完成'),
-    ('unfinished', '历史任务未完成'), ('current', '当前任务未完成'),
+@pytest.mark.parametrize('kind,tooltip,label', [
+    ('missing', '未完成', '完全没背单词'), ('completed', '已完成', '已完成'),
+    ('unfinished', '未完成', '历史任务未完成'), ('current', '进行中', '当前任务未完成'),
 ])
-def test_status_last_column_uses_icons_and_preserves_accessible_meaning(qapp, kind, label):
+def test_status_last_column_uses_icons_and_preserves_accessible_meaning(qapp, kind, tooltip, label):
     model = HistoryModel()
     records = [] if kind == 'missing' else [record()]
     if kind == 'completed':
@@ -287,19 +289,124 @@ def test_status_last_column_uses_icons_and_preserves_accessible_meaning(qapp, ki
     index = model.index(0, 7)
     assert index.data() == ''
     assert not index.data(Qt.ItemDataRole.DecorationRole).isNull()
-    assert index.data(Qt.ItemDataRole.ToolTipRole) == label
+    assert index.data(Qt.ItemDataRole.ToolTipRole) == tooltip
     assert index.data(Qt.ItemDataRole.AccessibleTextRole) == label
 
 
-def test_start_end_time_hide_seconds_and_retain_complete_tooltips(qapp):
+def test_date_tooltip_shows_weekday_for_both_periods(qapp):
+    model = HistoryModel()
+    model.load([record(date(2026, 11, 2))], StudyContext(date(2026, 11, 8), True))
+    assert model.rowCount() == 14
+    for row, weekday in enumerate(('周日', '周六', '周五', '周四', '周三', '周二', '周一')):
+        for period in (0, 1):
+            assert model.index(row * 2 + period, 0).data(Qt.ItemDataRole.ToolTipRole) == weekday
+
+
+def test_history_duration_centers_groups_and_reserves_two_digits(window, qtbot):
+    durations = (1, 10, 60, 600, 3600, 36000, 61, 601, 3660, 36600)
+    window.resize(window.minimumSize())
+    window.set_filter('study17')
+    panel = window.history_panel
+    panel.set_collapsed(False)
+    model, table = panel.model, panel.table
+    model.load([record(DAY - timedelta(days=i), duration_seconds=value)
+                for i, value in enumerate(durations)], PM)
+    qtbot.wait(20)
+    option = QStyleOptionViewItem()
+    table.initViewItemOption(option)
+    option.rect = QRect(0, 0, table.columnWidth(4), table.rowHeight(0))
+
+    def ink_bounds(row):
+        image = QImage(option.rect.size(), QImage.Format.Format_RGB32)
+        painter = QPainter(image)
+        table.itemDelegate().paint(painter, option, model.index(row, 4))
+        painter.end()
+        columns = [x for x in range(image.width())
+                   if any(image.pixelColor(x, y).red() > 100 for y in range(image.height()))]
+        return min(columns), max(columns)
+
+    bounds = [ink_bounds(2 * i) for i in range(len(durations))]
+    for first, second in zip(bounds[::2], bounds[1::2]):
+        assert first[1] == second[1]  # Adding a digit keeps the unit in place.
+    for left, right in bounds:
+        assert (left + right) / 2 == pytest.approx(option.rect.center().x(), abs=8)
+    assert bounds[6][1] > bounds[0][1]  # Only displayed pairs take up space.
+    assert bounds[8][1] > bounds[2][1]
+    assert table.horizontalScrollBar().maximum() == 0
+
+
+def test_history_duration_paints_all_digits_at_minimum_window_width(window, qtbot, monkeypatch):
+    window.resize(window.minimumSize())
+    window.set_filter('study17')
+    panel = window.history_panel
+    panel.set_collapsed(False)
+    model, table = panel.model, panel.table
+    model.load([record(duration_seconds=7140), record(afternoon=1, duration_seconds=1368)], PM)
+    qtbot.wait(20)
+    option = QStyleOptionViewItem()
+    table.initViewItemOption(option)
+    option.rect = QRect(0, 0, table.columnWidth(4), table.rowHeight(0))
+
+    drawn = []
+    draw_text = QPainter.drawText
+
+    def capture(painter, *args):
+        drawn.append(args[-1])
+        return draw_text(painter, *args)
+
+    monkeypatch.setattr(QPainter, 'drawText', capture)
+    image = QImage(option.rect.size(), QImage.Format.Format_RGB32)
+    painter = QPainter(image)
+    try:
+        for row in range(2):
+            table.itemDelegate().paint(painter, option, model.index(row, 4))
+    finally:
+        painter.end()
+    assert drawn == ['1', 'h', '59', 'm', '22', 'm', '48', 's']
+    assert table.columnWidth(2) == table.columnWidth(3) < table.columnWidth(4)
+
+
+def test_history_count_slash_stays_centered_for_different_digit_counts(window, qtbot):
+    window.resize(window.minimumSize())
+    window.set_filter('study17')
+    panel = window.history_panel
+    panel.set_collapsed(False)
+    model, table = panel.model, panel.table
+    counts = ((2, 7), (22, 230), (230, 230), (1234, 12000))
+    model.load([record(DAY - timedelta(days=i), review_done=done, review_total=total,
+                       new_done=done, new_total=total)
+                for i, (done, total) in enumerate(counts)], PM)
+    qtbot.wait(20)
+    option = QStyleOptionViewItem()
+    table.initViewItemOption(option)
+
+    def slash_pixels(row, column):
+        option.rect = QRect(0, 0, table.columnWidth(column), table.rowHeight(row))
+        image = QImage(option.rect.size(), QImage.Format.Format_RGB32)
+        painter = QPainter(image)
+        table.itemDelegate().paint(painter, option, model.index(row, column))
+        painter.end()
+        center = option.rect.center().x()
+        half_width = option.fontMetrics.horizontalAdvance('/') // 2 + 1
+        return {(x - center, y) for x in range(center - half_width, center + half_width + 1)
+                for y in range(image.height()) if image.pixelColor(x, y).red() > 100}
+
+    for column in (5, 6):
+        reference = slash_pixels(0, column)
+        assert reference
+        for i in range(1, len(counts)):
+            assert slash_pixels(2 * i, column) == reference
+
+
+def test_times_hide_seconds_and_value_cells_have_no_tooltips(qapp):
     model = HistoryModel()
     start = f'{DAY.isoformat()}T08:12:59+08:00'
     end = f'{(DAY + timedelta(days=1)).isoformat()}T00:03:41+08:00'
     model.load([record(started_at=start, ended_at=end, status=1)], AM)
-    assert text(model, 0, 2) == '08:12'
-    assert text(model, 0, 3) == '11-06 00:03'
-    assert model.data(model.index(0, 2), Qt.ItemDataRole.ToolTipRole) == start
-    assert model.data(model.index(0, 3), Qt.ItemDataRole.ToolTipRole) == end
+    assert text(model, 0, 2) == '08：12'
+    assert text(model, 0, 3) == '11-06 00：03'
+    for column in range(2, 7):
+        assert model.index(0, column).data(Qt.ItemDataRole.ToolTipRole) is None
     model.load([record()], AM)
     assert text(model, 0, 3) == '—'
 

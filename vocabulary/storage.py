@@ -6,7 +6,7 @@ import random
 import sqlite3
 
 from .domain import (CLEANUP_COMMANDS, DEFAULT_SHORTCUTS, DuplicateWord, RelatedWord, Sense, WordEntry,
-                     clean_entry, same_entry_content)
+                     clean_entry, clean_word_content, same_entry_content, shortcut_candidates)
 from .transfer import ImportConflict, ImportResult
 from .learning import (STAGE_GAPS, StudyContext, StudyDrawSettings, StudyTask,
                        StudyTaskHistory, next_stage, study_due, study_timestamp)
@@ -44,9 +44,7 @@ class Repository:
                 if action in configured:
                     continue
                 # Adding a new default must not collide with an older user's custom chord.
-                candidates = [default, f"Ctrl+Shift+{default.split('+')[-1]}"]
-                candidates.extend(f"Ctrl+Alt+Shift+F{number}" for number in range(1, 25))
-                value = next(candidate for candidate in candidates if candidate not in used)
+                value = next(candidate for candidate in shortcut_candidates(default) if candidate not in used)
                 self.connection.execute("INSERT INTO settings(key,value) VALUES (?,?)", (action, value))
                 used.add(value)
 
@@ -107,20 +105,50 @@ class Repository:
             self._save_entry(entry, counters)
         return self.get(entry.id)
 
+    def replace_word_content(self, expected: WordEntry, owner: int, word: RelatedWord):
+        """Replace just the target word and its definitions from a list snapshot."""
+        word = clean_word_content(word)
+        with self.connection:
+            self.connection.execute("BEGIN IMMEDIATE")
+            entry = self.get(expected.id)
+            stale = "单词内容已变化，当前输入已保留。"
+            if owner == -1:
+                if (entry.text, entry.phonetic, entry.senses) != (expected.text, expected.phonetic, expected.senses):
+                    raise ValueError(stale)
+                normalized = self._check_word_name(word.text, entry.id)
+                self.connection.execute(
+                    "UPDATE words SET text=?,normalized_text=?,phonetic=? WHERE id=?",
+                    (word.text, normalized, word.phonetic, entry.id))
+                column, target_id = "word_id", entry.id
+            else:
+                if entry.related != expected.related:
+                    raise ValueError(stale)
+                column, target_id = self._sense_owner(entry.id, owner)
+                self.connection.execute("UPDATE related_words SET text=?,phonetic=? WHERE id=?",
+                                        (word.text, word.phonetic, target_id))
+            self.connection.execute(
+                "UPDATE words SET updated_at=strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id=?", (entry.id,))
+            self.connection.execute(f"DELETE FROM senses WHERE {column}=?", (target_id,))
+            self.connection.executemany(
+                f"INSERT INTO senses({column},pos,translation,position) VALUES (?,?,?,?)",
+                [(target_id, sense.pos, sense.translation, i) for i, sense in enumerate(word.senses)])
+
+    def _sense_owner(self, entry_id, owner):
+        if type(owner) is int and owner == -1:
+            return "word_id", entry_id
+        if type(owner) is int and owner >= 0:
+            child = self.connection.execute(
+                "SELECT id FROM related_words WHERE word_id=? ORDER BY position,id LIMIT 1 OFFSET ?",
+                (entry_id, owner)).fetchone()
+            if child is not None:
+                return "related_id", child[0]
+        raise ValueError("释义所属单词已失效，请重试。")
+
     def move_sense(self, entry_id: int, owner: int, source: int, target: int):
         """Reorder definitions of one word without rewriting content or study state."""
         with self.connection:
             self.connection.execute("BEGIN IMMEDIATE")
-            if type(owner) is not int or owner < -1:
-                raise ValueError("释义所属单词已失效，请重试。")
-            column, owner_id = "word_id", entry_id
-            if owner >= 0:
-                child = self.connection.execute(
-                    "SELECT id FROM related_words WHERE word_id=? ORDER BY position,id LIMIT 1 OFFSET ?",
-                    (entry_id, owner)).fetchone()
-                if child is None:
-                    raise ValueError("释义所属单词已失效，请重试。")
-                column, owner_id = "related_id", child[0]
+            column, owner_id = self._sense_owner(entry_id, owner)
             ids = [row[0] for row in self.connection.execute(
                 f"SELECT id FROM senses WHERE {column}=? ORDER BY position,id", (owner_id,))]
             if (type(source) is not int or type(target) is not int
@@ -132,12 +160,16 @@ class Repository:
             self.connection.executemany(f"UPDATE senses SET position=? WHERE id=? AND {column}=?",
                                         [(position, sense_id, owner_id) for position, sense_id in enumerate(ids)])
 
+    def _check_word_name(self, text, entry_id):
+        normalized = text.casefold()
+        existing = self.connection.execute("SELECT id FROM words WHERE normalized_text=?", (normalized,)).fetchone()
+        if existing and existing[0] != entry_id:
+            raise DuplicateWord(existing[0])
+        return normalized
+
     def _save_entry(self, entry: WordEntry, counters, forced_id=None):
         """Write within the caller's transaction; ordinary edits keep learned state."""
-        normalized = entry.text.casefold()
-        existing = self.connection.execute("SELECT id FROM words WHERE normalized_text=?", (normalized,)).fetchone()
-        if existing and existing[0] != entry.id:
-            raise DuplicateWord(existing[0])
+        normalized = self._check_word_name(entry.text, entry.id)
         if entry.id is None:
             entry.sort_order = self._next_order(counters, entry.learned)
             cursor = self.connection.execute(
@@ -365,7 +397,8 @@ class Repository:
         rows = self.connection.execute(f"""SELECT word_id,group_number,stage FROM memorize_vocabulary_17day
             WHERE {flag}=0 AND ({self._study_due_clause()})
             ORDER BY group_number,word_id""", (context.day.isoformat(),)).fetchall()
-        return [StudyTask(self.get(row["word_id"]), row["group_number"], row['stage'] != 1) for row in rows]
+        return [StudyTask(self.get(row['word_id']), row['group_number'], row['stage'], row['stage'] != 1)
+                for row in rows]
 
     def study_completed_tasks(self, context: StudyContext) -> list[StudyTask]:
         flag = 'afternoon_done' if context.afternoon else 'morning_done'
@@ -374,7 +407,7 @@ class Repository:
             FROM memorize_vocabulary_17day
             WHERE ({flag}=1 AND ({self._study_due_clause()})) OR last_completed_on=?
             ORDER BY group_number,word_id''', (day, day)).fetchall()
-        return [StudyTask(self.get(row['word_id']), row['group_number'],
+        return [StudyTask(self.get(row['word_id']), row['group_number'], row['stage'],
                           not (row['stage'] == 1 or (row['stage'] == 2 and row['last_completed_on'] == day)))
                 for row in rows]
 
@@ -476,8 +509,9 @@ class Repository:
                  if backup.study_last_add_new_vocabulary is not None else [])
                 + [('study17.group_counter', str(backup.group_counter))])
 
-    def complete_study(self, word_id: int, context: StudyContext, *, duration_seconds=0, instant=None) -> StudyTaskHistory | bool:
-        """Apply the page's frozen date/period; a duplicate completion is a no-op."""
+    def complete_study(self, word_id: int, context: StudyContext, *, duration_seconds=0,
+                       instant=None) -> tuple[StudyTaskHistory, int] | bool:
+        """Return the updated history and stage, or False for a duplicate completion."""
         if type(duration_seconds) is not int or duration_seconds < 0:
             raise ValueError('任务时长必须是非负整数秒。')
         with self.connection:
@@ -492,6 +526,7 @@ class Repository:
             history = self._start_study_task(context, instant)
             if history.status:
                 raise ValueError('当前时段的任务已经完成，请刷新学习任务。')
+            stage = row["stage"]
             if not context.afternoon:
                 self.connection.execute("""UPDATE memorize_vocabulary_17day
                     SET morning_done=1,afternoon_done=0 WHERE word_id=?""", (word_id,))
@@ -499,7 +534,7 @@ class Repository:
                 self.connection.execute("""UPDATE memorize_vocabulary_17day
                     SET afternoon_done=1 WHERE word_id=?""", (word_id,))
             else:
-                stage = next_stage(row["stage"])
+                stage = next_stage(stage)
                 self.connection.execute("""UPDATE memorize_vocabulary_17day
                     SET morning_done=0,afternoon_done=0,last_completed_on=?,
                         stage=? WHERE word_id=?""", (context.day.isoformat(), stage, word_id))
@@ -515,7 +550,7 @@ class Repository:
             else:
                 self.connection.execute(f'''UPDATE study_task_history
                     SET {kind}_done=MIN({kind}_total,{kind}_done+1) WHERE id=?''', (history.id,))
-            return self.study_task_history(context)
+            return self.study_task_history(context), stage
 
     def write_shortcuts(self, values: dict[str, str]):
         with self.connection:

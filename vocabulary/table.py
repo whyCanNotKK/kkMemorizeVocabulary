@@ -1,5 +1,6 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from contextlib import contextmanager
+from copy import deepcopy
 import math
 import time
 from html import escape
@@ -12,15 +13,25 @@ from PySide6.QtWidgets import (
     QPushButton, QStyle, QStyledItemDelegate, QStyleOptionViewItem, QTableView, QToolTip,
 )
 
-from .domain import POS_OPTIONS, WordEntry
+from .domain import POS_OPTIONS, RelatedWord, WordEntry
 from .drag_reorder import ANIMATION_MS, edge_scroll_delta, group_positions, insertion_index
 from .review_navigation import navigation_step
 from .table_style import WordGroupStyle
 from .table_header import WordTableHeader
 from .word_name_editor import WordNameEditor
-from .theme import ACCENT, GOLD, MUTED, TEXT, draw_related_arrow, draw_symbol
+from .theme import ACCENT, GOLD, MUTED, TEXT, copy_word_tooltip, draw_related_arrow, draw_symbol, study_mark_tooltip
 from .widgets import ExpandingTextEdit
 from .pos_picker import PosPicker
+from .word_paste import handle_word_paste, set_word_field
+
+
+STUDY_STAGE_COLUMN = 4
+STUDY_STAGE_HEADER = "周期"
+EDIT_WORD_LABEL = "编辑单词"
+
+
+def learned_action_label(learned):
+    return '标记为"待记"' if learned else '标记为"已记下"'
 
 
 @dataclass
@@ -55,50 +66,101 @@ class TableRow:
 
 
 class WordTableModel(QAbstractTableModel):
-    def __init__(self, edit_callback, parent=None):
+    def __init__(self, edit_callback, parent=None, *, study=False):
         super().__init__(parent)
         self.rows = []
         self.edit_callback = edit_callback
-        self.study_groups = None
+        study_headers = (STUDY_STAGE_HEADER,) if study else ()
+        self.headers = ("组" if study else "", "单词", "词性", "翻译", *study_headers, "操作")
+        self.action_column = len(self.headers) - 1
+        self.study_tasks = {} if study else None
         self.study_completed_ids = set()
+        self.preview_origin = None
+
+    @staticmethod
+    def _project_entry(entry, hidden):
+        if hidden:
+            return [TableRow(entry, hidden=True)]
+        return [TableRow(entry, owner, sense)
+                for owner, word in [(-1, entry), *enumerate(entry.related)]
+                for sense in range(len(word.senses))]
 
     def populate(self, entries, revealed):
         self.beginResetModel()
-        self.rows = []
-        for entry in entries:
-            if entry.id not in revealed:
-                self.rows.append(TableRow(entry, hidden=True))
-                continue
-            for index in range(len(entry.senses)):
-                self.rows.append(TableRow(entry, -1, index))
-            for owner, child in enumerate(entry.related):
-                for index in range(len(child.senses)):
-                    self.rows.append(TableRow(entry, owner, index))
+        self.preview_origin = None
+        self.rows = [row for entry in entries
+                     for row in self._project_entry(entry, entry.id not in revealed)]
         self.endResetModel()
+
+    def _replace_projection(self, entry, owner):
+        group = [i for i, row in enumerate(self.rows) if row.entry.id == entry.id]
+        first, last = group[0], group[-1]
+        projected = self._project_entry(entry, self.rows[first].hidden)
+        old_word = [i for i in group if self.rows[i].owner == owner]
+        new_count = sum(row.owner == owner for row in projected)
+        delta = new_count - len(old_word)
+        if delta > 0:
+            self.beginInsertRows(QModelIndex(), old_word[-1] + 1, old_word[-1] + delta)
+        elif delta < 0:
+            self.beginRemoveRows(QModelIndex(), old_word[0] + new_count, old_word[-1])
+        self.rows[first:last + 1] = projected
+        if delta > 0:
+            self.endInsertRows()
+        elif delta < 0:
+            self.endRemoveRows()
+        last = first + len(projected) - 1
+        self.dataChanged.emit(self.index(first, 0), self.index(last, self.columnCount() - 1))
+        return range(first, last + 1)
+
+    def preview_word(self, row, column, word):
+        if self.preview_origin is None:
+            self.preview_origin = row, column
+        original, _ = self.preview_origin
+        if original.owner == -1:
+            entry = replace(original.entry, text=word.text, phonetic=word.phonetic, senses=word.senses)
+        else:
+            related = list(original.entry.related)
+            related[original.owner] = word
+            entry = replace(original.entry, related=related)
+        return self._replace_projection(entry, original.owner)
+
+    def restore_word_preview(self):
+        row, column = self.preview_origin
+        self.preview_origin = None
+        rows = self._replace_projection(row.entry, row.owner)
+        return row, column, rows
 
     def rowCount(self, parent=QModelIndex()):
         return 0 if parent.isValid() else len(self.rows)
 
     def columnCount(self, parent=QModelIndex()):
-        return 0 if parent.isValid() else 5
+        return 0 if parent.isValid() else len(self.headers)
 
     def headerData(self, section, orientation, role=Qt.ItemDataRole.DisplayRole):
-        if orientation == Qt.Orientation.Horizontal and role == Qt.ItemDataRole.DisplayRole:
-            return ("", "单词", "词性", "翻译", "操作")[section]
+        if orientation == Qt.Orientation.Horizontal:
+            if role == Qt.ItemDataRole.DisplayRole:
+                return self.headers[section]
+            if (self.study_tasks is not None and section in (0, STUDY_STAGE_COLUMN)
+                    and role == Qt.ItemDataRole.TextAlignmentRole):
+                return Qt.AlignmentFlag.AlignCenter
         return None
 
     def data(self, index, role=Qt.ItemDataRole.DisplayRole):
         if not index.isValid() or index.row() >= len(self.rows):
             return None
         row, column = self.rows[index.row()], index.column()
-        if self.study_groups is not None and row.first:
+        if self.study_tasks is not None and row.first:
+            if column in (0, STUDY_STAGE_COLUMN) and role in (Qt.ItemDataRole.DisplayRole,
+                                                              Qt.ItemDataRole.AccessibleTextRole):
+                task = self.study_tasks[row.entry.id]
+                return str(task.group_number if column == 0 else task.stage)
+            if column == STUDY_STAGE_COLUMN and role == Qt.ItemDataRole.TextAlignmentRole:
+                return Qt.AlignmentFlag.AlignCenter
             if column == 0 and role == Qt.ItemDataRole.ToolTipRole:
                 return None
-            if column == 0 and role in (Qt.ItemDataRole.DisplayRole,
-                                       Qt.ItemDataRole.AccessibleTextRole):
-                return str(self.study_groups[row.entry.id])
-            if column == 4 and role == Qt.ItemDataRole.AccessibleTextRole:
-                return '' if row.entry.id in self.study_completed_ids else '记下'
+            if column == self.action_column and role == Qt.ItemDataRole.AccessibleTextRole:
+                return ("复制单词完整内容" if row.entry.id in self.study_completed_ids
+                        else "复制单词完整内容；记下")
         if role == Qt.ItemDataRole.UserRole:
             return row
         if role == Qt.ItemDataRole.ToolTipRole and column in (1, 2, 3):
@@ -114,8 +176,9 @@ class WordTableModel(QAbstractTableModel):
                 return "重点" if row.entry.important else "非重点"
             if row.hidden and column == 2:
                 return "答案已隐藏，点击灰色遮罩查看词性、翻译和关联词"
-            if column == 4 and row.first:
-                return ("恢复待记" if row.entry.learned else "标记已记下") + "；编辑整组；删除单词"
+            if column == self.action_column and row.first:
+                learned = learned_action_label(row.entry.learned)
+                return f"复制单词完整内容；{EDIT_WORD_LABEL}；{learned}；删除单词"
         return None
 
     def flags(self, index):
@@ -129,7 +192,10 @@ class WordTableModel(QAbstractTableModel):
     def setData(self, index, value, role=Qt.ItemDataRole.EditRole):
         if role != Qt.ItemDataRole.EditRole or not self.flags(index) & Qt.ItemFlag.ItemIsEditable:
             return False
-        return self.edit_callback(self.rows[index.row()], index.column(), value)
+        row = self.rows[index.row()]
+        if isinstance(value, RelatedWord) and self.preview_origin is not None:
+            row, _ = self.preview_origin
+        return self.edit_callback(row, index.column(), value)
 
 
 def text_document(text, font, width):
@@ -170,6 +236,7 @@ class WordDelegate(QStyledItemDelegate):
         self.before_edit = before_edit
         self.editor = None
         self.edit_index = None
+        self.last_editor_field = None
         self._committing = False
 
     @staticmethod
@@ -285,14 +352,14 @@ class WordDelegate(QStyledItemDelegate):
         top = row.top_padding
         self.word_style.paint(painter, option, index)
         column = index.column()
-        if column == 0 and row.first:
-            if self.view.study_mode:
-                painter.setPen(QColor(MUTED))
-                painter.drawText(rect, Qt.AlignmentFlag.AlignCenter, index.data() or "")
-            else:
-                draw_symbol(painter, "star", QRectF(rect.center().x() - 8, rect.top() + 10, 16, 16),
-                            GOLD if row.entry.important else "#596371")
-        elif column == 4 and row.first:
+        if self.view.study_mode and column in (0, STUDY_STAGE_COLUMN) and row.first:
+            painter.setFont(option.font)
+            painter.setPen(QColor(MUTED))
+            painter.drawText(rect, Qt.AlignmentFlag.AlignCenter, index.data())
+        elif column == 0 and row.first:
+            draw_symbol(painter, "star", QRectF(rect.center().x() - 8, rect.top() + 10, 16, 16),
+                        GOLD if row.entry.important else "#596371")
+        elif column == self.view.action_column and row.first:
             for action, target in self.view.action_rects(option.rect, row):
                 if action == "drag" and not self.view.reorder_enabled:
                     color = "#46505c"
@@ -371,6 +438,7 @@ class WordDelegate(QStyledItemDelegate):
         if isinstance(editor, QPlainTextEdit):
             editor.viewport().setContextMenuPolicy(Qt.ContextMenuPolicy.PreventContextMenu)
         self.editor = editor
+        self.last_editor_field = editor
         self.edit_index = QPersistentModelIndex(index)
         self.editingChanged.emit(True)
         editor.destroyed.connect(lambda: self._destroyed(editor))
@@ -380,6 +448,7 @@ class WordDelegate(QStyledItemDelegate):
         if self.editor is editor:
             self.editor = None
             self.edit_index = None
+            self.last_editor_field = None
             self.editingChanged.emit(False)
 
     def _show_pos(self, editor):
@@ -398,13 +467,15 @@ class WordDelegate(QStyledItemDelegate):
     def setEditorData(self, editor, index):
         value = index.data(Qt.ItemDataRole.EditRole) or ""
         if isinstance(editor, WordNameEditor):
-            editor.setText(value)
-            editor.phonetic.setText(index.data(Qt.ItemDataRole.UserRole).word.phonetic)
+            set_word_field(editor, value)
+            set_word_field(editor.phonetic, index.data(Qt.ItemDataRole.UserRole).word.phonetic)
         elif isinstance(editor, PosPicker):
             editor.set_pos(value)
             QTimer.singleShot(0, lambda: self._show_pos(editor))
         elif isinstance(editor, QPlainTextEdit):
             editor.setPlainText(value)
+            if self.view.model().preview_origin is not None:
+                self._preview_translation_display = editor.toPlainText()
         else:
             editor.setText(value)
 
@@ -445,6 +516,8 @@ class WordDelegate(QStyledItemDelegate):
         pass
 
     def _value(self, editor):
+        if self.view.model().preview_origin is not None:
+            return self.word_snapshot(self.edit_index.data(Qt.ItemDataRole.UserRole))
         if isinstance(editor, WordNameEditor):
             return editor.text(), editor.phonetic.text()
         if isinstance(editor, PosPicker):
@@ -452,6 +525,48 @@ class WordDelegate(QStyledItemDelegate):
         if isinstance(editor, QPlainTextEdit):
             return editor.toPlainText()
         return editor.text()
+
+    def word_snapshot(self, row):
+        word = row.word
+        if self.editor is None or not self.edit_index.isValid():
+            return RelatedWord(word.text, word.senses, word.phonetic)
+        edited = self.edit_index.data(Qt.ItemDataRole.UserRole)
+        if (row.entry.id, row.owner) != (edited.entry.id, edited.owner):
+            return RelatedWord(word.text, word.senses, word.phonetic)
+        editor = self.editor
+        word = RelatedWord(word.text, deepcopy(word.senses), word.phonetic)
+        if isinstance(editor, WordNameEditor):
+            word.text, word.phonetic = editor.text(), editor.phonetic.text()
+        elif isinstance(editor, PosPicker):
+            word.senses[edited.sense].pos = editor.currentData() or ""
+        elif isinstance(editor, QPlainTextEdit):
+            translation = editor.toPlainText()
+            if self.view.model().preview_origin is None or translation != self._preview_translation_display:
+                word.senses[edited.sense].translation = translation
+        return word
+
+    def _paste_word(self, word):
+        view = self.view
+        model = view.model()
+        editor = self.editor
+        row = self.edit_index.data(Qt.ItemDataRole.UserRole)
+        column = self.edit_index.column()
+        moved = row.sense >= len(word.senses)
+        selected = view.selectionModel().isSelected(QModelIndex(self.edit_index))
+        if moved:
+            # Detach the editor before Qt removes its row. This is a move
+            # within one edit session, so do not signal the window to refresh.
+            self.editor, self.edit_index, self.last_editor_field = None, None, None
+            self.closeEditor.emit(editor, QStyledItemDelegate.EndEditHint.NoHint)
+        rows = model.preview_word(row, column, word)
+        index = view._entry_index(row.entry.id, row.owner, row.sense, column)
+        if moved:
+            view.setCurrentIndex(index)
+            view.scrollTo(index, QAbstractItemView.ScrollHint.EnsureVisible)
+            view.edit(index)
+        if selected:
+            view._select_group(rows)
+        view._resize_projection(rows)
 
     def submit(self):
         editor = self.editor
@@ -466,13 +581,17 @@ class WordDelegate(QStyledItemDelegate):
                 if isinstance(editor, PosPicker):
                     QTimer.singleShot(0, lambda: self._show_pos(editor))
                 else:
-                    QTimer.singleShot(0, lambda: self._restore_editor_focus(editor))
+                    focus = QApplication.focusWidget()
+                    field = focus if isinstance(editor, WordNameEditor) and editor.owns_focus(focus) else self.last_editor_field
+                    QTimer.singleShot(0, lambda: self._restore_editor_focus(editor, field))
                 return False
             if isinstance(editor, PosPicker):
                 editor.hidePopup()
             if isinstance(editor, WordNameEditor):
                 editor.panel.hide()
             self.editor, self.edit_index = None, None
+            self.view.model().preview_origin = None
+            self.last_editor_field = None
             if index.isValid():
                 self.view.resizeRowToContents(index.row())
             self.editingChanged.emit(False)
@@ -481,9 +600,9 @@ class WordDelegate(QStyledItemDelegate):
         finally:
             self._committing = False
 
-    def _restore_editor_focus(self, editor):
+    def _restore_editor_focus(self, editor, field):
         if self.editor is editor and shiboken6.isValid(editor):
-            editor.setFocus()
+            (field if field is not None and shiboken6.isValid(field) else editor).setFocus()
 
     def cancel(self):
         editor = self.editor
@@ -494,10 +613,19 @@ class WordDelegate(QStyledItemDelegate):
                 editor.panel.hide()
             index = QModelIndex(self.edit_index)
             self.editor, self.edit_index = None, None
-            if index.isValid():
-                self.view.resizeRowToContents(index.row())
-            self.editingChanged.emit(False)
+            self.last_editor_field = None
             self.closeEditor.emit(editor, QStyledItemDelegate.EndEditHint.RevertModelCache)
+            view = self.view
+            if view.model().preview_origin is not None:
+                row, column, rows = view.model().restore_word_preview()
+                original = view._entry_index(row.entry.id, row.owner, row.sense, column)
+                view.setCurrentIndex(original)
+                view._select_group(rows)
+                view._resize_projection(rows)
+                view.scrollTo(original, QAbstractItemView.ScrollHint.EnsureVisible)
+            elif index.isValid():
+                view.resizeRowToContents(index.row())
+            self.editingChanged.emit(False)
 
     def _focus_out(self, editor):
         if self.editor is not editor or not shiboken6.isValid(editor) or self._committing:
@@ -523,6 +651,9 @@ class WordDelegate(QStyledItemDelegate):
                 isinstance(self.editor, WordNameEditor) and editor is self.editor.phonetic):
             field, editor = editor, self.editor
             if event.type() == QEvent.Type.KeyPress:
+                if isinstance(field, (QLineEdit, QPlainTextEdit)) and handle_word_paste(
+                        event, self._paste_word, self.view.pasteRejected.emit):
+                    return True
                 key = event.key()
                 if key == Qt.Key.Key_Escape:
                     if isinstance(editor, PosPicker) and editor.view().isVisible():
@@ -552,6 +683,7 @@ class WordDelegate(QStyledItemDelegate):
                 # Keep configured shortcuts and the combo's digit/popup handling.
                 return False
             if event.type() == QEvent.Type.FocusOut:
+                self.last_editor_field = field
                 QTimer.singleShot(0, lambda: self._focus_out(editor))
                 return False
         return False
@@ -561,10 +693,12 @@ class WordTable(QTableView):
     DEFAULT_WORD_WIDTH = 206
     MIN_WORD_WIDTH = 34
     MIN_TRANSLATION_WIDTH = 80
-    DEFAULT_ACTION_WIDTHS = {(False, True): 154, (False, False): 120, (True, False): 54}
+    DEFAULT_ACTION_WIDTHS = {(False, True): 188, (False, False): 154, (True, False): 88}
 
     editPreparationRequested = Signal(int)
     copyRequested = Signal(str)
+    wholeWordCopyRequested = Signal(object)
+    pasteRejected = Signal(str)
     revealRequested = Signal(int, bool)
     actionRequested = Signal(int, str)
     moveRequested = Signal(int, int)
@@ -594,6 +728,7 @@ class WordTable(QTableView):
         self._copy_timer.setSingleShot(True)
         self._copy_timer.setTimerType(Qt.TimerType.PreciseTimer)
         self._copy_timer.timeout.connect(self._emit_pending_copy)
+        self.action_column = model.action_column
         self.setModel(model)
         self.delegate = WordDelegate(self, before_edit)
         self.setItemDelegate(self.delegate)
@@ -618,9 +753,15 @@ class WordTable(QTableView):
         self.pos_badge_width = max(self.fontMetrics().horizontalAdvance(pos) for pos, _ in POS_OPTIONS) + 12
         for column, width in ((0, 38), (1, self.DEFAULT_WORD_WIDTH),
                               (2, self.pos_badge_width + 2 * WordGroupStyle.POS_MARGIN),
-                              (4, self.minimum_action_width())):
+                              (self.action_column, self.minimum_action_width())):
             header.setSectionResizeMode(column, QHeaderView.ResizeMode.Fixed)
             self.setColumnWidth(column, width)
+        self.minimum_stage_width = 0
+        if model.study_tasks is not None:
+            self.minimum_stage_width = max(
+                self.MIN_WORD_WIDTH, header.fontMetrics().horizontalAdvance(STUDY_STAGE_HEADER) + 20)
+            header.setSectionResizeMode(STUDY_STAGE_COLUMN, QHeaderView.ResizeMode.Fixed)
+            self.setColumnWidth(STUDY_STAGE_COLUMN, self.minimum_stage_width + 4)
         header.setSectionResizeMode(3, QHeaderView.ResizeMode.Stretch)
         self._row_resize_timer = QTimer(self)
         self._row_resize_timer.setSingleShot(True)
@@ -650,7 +791,7 @@ class WordTable(QTableView):
         self._drag_scroll.setInterval(16)
         self._drag_scroll.timeout.connect(self._auto_scroll_drag)
         self.model().modelAboutToBeReset.connect(self.cancel_drag)
-        self.model().modelAboutToBeReset.connect(self._cancel_pending_copy)
+        self.model().modelAboutToBeReset.connect(self.cancel_pending_copy)
         self.verticalScrollBar().valueChanged.connect(self._update_hover)
         self.horizontalScrollBar().valueChanged.connect(self._update_hover)
 
@@ -659,53 +800,68 @@ class WordTable(QTableView):
             QToolTip.hideText()
         if column == 3:
             self._row_resize_timer.start(0)
-        if column == 4 and self._width_mode is not None:
+        if column == self.action_column and self._width_mode is not None:
             self._action_widths[self._width_mode] = new
-        if column in (0, 1, 2, 4) and not self._adjusting_columns:
+        if column != 3 and not self._adjusting_columns:
             self._column_layout_timer.start(0)
 
     def minimum_action_width(self):
         return self.DEFAULT_ACTION_WIDTHS[self.study_mode, self.show_drag_handle]
+
+    def study_stage_width(self):
+        return self.columnWidth(STUDY_STAGE_COLUMN) if self.study_mode else 0
+
+    def resizable_boundaries(self):
+        return (1, 3, STUDY_STAGE_COLUMN) if self.study_mode else (1, 3)
 
     def _resize_column_rows(self):
         with self.preserve_view():
             self.resizeRowsToContents()
 
     def _fit_columns(self):
-        """Keep the translation usable, reclaim action whitespace before word width."""
+        """Keep the translation usable by reclaiming spare width from other columns."""
         if self._adjusting_columns or not self.isVisible():
             return
         available = (self.viewport().width() - self.columnWidth(0) - self.columnWidth(2)
-                     - self.MIN_TRANSLATION_WIDTH)
+                     - self.minimum_stage_width - self.MIN_TRANSLATION_WIDTH)
         minimum_actions = self.minimum_action_width()
         if available < self.MIN_WORD_WIDTH + minimum_actions:
             # Initial/hidden geometry has not been assigned its real window size yet.
             return
         word = max(self.MIN_WORD_WIDTH, self.columnWidth(1))
-        actions = max(minimum_actions, self.columnWidth(4))
-        excess = max(0, word + actions - available)
-        reclaimed = min(excess, actions - minimum_actions)
-        actions -= reclaimed
-        word -= excess - reclaimed
+        actions = max(minimum_actions, self.columnWidth(self.action_column))
+        stage = self.study_stage_width()
+        stage_extra = stage - self.minimum_stage_width
+        excess = max(0, word + actions + stage_extra - available)
+        action_reclaimed = min(excess, actions - minimum_actions)
+        excess -= action_reclaimed
+        stage_reclaimed = min(excess, stage_extra)
         self._adjusting_columns = True
         try:
-            self.setColumnWidth(4, actions)
-            self.setColumnWidth(1, word)
+            self.setColumnWidth(self.action_column, actions - action_reclaimed)
+            if stage_reclaimed:
+                self.setColumnWidth(STUDY_STAGE_COLUMN, stage - stage_reclaimed)
+            self.setColumnWidth(1, word - (excess - stage_reclaimed))
         finally:
             self._adjusting_columns = False
 
-    def resize_boundary(self, column, position):
-        """Move one divider to the nearest legal position without moving the other."""
+    def resize_boundary(self, column, position, *, translation_edge=None):
+        """Move a divider to the nearest legal position."""
         width = self.viewport().width()
+        stage_divider = self.study_mode and column == STUDY_STAGE_COLUMN
+        if not stage_divider:
+            width -= self.study_stage_width()
         fixed = self.columnWidth(0)
         if column == 1:
             lower = fixed + self.MIN_WORD_WIDTH
-            upper = width - self.columnWidth(4) - self.columnWidth(2) - self.MIN_TRANSLATION_WIDTH
+            upper = width - self.columnWidth(self.action_column) - self.columnWidth(2) - self.MIN_TRANSLATION_WIDTH
             section = 1
-        elif column == 3:
+        elif column == 3 or stage_divider:
             lower = fixed + self.columnWidth(1) + self.columnWidth(2) + self.MIN_TRANSLATION_WIDTH
+            if stage_divider:
+                lower += self.minimum_stage_width
             upper = width - self.minimum_action_width()
-            section = 4
+            section = self.action_column
         else:
             return
         if lower > upper:
@@ -713,13 +869,24 @@ class WordTable(QTableView):
         target = max(lower, min(round(position), upper))
         self._adjusting_columns = True
         try:
+            if stage_divider:
+                if translation_edge is None:
+                    translation_edge = self.columnViewportPosition(STUDY_STAGE_COLUMN)
+                self.setColumnWidth(STUDY_STAGE_COLUMN, max(self.minimum_stage_width, target - translation_edge))
             self.setColumnWidth(section, target - fixed if section == 1 else width - target)
         finally:
             self._adjusting_columns = False
 
     def reset_boundary(self, column):
+        if self.study_mode and column == STUDY_STAGE_COLUMN:
+            default_width = self.minimum_stage_width + 4
+            right = self.viewport().width() - self.minimum_action_width()
+            left = self.columnViewportPosition(3) + self.MIN_TRANSLATION_WIDTH
+            translation_edge = max(left, min(self.columnViewportPosition(STUDY_STAGE_COLUMN), right - default_width))
+            self.resize_boundary(column, translation_edge + default_width, translation_edge=translation_edge)
+            return
         target = (self.columnWidth(0) + self.DEFAULT_WORD_WIDTH if column == 1 else
-                  self.viewport().width() - self.minimum_action_width())
+                  self.viewport().width() - self.study_stage_width() - self.minimum_action_width())
         self.resize_boundary(column, target)
 
     def phonetic_visible(self, index):
@@ -742,7 +909,7 @@ class WordTable(QTableView):
         super().currentChanged(current, previous)
         self.viewport().update()
 
-    def _cancel_pending_copy(self):
+    def cancel_pending_copy(self):
         self._copy_timer.stop()
         self._pending_copy = QPersistentModelIndex()
         self._copy_press = None
@@ -754,7 +921,7 @@ class WordTable(QTableView):
             self.copyRequested.emit(index.data())
 
     def hideEvent(self, event):
-        self._cancel_pending_copy()
+        self.cancel_pending_copy()
         self.cancel_drag()
         super().hideEvent(event)
 
@@ -768,7 +935,7 @@ class WordTable(QTableView):
         self.search_active = searching
         mode = (self.study_mode, self.show_drag_handle)
         self._width_mode = mode
-        self.setColumnWidth(4, self._action_widths.get(mode, self.minimum_action_width()))
+        self.setColumnWidth(self.action_column, self._action_widths.get(mode, self.minimum_action_width()))
         self._column_layout_timer.start(0)
         self.shuffle_button.setVisible(page == "pending" and not searching)
         self.shuffle_button.setEnabled(not searching and count >= 2)
@@ -785,6 +952,9 @@ class WordTable(QTableView):
         if row is None:
             return
         rows = [i for i, item in enumerate(self.model().rows) if item.entry.id == row.entry.id]
+        self._select_group(rows)
+
+    def _select_group(self, rows):
         selection = QItemSelection(self.model().index(rows[0], 0),
                                    self.model().index(rows[-1], self.model().columnCount() - 1))
         self._selecting_group = True
@@ -792,6 +962,10 @@ class WordTable(QTableView):
             self.selectionModel().select(selection, QItemSelectionModel.SelectionFlag.ClearAndSelect)
         finally:
             self._selecting_group = False
+
+    def _resize_projection(self, rows):
+        for row in rows:
+            self.resizeRowToContents(row)
 
     def update_spans(self):
         self.clearSpans()
@@ -804,8 +978,8 @@ class WordTable(QTableView):
         matching = [i for i, row in enumerate(self.model().rows) if row.entry.id == entry_id]
         if not matching:
             return QModelIndex()
-        number = next((i for i in matching if
-                       (self.model().rows[i].owner, self.model().rows[i].sense) == (owner, sense)), matching[0])
+        owned = [i for i in matching if self.model().rows[i].owner == owner]
+        number = owned[min(sense, len(owned) - 1)] if owned else matching[0]
         return self.model().index(number, column)
 
     @contextmanager
@@ -958,31 +1132,74 @@ class WordTable(QTableView):
     def action_rects(self, rect, row=None):
         if row is None:
             row = self.indexAt(rect.center()).data(Qt.ItemDataRole.UserRole)
-        if self.study_mode and row is not None and row.entry.id in self.model().study_completed_ids:
-            return []
-        names = ("study",) if self.study_mode else (
-            ("drag", "learned", "edit", "trash") if self.show_drag_handle else ("learned", "edit", "trash"))
+        completed = self.study_mode and row is not None and row.entry.id in self.model().study_completed_ids
+        if self.study_mode:
+            names = ("copy",) if completed else ("copy", "study")
+        else:
+            names = ("copy", "edit", "learned", "trash")
+            if self.show_drag_handle:
+                names = ("drag", *names)
         return [(name, QRect(rect.left() + 5 + i * 34, rect.top() + 2, 32, min(32, rect.height() - 4)))
                 for i, name in enumerate(names)]
+
+    def copy_selected_word(self, number):
+        index = self.currentIndex()
+        row = index.data(Qt.ItemDataRole.UserRole)
+        if row is None or not self.selectionModel().isSelected(index):
+            return
+        owner = number - 2
+        if owner < len(row.entry.related):
+            self._copy_word(TableRow(row.entry, owner))
+
+    def _copy_word(self, row):
+        self.wholeWordCopyRequested.emit(self.delegate.word_snapshot(row))
+
+    def _copy_word_by_mouse(self, row):
+        # Qt focuses the table before the press reaches this handler. Restore
+        # the editor field before its queued focus-out commit runs.
+        if self.hasFocus() and self.delegate.last_editor_field is not None:
+            self.delegate.last_editor_field.setFocus(Qt.FocusReason.OtherFocusReason)
+        self._copy_word(row)
+
+    def _right_copy_hit(self, index, row, point):
+        column = index.column()
+        if column == self.action_column:
+            return not row.first or not any(rect.contains(point) for _, rect in
+                                            self.action_rects(self.visualRect(index), row))
+        return column == 0 or (column == 1 and row.sense > 0)
 
     def mousePressEvent(self, event):
         self._copy_press = None
         index = self.indexAt(event.position().toPoint())
         if event.button() == Qt.MouseButton.RightButton:
-            self._cancel_pending_copy()
+            dragging = self.dragging
+            self.cancel_pending_copy()
             self.cancel_drag()
+            if dragging:
+                event.accept()
+                return
         if (event.button() in (Qt.MouseButton.LeftButton, Qt.MouseButton.RightButton)
                 and self._reveal_mask(index, event.position())):
             event.accept()
             return
         if event.button() == Qt.MouseButton.RightButton:
             if index.isValid():
-                self._edit_pointer_field(index)
+                row = index.data(Qt.ItemDataRole.UserRole)
+                if self._right_copy_hit(index, row, event.position().toPoint()):
+                    self._copy_word_by_mouse(row)
+                else:
+                    self._edit_pointer_field(index)
             event.accept()
             return
         if index.isValid() and event.button() == Qt.MouseButton.LeftButton:
             row = index.data(Qt.ItemDataRole.UserRole)
             column = index.column()
+            if column == self.action_column and row.first and any(
+                    action == "copy" and rect.contains(event.position().toPoint())
+                    for action, rect in self.action_rects(self.visualRect(index), row)):
+                self._copy_word_by_mouse(row)
+                event.accept()
+                return
             related_hit = self.related_handle_hit(index, event.position().toPoint())
             sense_hit = self.delegate.pos_hit(index, event.position())
             if self.delegate.editor:
@@ -1027,7 +1244,7 @@ class WordTable(QTableView):
                 self.actionRequested.emit(row.entry.id, "important")
                 event.accept()
                 return
-            if column == 4 and row.first:
+            if column == self.action_column and row.first:
                 for action, rect in self.action_rects(self.visualRect(index), row):
                     if rect.contains(event.position().toPoint()):
                         if action == "drag":
@@ -1251,7 +1468,7 @@ class WordTable(QTableView):
         self.cancel_drag()
         super().focusOutEvent(event)
 
-    def _paint_drag_group(self, painter, group, top, columns=range(5)):
+    def _paint_drag_group(self, painter, group, top, columns):
         word_id, start, end, height = group
         selected = self.currentIndex().data(Qt.ItemDataRole.UserRole)
         for row in range(start, end + 1):
@@ -1275,12 +1492,14 @@ class WordTable(QTableView):
         painter = QPainter(self.viewport())
         painter.fillRect(self.viewport().rect(), QColor(WordGroupStyle.BACKGROUND))
         scroll = self.verticalScrollBar().value()
+        all_columns = range(self.model().columnCount())
         for group in self._drag_static:
-            self._paint_drag_group(painter, group, self.rowViewportPosition(group[1]))
-        columns = (2, 3) if self._sense_drag else range(self.model().columnCount())
+            self._paint_drag_group(painter, group, self.rowViewportPosition(group[1]), all_columns)
+        columns = (2, 3) if self._sense_drag else all_columns
         if self._sense_drag:
+            fixed_columns = (0, 1, *range(STUDY_STAGE_COLUMN, self.model().columnCount()))
             for group in self._drag_groups:
-                self._paint_drag_group(painter, group, self.rowViewportPosition(group[1]), (0, 1, 4))
+                self._paint_drag_group(painter, group, self.rowViewportPosition(group[1]), fixed_columns)
         for i, group in enumerate(self._drag_groups):
             if i != self._drag_source:
                 self._paint_drag_group(painter, group, self._drag_positions[group[0]] - scroll, columns)
@@ -1292,7 +1511,7 @@ class WordTable(QTableView):
         self._paint_drag_group(painter, source, top, columns)
 
     def mouseDoubleClickEvent(self, event):
-        self._cancel_pending_copy()
+        self.cancel_pending_copy()
         self.cancel_drag()
         if event.button() != Qt.MouseButton.LeftButton:
             event.accept()
@@ -1345,10 +1564,11 @@ class WordTable(QTableView):
                 text = ""
                 if self.related_handle_hit(index, event.pos()):
                     text = "按住拖动调整顺序"
-                elif index.column() == 4 and row.first:
-                    labels = {"learned": "恢复待记" if row.entry.learned else "标记已记下",
-                              "study": "记下（回车）",
-                              "edit": "编辑整组", "trash": "删除单词",
+                elif index.column() == self.action_column and row.first:
+                    labels = {"copy": copy_word_tooltip(),
+                              "learned": learned_action_label(row.entry.learned),
+                              "study": study_mark_tooltip(),
+                              "edit": EDIT_WORD_LABEL, "trash": "删除单词",
                               "drag": "按住拖动整个词条" if self.reorder_enabled else "搜索时不可调整排序"}
                     for name, rect in self.action_rects(self.visualRect(index), row):
                         if rect.contains(event.pos()):

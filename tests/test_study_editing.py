@@ -114,6 +114,11 @@ def test_invalid_edit_blocks_refresh_switch_hide_settings_export_and_close(
             raise sqlite3.OperationalError('disk full')
         monkeypatch.setattr(repo, 'save', fail)
     assert not page.table.delegate.submit()
+    if failure == 'empty':
+        assert window.toast.label.text() == "单词拼写不可为空"
+        anchor = editor.mapTo(window.centralWidget(), editor.rect().topLeft())
+        destination = window.toast.motion_in.endValue()
+        assert destination.y() + window.toast.height() < anchor.y()
     assert not page.reload()
     window.set_filter('all')
     assert window.filter_name == 'study17'
@@ -141,7 +146,7 @@ def test_switching_tabs_commits_valid_study_editor(study, window, repo, qtbot):
 
 def test_study_group_actions_and_blank_cells_remain_uneditable(study):
     page, _ = study
-    for row, column in [(0, 0), (0, 4), (1, 1), (3, 1)]:
+    for row, column in [(0, 0), (0, page.model.action_column), (1, 1), (3, 1)]:
         index = page.model.index(row, column)
         assert not page.model.flags(index) & Qt.ItemFlag.ItemIsEditable
         assert not page.model.setData(index, 'invalid')

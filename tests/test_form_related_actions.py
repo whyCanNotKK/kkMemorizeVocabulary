@@ -32,7 +32,7 @@ def test_add_is_always_visible_and_appends_without_a_word_target(window, qtbot, 
     if target in ('search', 'list', 'outer_blank', 'form_blank'):
         assert window.add_related_button.text() == window.add_related_button.toolTip() == '新增关联词'
     else:
-        assert window.add_related_button.text() == '新增关联词  Ctrl+N'
+        assert window.add_related_button.text() == '新增关联词 · Ctrl+N'
     if trigger == 'button':
         qtbot.mouseClick(window.add_related_button, Qt.MouseButton.LeftButton)
     else:
@@ -53,7 +53,7 @@ def test_delete_last_uses_the_existing_delete_function(window, qtbot, monkeypatc
     focus_target(window, qtbot, target)
     assert window.remove_related_button.isVisible()
     assert window.remove_related_button.text() == ('删除末尾关联词' if target == 'form_blank'
-                                                 else '删除末尾关联词  Ctrl+M')
+                                                 else '删除末尾关联词 · Ctrl+M')
     removed = []
     remove = window.remove_related
     monkeypatch.setattr(window, 'remove_related', lambda block: (removed.append(block), remove(block)))
@@ -141,10 +141,10 @@ def test_shortcut_labels_follow_context_and_remapping(window, qtbot):
     assert window.add_related_button.text() == '新增关联词'
     assert window.remove_related_button.text() == '删除末尾关联词'
     window.blocks[0].word.setFocus()
-    assert window.add_related_button.text() == '新增关联词  Alt+N'
-    assert window.remove_related_button.text() == '删除末尾关联词  Alt+M'
+    assert window.add_related_button.text() == '新增关联词 · Alt+N'
+    assert window.remove_related_button.text() == '删除末尾关联词 · Alt+M'
     window.blocks[1].word.setFocus()
-    assert window.remove_related_button.text() == '删除关联词  Alt+M'
+    assert window.remove_related_button.text() == '删除关联词 · Alt+M'
 
 
 def test_blank_target_is_not_restored_after_collapsing_form(window, qtbot):

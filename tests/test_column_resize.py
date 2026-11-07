@@ -8,6 +8,10 @@ from vocabulary.learning import StudyContext
 from vocabulary.window import MainWindow
 
 
+def column_widths(table):
+    return [table.columnWidth(i) for i in range(table.model().columnCount())]
+
+
 def drag_boundary(qtbot, table, column, delta):
     header = table.horizontalHeader()
     surface = header.viewport()
@@ -30,26 +34,26 @@ def test_only_allowed_boundaries_resize_and_survive_refresh(window, repo, qtbot,
     else:
         window.reveal(entry.id, True)
     qtbot.wait(20)
-    original = [table.columnWidth(i) for i in range(5)]
+    original = column_widths(table)
     for column in (0, 2):
         drag_boundary(qtbot, table, column, 50)
-        assert [table.columnWidth(i) for i in range(5)] == original
+        assert column_widths(table) == original
     drag_boundary(qtbot, table, 1, 70)
     assert table.columnWidth(1) > original[1] + 60
     assert table.columnWidth(0) == original[0] and table.columnWidth(2) == original[2]
     before_height, before_translation = table.rowHeight(0), table.columnWidth(3)
-    # Move the translation/action divider left, leaving less room for wrapped text.
+    # Move the translation divider left, leaving less room for wrapped text.
     drag_boundary(qtbot, table, 3, -100)
     assert table.columnWidth(3) < before_translation - 80
-    assert table.columnWidth(4) > original[4] + 80
+    assert table.columnWidth(table.action_column) > original[table.action_column] + 80
     assert table.rowHeight(0) > before_height
-    widths = [table.columnWidth(i) for i in range(5)]
+    widths = column_widths(table)
     if page == "study17":
         assert window.study_page.load(window.study_page.context)
     else:
         window.refresh()
     qtbot.wait(20)
-    assert [table.columnWidth(i) for i in range(5)] == widths
+    assert column_widths(table) == widths
 
 
 @pytest.fixture(params=["pending", "all", "learned", "study17"])
@@ -84,9 +88,35 @@ def double_boundary(qtbot, table, column, button=Qt.MouseButton.LeftButton):
 def assert_fits(table):
     assert table.columnWidth(1) >= 34
     assert table.columnWidth(3) >= 80
-    assert table.columnWidth(4) >= table.minimum_action_width()
-    assert sum(table.columnWidth(i) for i in range(5)) <= table.viewport().width()
+    assert table.columnWidth(table.action_column) >= table.minimum_action_width()
+    assert sum(column_widths(table)) <= table.viewport().width()
     assert table.horizontalScrollBar().maximum() == 0
+
+
+def test_study_stage_boundary_can_drag_and_reset(window, qtbot):
+    window.set_filter("study17")
+    table = window.current_table()
+    qtbot.wait(30)
+    initial_stage = table.columnWidth(4)
+    initial_translation = table.columnWidth(3)
+    initial_actions = table.columnWidth(5)
+
+    drag_boundary(qtbot, table, 4, -40)
+    assert table.columnWidth(5) == initial_actions + 40
+    assert table.columnWidth(4) == table.minimum_stage_width
+    assert table.columnWidth(3) < initial_translation
+
+    translation = table.columnWidth(3)
+    drag_boundary(qtbot, table, 4, 20)
+    assert table.columnWidth(3) == translation
+    assert table.columnWidth(4) == table.minimum_stage_width + 20
+    assert window.study_page.load(window.study_page.context)
+    assert table.columnWidth(4) == table.minimum_stage_width + 20
+
+    double_boundary(qtbot, table, 4)
+    assert table.columnWidth(3) == translation
+    assert table.columnWidth(4) == initial_stage
+    assert_fits(table)
 
 
 def test_drag_stays_in_viewport_and_does_not_move_other_divider(resize_list, qtbot):
@@ -119,7 +149,7 @@ def test_double_click_resets_only_requested_divider(resize_list, repo, qtbot):
     assert table.columnWidth(1) == 206 and edge(table, 3) == right
     left = edge(table, 1)
     double_boundary(qtbot, table, 3)
-    assert table.columnWidth(4) == table.minimum_action_width()
+    assert table.columnWidth(table.action_column) == table.minimum_action_width()
     assert edge(table, 1) == left
     assert table.currentIndex().data(Qt.ItemDataRole.UserRole).entry.id == entry.id
     assert repo.connection.total_changes == changes
@@ -145,10 +175,10 @@ def test_locked_boundaries_and_header_text_never_reset(resize_list, qtbot):
     table, entry, page = resize_list
     drag_boundary(qtbot, table, 1, 60)
     drag_boundary(qtbot, table, 3, -70)
-    widths = [table.columnWidth(i) for i in range(5)]
+    widths = column_widths(table)
     for column in (0, 2):
         double_boundary(qtbot, table, column)
-        assert [table.columnWidth(i) for i in range(5)] == widths
+        assert column_widths(table) == widths
     header = table.horizontalHeader()
     qtbot.mouseDClick(header.viewport(), Qt.MouseButton.LeftButton,
                       pos=QPoint(header.sectionViewportPosition(1) + 30, header.height() // 2))
@@ -156,7 +186,7 @@ def test_locked_boundaries_and_header_text_never_reset(resize_list, qtbot):
                       pos=QPoint(header.viewport().width() - 3, header.height() // 2))
     double_boundary(qtbot, table, 1, Qt.MouseButton.RightButton)
     double_boundary(qtbot, table, 3, Qt.MouseButton.RightButton)
-    assert [table.columnWidth(i) for i in range(5)] == widths
+    assert column_widths(table) == widths
 
 
 def test_resize_and_reset_preserve_selection_and_pixel_scroll(resize_list, qtbot):
@@ -180,20 +210,21 @@ def test_window_shrink_priority_and_expansion_do_not_restore_old_widths(resize_l
     qtbot.wait(30)
     drag_boundary(qtbot, table, 1, 350)
     drag_boundary(qtbot, table, 3, -200)
-    word, actions = table.columnWidth(1), table.columnWidth(4)
+    word, actions = table.columnWidth(1), table.columnWidth(table.action_column)
     window.resize(1300, 820)
     qtbot.wait(30)
-    assert (table.columnWidth(1), table.columnWidth(4)) == (word, actions)
+    assert (table.columnWidth(1), table.columnWidth(table.action_column)) == (word, actions)
     window.resize(860, 820)
     qtbot.wait(40)
     assert_fits(table)
-    assert table.columnWidth(4) == table.minimum_action_width()
-    available = table.viewport().width() - table.columnWidth(0) - table.columnWidth(2) - 80
+    assert table.columnWidth(table.action_column) == table.minimum_action_width()
+    available = (table.viewport().width() - table.columnWidth(0) - table.columnWidth(2)
+                 - table.study_stage_width() - 80)
     assert table.columnWidth(1) == min(word, available - table.minimum_action_width())
-    reduced = table.columnWidth(1), table.columnWidth(4)
+    reduced = table.columnWidth(1), table.columnWidth(table.action_column)
     window.resize(1400, 820)
     qtbot.wait(30)
-    assert (table.columnWidth(1), table.columnWidth(4)) == reduced
+    assert (table.columnWidth(1), table.columnWidth(table.action_column)) == reduced
     assert_fits(table)
 
 
@@ -202,19 +233,19 @@ def test_reset_widths_survive_refresh_and_tabs_but_new_window_uses_defaults(resi
     drag_boundary(qtbot, table, 1, 60)
     drag_boundary(qtbot, table, 3, -80)
     double_boundary(qtbot, table, 1)
-    widths = [table.columnWidth(i) for i in range(5)]
+    widths = column_widths(table)
     other = "pending" if page == "study17" else "study17"
     window.set_filter(other)
     window.set_filter(page)
     qtbot.wait(30)
-    assert [table.columnWidth(i) for i in range(5)] == widths
+    assert column_widths(table) == widths
     fresh = MainWindow(repo)
     qtbot.addWidget(fresh)
     fresh.show()
     fresh.set_filter(page)
     qtbot.wait(30)
     assert fresh.current_table().columnWidth(1) == 206
-    assert fresh.current_table().columnWidth(4) == table.minimum_action_width()
+    assert fresh.current_table().columnWidth(table.action_column) == table.minimum_action_width()
     fresh._closing = True
     fresh.hide()
 
@@ -227,9 +258,9 @@ def test_invalid_inline_edit_blocks_drag_and_reset(resize_list, qtbot):
     table.edit(index)
     editor = table.delegate.editor
     editor.clear()
-    widths = [table.columnWidth(i) for i in range(5)]
-    for column in (1, 3):
+    widths = column_widths(table)
+    for column in table.resizable_boundaries():
         drag_boundary(qtbot, table, column, -50)
         double_boundary(qtbot, table, column)
-        assert [table.columnWidth(i) for i in range(5)] == widths
+        assert column_widths(table) == widths
         assert table.delegate.editor is editor and not editor.text()

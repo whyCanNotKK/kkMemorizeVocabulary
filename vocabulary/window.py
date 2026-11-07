@@ -9,12 +9,13 @@ from PySide6.QtWidgets import (
     QPlainTextEdit, QScrollArea, QVBoxLayout, QWidget,
 )
 
-from .domain import SHORTCUT_LABELS, DuplicateWord, ValidationError, WordEntry
+from .domain import SHORTCUT_LABELS, DuplicateWord, RelatedWord, ValidationError, WordContentValidationError, WordEntry
 from .busy_overlay import BusyOverlay
 from .draft_reset_dialog import DraftResetDialog
 from .unsaved_input_dialog import UnsavedInputDialog
 from .import_dialog import ImportConflictDialog
 from .input_focus import InputFocusPolicy
+from .pos_picker import PosPicker
 from .form_reorder import FormReorderDrag
 from .form_focus import FormFocusContext
 from .shortcuts import SettingsDialog, ShortcutManager
@@ -27,7 +28,8 @@ from .study_transfer import StudyBackup, read_study_backup, read_word_or_study_f
 from .theme import ACCENT, GOLD, MUTED, icon
 from .transfer import write_entries
 from .transfer_jobs import run_repository_task
-from .widgets import FloatingNotice, SearchBox, WordBlock, button, confirm_remove
+from .widgets import FloatingNotice, PosCombo, SearchBox, WordBlock, button, confirm_remove
+from .word_clipboard import encode
 
 
 class MainWindow(QMainWindow):
@@ -60,6 +62,7 @@ class MainWindow(QMainWindow):
         layout.setContentsMargins(24, 20, 24, 20)
         layout.setSpacing(9)
         list_panel = QFrame()
+        self.list_panel = list_panel
         list_panel.setObjectName("panel")
         list_panel.setMinimumHeight(180)
         list_layout = QVBoxLayout(list_panel)
@@ -120,6 +123,9 @@ class MainWindow(QMainWindow):
         self.study_page.table.delegate.editingChanged.connect(self.inline_changed)
         self.study_page.table.editPreparationRequested.connect(self.prepare_list_edit)
         self.study_page.table.copyRequested.connect(self.copy_text)
+        for table in (self.table, self.study_page.table):
+            table.wholeWordCopyRequested.connect(self.copy_whole_word)
+            table.pasteRejected.connect(self.toast_paste_error)
         self.study_page.table.relatedMoveRequested.connect(self.move_related_word)
         self.study_page.table.senseMoveRequested.connect(self.move_word_sense)
         self.study_page.error.connect(lambda text: self.show_notice(text, True))
@@ -224,18 +230,24 @@ class MainWindow(QMainWindow):
         fixed = {}
         for number, key in enumerate(self.filter_buttons, 1):
             action = f"tab_{key}"
-            fixed[action] = (f"Alt+{number}", f"Ctrl+{number}")
+            fixed[action] = (f"Alt+{number}",)
             callbacks[action] = lambda key=key: self.set_filter(key)
-            self.filter_buttons[key].setToolTip(" / ".join(fixed[action]))
+            self.filter_buttons[key].setToolTip(fixed[action][0])
+        scoped = {}
+        for number in range(1, 10):
+            action = f"copy_word_{number}"
+            fixed[action] = (f"Ctrl+{number}", f"Ctrl+Num+{number}")
+            callbacks[action] = lambda number=number: self.copy_numbered_word(number)
+            scoped[action] = self.can_copy_in_scope
         callbacks = {name: lambda callback=callback: self.run_keyboard_action(callback)
                      for name, callback in callbacks.items()}
-        self.shortcuts = ShortcutManager(repository, self, callbacks, fixed=fixed)
+        self.shortcuts = ShortcutManager(repository, self, callbacks, fixed=fixed, scoped=scoped)
         self.shortcuts.changed.connect(self.refresh_shortcut_labels)
         self.form_drag = FormReorderDrag(self.form_scroll, lambda: self.blocks, self._can_change_form)
         self.form_drag.relatedMoved.connect(self.move_form_related)
         self.form_drag.senseMoved.connect(lambda block, source, target: block.move_sense(source, target))
         self.form_drag.activeChanged.connect(self.form_drag_changed)
-        self.form_focus = FormFocusContext(self.editor_panel, self)
+        self.form_focus = FormFocusContext(self.editor_panel, self, self.copy_form_blank)
         self.form_focus.changed.connect(self.related_context_changed)
         self.form_focus.blankPressed.connect(self.clear_related_target)
         self.reset_form()
@@ -247,6 +259,61 @@ class MainWindow(QMainWindow):
     def copy_text(self, text):
         QApplication.clipboard().setText(text)
         self.toast.show_message(f"已复制：{text}")
+
+    def _copy_scope(self, focus):
+        if (not self.form_collapsed and self.editor_panel.isVisible()
+                and (focus is self.editor_panel or self.editor_panel.isAncestorOf(focus))):
+            return "form"
+        if (self.current_table().dragging or focus is self.search_box
+                or self.search_box.isAncestorOf(focus)):
+            return None
+        if focus is self.list_panel or self.list_panel.isAncestorOf(focus):
+            return "list"
+        return None
+
+    def can_copy_in_scope(self, focus):
+        popup = QApplication.activePopupWidget()
+        return (focus is not None and (popup is None or isinstance(popup.parentWidget(), (PosCombo, PosPicker)))
+                and self._copy_scope(focus) is not None)
+
+    def copy_numbered_word(self, number):
+        popup = QApplication.activePopupWidget()
+        focus = popup.parentWidget() if popup is not None else QApplication.focusWidget()
+        scope = self._copy_scope(focus) if focus is not None else None
+        if scope == "form" and number <= len(self.blocks):
+            self.copy_whole_word(self.blocks[number - 1].value())
+        elif scope == "list":
+            self.current_table().copy_selected_word(number)
+
+    def copy_form_word(self, block):
+        if block in self.blocks:
+            self.copy_whole_word(block.value())
+
+    def copy_form_blank(self, point):
+        if self.form_collapsed or self.form_drag.active:
+            return False
+        block = next((block for block in self.blocks if block.copy_blank_hit(point)), None)
+        if block is None:
+            return False
+        self.copy_form_word(block)
+        return True
+
+    def copy_whole_word(self, word):
+        self.current_table().cancel_pending_copy()
+        try:
+            content = encode(word)
+        except WordContentValidationError as error:
+            self.toast.show_message(f"整词复制失败：{error.field}不能为空")
+            return
+        clipboard = QApplication.clipboard()
+        clipboard.setText(content)
+        if not clipboard.ownsClipboard() and clipboard.text() != content:
+            self.toast.show_message("无法写入剪贴板，请重试")
+            return
+        self.toast.show_message(f"已复制：{word.text.strip()}的拼写、音标和所有释义")
+
+    def toast_paste_error(self, message):
+        self.show_notice(message, True)
 
     def show_notice(self, text, error=False, duplicate=False):
         if error:
@@ -507,6 +574,8 @@ class MainWindow(QMainWindow):
 
     def add_block(self, text="", senses=None, related=False, *, position=None, phonetic=""):
         block = WordBlock(text, senses, related, phonetic=phonetic)
+        block.copyRequested.connect(lambda: self.copy_form_word(block))
+        block.pasteRejected.connect(self.toast_paste_error)
         block.changed.connect(self.form_changed)
         block.structureChanged.connect(self.update_tab_order)
         block.heightChanged.connect(self.schedule_editor_resize)
@@ -555,8 +624,9 @@ class MainWindow(QMainWindow):
         remove_label = ('删除关联词' if target in self.blocks[1:] or not can_remove else '删除末尾关联词')
         for control, key, label in ((self.add_related_button, 'add_related', '新增关联词'),
                                     (self.remove_related_button, 'remove_related', remove_label)):
-            control.setText(f'{label}  {keys[key]}' if form_focused else label)
-            control.setToolTip(f'{label} · {keys[key]}' if form_focused else label)
+            text = f'{label} · {keys[key]}' if form_focused else label
+            control.setText(text)
+            control.setToolTip(text)
             control.setAccessibleName(label)
 
     def related_context_changed(self):
@@ -865,18 +935,29 @@ class MainWindow(QMainWindow):
 
     def commit_cell(self, row, column, value):
         try:
-            entry = self.repository.get(row.entry.id)
-            target = entry if row.owner == -1 else entry.related[row.owner]
             if column == 1:
-                if isinstance(value, tuple):
-                    target.text, target.phonetic = value
-                else:
-                    target.text = value
-            elif column == 2:
-                target.senses[row.sense].pos = value
-            elif column == 3:
-                target.senses[row.sense].translation = value
-            self.repository.save(entry)
+                spelling = value
+                if isinstance(value, RelatedWord):
+                    spelling = value.text
+                elif isinstance(value, tuple):
+                    spelling = value[0]
+                if not spelling.strip():
+                    self.toast.show_message("单词拼写不可为空", self.current_table().delegate.editor)
+                    return False
+            if isinstance(value, RelatedWord):
+                self.repository.replace_word_content(row.entry, row.owner, value)
+            else:
+                entry = self.repository.get(row.entry.id)
+                target = entry if row.owner == -1 else entry.related[row.owner]
+                if column == 1:
+                    target.text = spelling
+                    if isinstance(value, tuple):
+                        target.phonetic = value[1]
+                elif column == 2:
+                    target.senses[row.sense].pos = value
+                elif column == 3:
+                    target.senses[row.sense].translation = value
+                self.repository.save(entry)
         except DuplicateWord as error:
             self.duplicate_id = error.entry_id
             self.show_notice(str(error), True, duplicate=True)

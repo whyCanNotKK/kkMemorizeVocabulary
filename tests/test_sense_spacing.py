@@ -43,5 +43,5 @@ def test_equal_gaps_between_senses(window, repo, qtbot, monkeypatch, page, trans
     assert len(set(inner_gaps)) == 1
     word_gaps = [bounds[first][0] - bounds[first - 1][1] - 1 for first in (3, 6)]
     assert word_gaps[0] == word_gaps[1] > inner_gaps[0]
-    action_cell = table.visualRect(table.model().index(0, 4))
+    action_cell = table.visualRect(table.model().index(0, table.action_column))
     assert all(action_cell.contains(target) for _, target in table.action_rects(action_cell))

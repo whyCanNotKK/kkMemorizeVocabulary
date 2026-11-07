@@ -19,6 +19,14 @@ SHORTCUT_LABELS = {
     "toggle_visibility": "显示/隐藏 所有释义",
     "edit_selected": "编辑选定的单词",
 }
+
+
+def shortcut_candidates(default):
+    yield default
+    yield f"Ctrl+Shift+{default.split('+')[-1]}"
+    yield from (f"Ctrl+Alt+Shift+F{number}" for number in range(1, 25))
+
+
 CLEANUP_COMMANDS = {
     "delete study record": "删除学习记录。",
     "clean vocabulary only": "删除学习记录不包含的词汇。",
@@ -67,6 +75,12 @@ class DuplicateWord(ValidationError):
         super().__init__("这个主词已经存在，当前输入已保留。")
 
 
+class WordContentValidationError(ValidationError):
+    def __init__(self, field: str, message: str):
+        self.field = field
+        super().__init__(message)
+
+
 def normalize_pos(pos: str) -> str:
     """Keep the previous Chinese POS code readable in drafts and JSON backups."""
     return 'else' if pos == '其他' else pos
@@ -84,6 +98,17 @@ def clean_senses(senses: list[Sense], label: str) -> list[Sense]:
     if not result:
         raise ValidationError(f"{label}：至少需要一条已选择词性的释义，翻译可留空。")
     return result
+
+
+def clean_word_content(word: RelatedWord) -> RelatedWord:
+    text = word.text.strip()
+    if not text:
+        raise WordContentValidationError("单词拼写", "请填写单词。")
+    try:
+        senses = clean_senses(word.senses, text)
+    except ValidationError as error:
+        raise WordContentValidationError("释义词性", str(error)) from error
+    return RelatedWord(text, senses, word.phonetic.strip())
 
 
 def clean_entry(entry: WordEntry) -> WordEntry:

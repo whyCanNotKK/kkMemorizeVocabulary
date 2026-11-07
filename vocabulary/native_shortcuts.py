@@ -19,6 +19,8 @@ def native_combination(value):
         (Qt.KeyboardModifier.AltModifier, 1), (Qt.KeyboardModifier.ControlModifier, 2),
         (Qt.KeyboardModifier.ShiftModifier, 4), (Qt.KeyboardModifier.MetaModifier, 8))
         if modifiers & qt_flag)
+    if Qt.Key.Key_0 <= key <= Qt.Key.Key_9 and modifiers & Qt.KeyboardModifier.KeypadModifier:
+        return native_modifiers, 0x60 + key - Qt.Key.Key_0
     if Qt.Key.Key_A <= key <= Qt.Key.Key_Z or Qt.Key.Key_0 <= key <= Qt.Key.Key_9:
         return native_modifiers, int(key)
     if Qt.Key.Key_F1 <= key <= Qt.Key.Key_F24:
@@ -139,7 +141,7 @@ class WindowHotkeys(QObject):
             return False
         binding = self.modifiers, key
         action = self.registrations.get(binding)
-        if action is None:
+        if action is None or not self.manager.action_enabled(action, QApplication.focusWidget()):
             return False
         if key not in self.pressed:
             self.pressed.add(key)
@@ -147,7 +149,8 @@ class WindowHotkeys(QObject):
         return True
 
     def _invoke(self, action, binding):
-        if self.active() and self.registrations.get(binding) == action:
+        if (self.active() and self.registrations.get(binding) == action
+                and self.manager.action_enabled(action, QApplication.focusWidget())):
             self.manager.callbacks[action]()
 
     def _keyboard_event(self, code, message, pointer):

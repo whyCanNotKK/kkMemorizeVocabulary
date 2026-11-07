@@ -261,7 +261,7 @@ def test_study_ui_masks_groups_reveal_inline_edit_without_master_actions(window,
     assert len(page.model.rows) == 2 and all(row.hidden for row in page.model.rows)
     assert page.model.index(0, 0).data() == '1'
     assert not page.table.show_drag_handle and not page.table.shuffle_button.isVisible()
-    assert [action for action, _ in page.table.action_rects(page.table.rect())] == ['study']
+    assert [action for action, _ in page.table.action_rects(page.table.rect())] == ['copy', 'study']
     index = page.model.index(0, 1)
     qtbot.mouseDClick(page.table.viewport(), Qt.MouseButton.LeftButton,
                      pos=page.table.visualRect(index).center())
@@ -278,7 +278,8 @@ def test_study_ui_masks_groups_reveal_inline_edit_without_master_actions(window,
     assert not page.model.rows[0].hidden and any(row.owner == 0 for row in page.model.rows)
     window.set_global_hidden(True)
     assert all(row.hidden for row in page.model.rows)
-    rect = page.table.action_rects(page.table.visualRect(page.model.index(0, 4)))[0][1]
+    index = page.model.index(0, page.model.action_column)
+    rect = dict(page.table.action_rects(page.table.visualRect(index)))['study']
     qtbot.mouseClick(page.table.viewport(), Qt.MouseButton.LeftButton, pos=rect.center())
     assert len(page.tasks) == 1
     assert progress(window.repository, first.id)['morning_done']

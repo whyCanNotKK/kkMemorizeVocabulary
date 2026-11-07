@@ -550,16 +550,25 @@ def test_inline_translation_save_and_cancel(window, repo, qtbot):
     assert repo.get(saved.id).senses[0].translation == "新的多行\n翻译"
 
 
-def test_inline_invalid_content_stays_in_editor(window, repo, qtbot):
+@pytest.mark.parametrize("owner, spelling", [(-1, ""), (0, "   ")], ids=["main", "related"])
+def test_inline_invalid_content_stays_in_editor(window, repo, qtbot, owner, spelling):
     saved = seed(repo)
     window.reveal(saved.id, True)
-    window.table.edit(window.model.index(0, 1))
-    qtbot.wait(10)
-    editor = window.table.delegate.editor
-    editor.clear()
-    assert not window.table.delegate.submit()
-    assert window.table.delegate.editor is editor
-    assert repo.get(saved.id).senses[0].translation
+    table = window.table
+    index = table._entry_index(saved.id, owner, 0, 1)
+    table.setCurrentIndex(index)
+    table.edit(index)
+    editor = table.delegate.editor
+    editor.setText(spelling)
+    window.search_box.setFocus()
+    qtbot.waitUntil(lambda: window.toast.isVisible() and editor.hasFocus())
+    assert window.toast.label.text() == "单词拼写不可为空"
+    anchor = editor.mapTo(window.centralWidget(), editor.rect().topLeft())
+    destination = window.toast.motion_in.endValue()
+    assert destination.y() + window.toast.height() < anchor.y()
+    assert abs(destination.x() + window.toast.width() // 2 - anchor.x() - editor.width() // 2) <= 1
+    assert table.delegate.editor is editor and editor.text() == spelling
+    assert repo.get(saved.id) == saved
 
 
 def test_full_edit_retains_star_and_cancels_without_write(window, repo):

@@ -2,8 +2,8 @@
 from datetime import date
 
 import pytest
-from PySide6.QtCore import QEvent, QModelIndex, QPoint, Qt
-from PySide6.QtGui import QHelpEvent, QKeyEvent
+from PySide6.QtCore import QEvent, QModelIndex, QPoint, Qt, QUrl
+from PySide6.QtGui import QHelpEvent, QKeyEvent, QTextDocument
 from PySide6.QtWidgets import QApplication
 
 from vocabulary.domain import RelatedWord, Sense, WordEntry
@@ -407,15 +407,22 @@ def test_study_enter_completion_failure_keeps_word_selected(review_list, window,
 
 
 @pytest.mark.parametrize("review_list", ["study17"], indirect=True)
-def test_study_button_tooltip_mentions_enter(review_list, monkeypatch):
+def test_study_button_tooltip_shows_enter_keycap(review_list, monkeypatch):
     table, entries = review_list
     tips = []
     monkeypatch.setattr("PySide6.QtWidgets.QToolTip.showText", lambda pos, text, *args: tips.append(text))
-    rect = table.visualRect(index_for(table, entries[0], column=4))
-    point = table.action_rects(rect)[0][1].center()
+    rect = table.visualRect(index_for(table, entries[0], column=table.action_column))
+    point = dict(table.action_rects(rect))["study"].center()
     event = QHelpEvent(QEvent.Type.ToolTip, point, table.viewport().mapToGlobal(point))
     QApplication.sendEvent(table.viewport(), event)
-    assert tips == ["记下（回车）"]
+    assert len(tips) == 1
+    assert 'alt="回车"' in tips[0]
+    source = tips[0].split('src="', 1)[1].split('"', 1)[0]
+    document = QTextDocument()
+    document.setHtml(tips[0])
+    assert document.toPlainText() == "记下 · \ufffc"
+    image = document.resource(QTextDocument.ResourceType.ImageResource, QUrl(source))
+    assert not image.isNull()
 
 
 def test_ctrl_arrows_scroll_without_changing_current_cell_or_group(review_list, window, repo, qtbot):
@@ -516,9 +523,9 @@ def test_study_completion_selects_same_task_position(review_list, window, qtbot,
     table.setCurrentIndex(index_for(table, entry, owner=0, sense=1, column=3))
     if trigger == "mouse":
         window.study_page.refresh_button.setFocus()
-        rect = table.visualRect(index_for(table, entry, column=4))
+        rect = table.visualRect(index_for(table, entry, column=table.action_column))
         qtbot.mouseClick(table.viewport(), Qt.MouseButton.LeftButton,
-                        pos=table.action_rects(rect)[0][1].center())
+                        pos=dict(table.action_rects(rect))["study"].center())
     else:
         table.setFocus()
         key = Qt.Key.Key_Return if trigger == "return" else Qt.Key.Key_Enter
@@ -545,9 +552,9 @@ def test_completing_final_study_word_leaves_clean_empty_list(review_list, window
     table.setCurrentIndex(index_for(table, entry))
     table.setFocus()
     if trigger == "mouse":
-        rect = table.visualRect(index_for(table, entry, column=4))
+        rect = table.visualRect(index_for(table, entry, column=table.action_column))
         qtbot.mouseClick(table.viewport(), Qt.MouseButton.LeftButton,
-                        pos=table.action_rects(rect)[0][1].center())
+                        pos=dict(table.action_rects(rect))["study"].center())
     else:
         key = Qt.Key.Key_Return if trigger == "return" else Qt.Key.Key_Enter
         modifier = (Qt.KeyboardModifier.NoModifier if trigger == "return"

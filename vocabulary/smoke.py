@@ -23,7 +23,7 @@ def run_smoke(app, window, directory: Path):
         assert window.global_hide_button.isChecked()
         assert all(row.hidden for row in window.model.rows)
         assert window.settings_button.text() == "设置"
-        assert window.add_related_button.text().startswith("新增关联词  ")
+        assert window.add_related_button.text().startswith("新增关联词 · ")
         assert window.remove_related_button.isHidden()
         footer = (window.add_related_button, window.remove_related_button,
                   window.star_button, window.save_button)
