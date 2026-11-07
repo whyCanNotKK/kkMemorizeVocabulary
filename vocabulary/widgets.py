@@ -7,7 +7,8 @@ from PySide6.QtCore import (
 from PySide6.QtGui import QColor, QKeyEvent, QPainter, QPalette, QPen
 from PySide6.QtWidgets import (
     QApplication, QComboBox, QFrame, QGraphicsOpacityEffect, QHBoxLayout, QLabel, QLineEdit, QMessageBox,
-    QPlainTextEdit, QPushButton, QSizePolicy, QStyle, QStyledItemDelegate, QStyleOptionComboBox, QStyleOptionViewItem, QVBoxLayout, QWidget,
+    QPlainTextEdit, QPushButton, QSizePolicy, QStyle, QStyledItemDelegate, QStyleOptionComboBox, QStyleOptionViewItem,
+    QToolButton, QVBoxLayout, QWidget,
 )
 
 from .domain import POS_OPTIONS, SHORTCUT_LABELS, RelatedWord, Sense, normalize_pos
@@ -19,6 +20,52 @@ WORD_WIDTH = 144
 PHONETIC_WIDTH = 108
 POS_WIDTH = 78
 INPUT_SPACING = 10
+
+
+class SearchBox(QLineEdit):
+    COUNT_SPACING = 4
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._count_text = ""
+        self.setPlaceholderText("搜索单词或翻译")
+        self.setAccessibleName("搜索单词、翻译、关联词及其翻译")
+        self.setMinimumWidth(150)
+        self.setMaximumWidth(260)
+        self.setClearButtonEnabled(True)
+        # Capture the native clear button before the leading action adds another button.
+        self._clear_button = self.findChild(QToolButton)
+        self.addAction(icon("search"), QLineEdit.ActionPosition.LeadingPosition)
+
+    def set_result_count(self, count):
+        count_text = "" if count is None else str(count)
+        if count_text == self._count_text:
+            return
+        self._count_text = count_text
+        self.setAccessibleDescription("" if count is None else f"找到 {count} 个主词")
+        self._update_count_margin()
+        self.update()
+
+    def _update_count_margin(self):
+        width = self.fontMetrics().horizontalAdvance(self._count_text) + self.COUNT_SPACING
+        self.setTextMargins(0, 0, width if self._count_text else 0, 0)
+
+    def changeEvent(self, event):
+        super().changeEvent(event)
+        if event.type() == QEvent.Type.FontChange:
+            self._update_count_margin()
+
+    def paintEvent(self, event):
+        super().paintEvent(event)
+        if not self._count_text:
+            return
+        painter = QPainter(self)
+        color = self.palette().color(QPalette.ColorRole.Text)
+        color.setAlpha(140)
+        painter.setPen(color)
+        right = self._clear_button.x() - self.COUNT_SPACING
+        painter.drawText(0, 0, right, self.height(), Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter,
+                         self._count_text)
 
 
 def button(text, parent=None, quiet=False):

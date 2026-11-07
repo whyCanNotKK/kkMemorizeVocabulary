@@ -4,7 +4,7 @@ import sqlite3
 
 import pytest
 from PySide6.QtCore import QPoint, Qt
-from PySide6.QtWidgets import QFileDialog, QMessageBox
+from PySide6.QtWidgets import QFileDialog, QMessageBox, QToolButton
 
 from vocabulary.domain import RelatedWord, Sense, ValidationError, WordEntry
 from vocabulary.import_dialog import ImportConflictDialog
@@ -305,6 +305,33 @@ def test_search_all_fields_and_filtered_export(window, repo, qtbot, tmp_path, mo
     assert visible(window) == ["record", "other"] and window.table.reorder_enabled
     assert window.table.shuffle_button.isEnabled()
     assert all(row.hidden for row in window.model.rows)
+
+
+def test_search_count_tracks_main_words_in_current_results(window, repo, qtbot):
+    pending = repo.save(WordEntry("record", [Sense("n.", "match"), Sense("v.", "match")],
+        [RelatedWord("recorder", [Sense("n.", "match")])]))
+    repo.save(word("matching", learned=True))
+    window.refresh()
+    search = window.search_box
+    assert search.accessibleDescription() == "" and search.textMargins().right() == 0
+
+    search.setText(" match ")
+    assert search.accessibleDescription() == "找到 1 个主词"
+    assert search.textMargins().right() > 0
+    window.set_filter("all")
+    assert search.accessibleDescription() == "找到 2 个主词"
+    window.set_filter("pending")
+    repo.delete(pending.id)
+    window.refresh()
+    assert search.accessibleDescription() == "找到 0 个主词"
+    assert search.textMargins().right() > 0
+
+    clear_button = max(search.findChildren(QToolButton), key=lambda button: button.x())
+    qtbot.mouseClick(clear_button, Qt.MouseButton.LeftButton)
+    assert search.text() == ""
+    assert search.accessibleDescription() == "" and search.textMargins().right() == 0
+    search.setText("   ")
+    assert search.accessibleDescription() == "" and search.textMargins().right() == 0
 
 
 @pytest.mark.parametrize("clear_text", ["", "   "])

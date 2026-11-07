@@ -5,7 +5,7 @@ from pathlib import Path
 import shiboken6
 from PySide6.QtCore import QPoint, QSize, Qt, QTimer
 from PySide6.QtWidgets import (
-    QApplication, QDialog, QDialogButtonBox, QFileDialog, QFrame, QGridLayout, QHBoxLayout, QLabel, QLineEdit, QMainWindow, QMessageBox,
+    QApplication, QDialog, QDialogButtonBox, QFileDialog, QFrame, QGridLayout, QHBoxLayout, QLabel, QMainWindow, QMessageBox,
     QPlainTextEdit, QScrollArea, QVBoxLayout, QWidget,
 )
 
@@ -27,7 +27,7 @@ from .study_transfer import StudyBackup, read_study_backup, read_word_or_study_f
 from .theme import ACCENT, GOLD, MUTED, icon
 from .transfer import write_entries
 from .transfer_jobs import run_repository_task
-from .widgets import FloatingNotice, WordBlock, button, confirm_remove
+from .widgets import FloatingNotice, SearchBox, WordBlock, button, confirm_remove
 
 
 class MainWindow(QMainWindow):
@@ -79,13 +79,7 @@ class MainWindow(QMainWindow):
         self.settings_button.clicked.connect(self.open_settings)
         filters.addWidget(self.settings_button)
         filters.addStretch()
-        self.search_box = QLineEdit()
-        self.search_box.setPlaceholderText("搜索单词或翻译")
-        self.search_box.setAccessibleName("搜索单词、翻译、关联词及其翻译")
-        self.search_box.setMinimumWidth(150)
-        self.search_box.setMaximumWidth(260)
-        self.search_box.setClearButtonEnabled(True)
-        self.search_box.addAction(icon("search"), QLineEdit.ActionPosition.LeadingPosition)
+        self.search_box = SearchBox()
         self.search_box.textChanged.connect(self.search_changed)
         filters.addWidget(self.search_box, 1)
         self.global_hide_button = button("")
@@ -355,6 +349,7 @@ class MainWindow(QMainWindow):
             control.style().polish(control)
         visible = self._filter_entries(entries)
         searching = bool(self.search_box.text().strip())
+        self.search_box.set_result_count(len(visible) if searching else None)
         self.table.set_page_state(self.filter_name, searching, len(visible))
         with self.table.preserve_view(scroll_position=position):
             # Search expands only the projection, leaving the review state intact.
