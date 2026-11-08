@@ -1,10 +1,15 @@
 .venv/
 __pycache__/
 .pytest_cache/
+.DS_Store
+._*
+.AppleDouble
+.LSOverride
 build/
 dist/
 artifacts/
 .scratch/
+*.dSYM/
 *.sqlite3
 *.sqlite3-shm
 *.sqlite3-wal

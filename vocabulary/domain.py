@@ -1,4 +1,5 @@
 from dataclasses import dataclass, field
+import sys
 
 
 POS_OPTIONS = (
@@ -6,11 +7,12 @@ POS_OPTIONS = (
     ("adv.", "副词"), ("prep.", "介词"), ("pron.", "代词"),
     ("conj.", "连词"), ("interj.", "感叹词"), ("else", "其他"),
 )
+_SHORTCUT_MODIFIER = "Meta" if sys.platform == "darwin" else "Ctrl"
 DEFAULT_SHORTCUTS = {
-    "add_related": "Ctrl+N", "remove_related": "Ctrl+M",
-    "add_sense": "Ctrl+J", "remove_sense": "Ctrl+K",
-    "save": "Ctrl+Return", "important": "Ctrl+I",
-    "toggle_visibility": "Ctrl+S", "edit_selected": "Ctrl+E",
+    "add_related": f"{_SHORTCUT_MODIFIER}+N", "remove_related": f"{_SHORTCUT_MODIFIER}+M",
+    "add_sense": f"{_SHORTCUT_MODIFIER}+J", "remove_sense": f"{_SHORTCUT_MODIFIER}+K",
+    "save": f"{_SHORTCUT_MODIFIER}+Return", "important": f"{_SHORTCUT_MODIFIER}+I",
+    "toggle_visibility": f"{_SHORTCUT_MODIFIER}+S", "edit_selected": f"{_SHORTCUT_MODIFIER}+E",
 }
 SHORTCUT_LABELS = {
     "add_related": "新增关联词", "remove_related": "删除关联词",
@@ -23,8 +25,8 @@ SHORTCUT_LABELS = {
 
 def shortcut_candidates(default):
     yield default
-    yield f"Ctrl+Shift+{default.split('+')[-1]}"
-    yield from (f"Ctrl+Alt+Shift+F{number}" for number in range(1, 25))
+    yield f"{_SHORTCUT_MODIFIER}+Shift+{default.split('+')[-1]}"
+    yield from (f"{_SHORTCUT_MODIFIER}+Alt+Shift+F{number}" for number in range(1, 25))
 
 
 CLEANUP_COMMANDS = {

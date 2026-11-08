@@ -1,3 +1,5 @@
+import sys
+
 from PySide6.QtCore import QEvent, QObject, QSignalBlocker, Qt, Signal
 from PySide6.QtGui import QKeySequence, QShortcut
 from PySide6.QtWidgets import QAbstractButton, QApplication, QDialog, QFrame, QHBoxLayout, QLabel, QLineEdit, QMessageBox, QScrollArea, QSpinBox, QVBoxLayout, QWidget
@@ -41,8 +43,12 @@ def normalize_shortcut(value: str) -> str:
     if key == Qt.Key.Key_Enter:
         key = Qt.Key.Key_Return
         sequence = QKeySequence(modifiers | key)
-    if not modifiers & (Qt.KeyboardModifier.ControlModifier | Qt.KeyboardModifier.AltModifier):
-        raise ValidationError("快捷键必须包含 Ctrl 或 Alt。")
+    allowed_modifiers = Qt.KeyboardModifier.ControlModifier | Qt.KeyboardModifier.AltModifier
+    if sys.platform == "darwin":
+        allowed_modifiers |= Qt.KeyboardModifier.MetaModifier
+    if not modifiers & allowed_modifiers:
+        raise ValidationError("快捷键必须包含 Command、Ctrl 或 Alt。" if sys.platform == "darwin"
+                              else "快捷键必须包含 Ctrl 或 Alt。")
     if key in (Qt.Key.Key_unknown, Qt.Key.Key_Control, Qt.Key.Key_Alt, Qt.Key.Key_Shift,
                Qt.Key.Key_Meta, Qt.Key.Key_Tab, Qt.Key.Key_Backtab, Qt.Key.Key_Escape, Qt.Key.Key_Space):
         raise ValidationError("这个按键用于固定导航，请选择其他组合。")
@@ -50,6 +56,8 @@ def normalize_shortcut(value: str) -> str:
     if normalized in RESERVED_DIGITS:
         raise ValidationError("Alt+1～9 和 Ctrl+1～9（含数字键盘）为保留快捷键。")
     reserved = {"Ctrl+A", "Ctrl+C", "Ctrl+V", "Ctrl+X", "Ctrl+Z", "Ctrl+Y", "Alt+F4"}
+    if sys.platform == "darwin":
+        reserved.update({"Meta+A", "Meta+C", "Meta+V", "Meta+X", "Meta+Z"})
     if normalized in reserved:
         raise ValidationError("这个快捷键已保留给文字编辑或系统操作。")
     return normalized

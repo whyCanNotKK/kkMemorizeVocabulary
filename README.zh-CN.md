@@ -2,7 +2,7 @@
 
 [English](README.md) | **简体中文**
 
-一个适用于 Windows 10/11 x64 的离线单词本，界面为中文。用于整理自己的单词和释义、遮住答案复习，以及按十七天复习计划背单词。所有数据保存在本机。
+一个适用于 Windows 10/11 x64 的离线单词本，并试验性支持在 Apple Silicon macOS 上源码运行及未签名应用。界面为中文，可整理自己的单词和释义、遮住答案复习，以及按十七天复习计划背单词。所有数据保存在本机。
 
 ## 安装
 
@@ -11,6 +11,10 @@
 3. 双击安装程序，按提示完成安装，再从开始菜单或桌面快捷方式打开软件。
 
 安装包已包含运行环境，无需另装 Python。
+
+## macOS（Apple Silicon）
+
+首轮支持 M1 及更新芯片，提供源码运行及 `.app` 打包，不提供签名和公证。克隆仓库后可双击 `start-macos.command` 启动源码版；首次运行会建立虚拟环境并安装依赖。请在 Apple Silicon Mac 上按[开发指南](docs/开发指南.md)构建。macOS 默认将数据和日志保存在 `~/Library/Application Support/kkMemorizeVocabulary`。
 
 ## 准备自己的单词
 

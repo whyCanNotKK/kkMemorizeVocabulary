@@ -13,6 +13,8 @@ from .window import MainWindow
 
 
 def default_data_dir():
+    if sys.platform == "darwin":
+        return Path.home() / "Library" / "Application Support" / "kkMemorizeVocabulary"
     return Path(os.environ.get("LOCALAPPDATA", Path.home() / "AppData" / "Local")) / "kkMemorizeVocabulary"
 
 

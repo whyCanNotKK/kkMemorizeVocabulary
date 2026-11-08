@@ -2,7 +2,7 @@
 
 **English** | [简体中文](README.zh-CN.md)
 
-An offline vocabulary notebook for Windows 10/11 x64, with a Chinese interface. Organize your own words and definitions, hide answers for review, and study with a seventeen-day review schedule. Your data stays on your computer.
+An offline vocabulary notebook for Windows 10/11 x64, with experimental source and unsigned app support for Apple Silicon macOS. It has a Chinese interface. Organize your own words and definitions, hide answers for review, and study with a seventeen-day review schedule. Your data stays on your computer.
 
 ## Install
 
@@ -11,6 +11,10 @@ An offline vocabulary notebook for Windows 10/11 x64, with a Chinese interface. 
 3. Run the installer, then open the app from the Start menu or its desktop shortcut.
 
 The installer includes the required runtime; you do not need to install Python separately.
+
+## macOS (Apple Silicon)
+
+The initial macOS build targets Apple Silicon (M1 or later) and is not signed or notarized. After cloning the repository, double-click `start-macos.command` to launch the source version; the first run creates a virtual environment and installs dependencies. Build the app on an Apple Silicon Mac using the [development guide](docs/开发指南.md). macOS stores data and logs in `~/Library/Application Support/kkMemorizeVocabulary` by default.
 
 ## Add your vocabulary
 

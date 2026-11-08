@@ -1,4 +1,6 @@
 """Share Ctrl+V recognition between the form and inline text editors."""
+import sys
+
 from PySide6.QtCore import QEvent, Qt
 from PySide6.QtWidgets import QApplication
 
@@ -7,8 +9,10 @@ from .word_clipboard import decode
 
 
 def handle_word_paste(event, apply, reject):
+    paste_modifier = (Qt.KeyboardModifier.MetaModifier if sys.platform == "darwin"
+                      else Qt.KeyboardModifier.ControlModifier)
     if (event.type() != QEvent.Type.KeyPress or event.key() != Qt.Key.Key_V
-            or event.modifiers() != Qt.KeyboardModifier.ControlModifier):
+            or event.modifiers() != paste_modifier):
         return False
     try:
         word = decode(QApplication.clipboard().text())

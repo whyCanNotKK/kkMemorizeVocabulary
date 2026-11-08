@@ -1,5 +1,6 @@
 from functools import lru_cache
 import math
+import sys
 
 from PySide6.QtCore import QByteArray, QBuffer, QIODevice, QPointF, QRectF, Qt
 from PySide6.QtGui import QColor, QFont, QFontDatabase, QIcon, QPainter, QPainterPath, QPen, QPixmap, QPolygonF
@@ -13,7 +14,7 @@ ACCENT = "#a4ddc5"
 GOLD = "#efc578"
 
 STYLESHEET = """
-QWidget { color: #e8edf4; font-family: 'Microsoft YaHei UI', 'Segoe UI'; font-size: 13px; }
+QWidget { color: #e8edf4; font-family: 'Microsoft YaHei UI', 'PingFang SC', 'Noto Sans CJK SC', sans-serif; font-size: 13px; }
 QMainWindow, QDialog { background: #171b22; }
 QFrame#panel { background: #1e242d; border: 1px solid #303945; border-radius: 12px; }
 QFrame#conflictCard { background: #1e242d; border: 1px solid #384352; border-radius: 12px; }
@@ -78,7 +79,8 @@ def apply_theme(app):
             if (fonts / filename).exists():
                 QFontDatabase.addApplicationFont(str(fonts / filename))
     app.setStyle("Fusion")
-    app.setFont(QFont("Microsoft YaHei UI", 10))
+    preferred_font = "PingFang SC" if sys.platform == "darwin" else "Microsoft YaHei UI"
+    app.setFont(QFont(preferred_font, 10))
     app.setStyleSheet(STYLESHEET)
 
 
@@ -272,7 +274,9 @@ def _tooltip_with_icon(text: str, icon_name: str, *, alt: str, suffix: str = "")
 
 
 def copy_word_tooltip() -> str:
-    return _tooltip_with_icon("整词复制 · Ctrl+1-9 · ", "mouse_right",
+    from .domain import _SHORTCUT_MODIFIER
+    modifier = "⌘" if _SHORTCUT_MODIFIER == "Meta" else "Ctrl"
+    return _tooltip_with_icon(f"整词复制 · {modifier}+1-9 · ", "mouse_right",
                               alt="鼠标右键", suffix="单词区域空白处")
 
 
