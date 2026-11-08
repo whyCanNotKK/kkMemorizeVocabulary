@@ -98,6 +98,37 @@ def test_tab_saves_and_backtab_reads_latest_value(edit_list, repo, qtbot):
     assert table.delegate.editor.text() == 'renamed'
 
 
+@pytest.mark.parametrize('column,step,next_field', [
+    (3, 1, (-1, 0, 2)),
+    (3, -1, (-1, 0, 1)),
+    (1, 1, (-1, 0, 1)),
+    (1, -1, (-1, 1, 3)),
+])
+def test_tab_continues_past_deleted_fields(window, repo, qtbot, column, step, next_field):
+    entry = repo.save(WordEntry('main', [Sense('n.', 'first'), Sense('v.', 'second')],
+                                [RelatedWord('child', [Sense('n.', 'child')])]))
+    following = repo.save(WordEntry('next', [Sense('n.', 'next')]))
+    window.reveal(entry.id, True)
+    table = window.table
+    table.edit(table._entry_index(entry.id, 0 if column == 1 else -1, 0, column))
+    editor = table.delegate.editor
+    if column == 1:
+        editor.setText(' \t ')
+        if step == 1:
+            qtbot.keyClick(editor, Qt.Key.Key_Tab)
+            editor = editor.phonetic
+    else:
+        editor.setPlainText(' \n ')
+    qtbot.keyClick(editor, Qt.Key.Key_Tab if step == 1 else Qt.Key.Key_Backtab)
+    destination = following if (column, step) == (1, 1) else entry
+    assert field(table) == (destination.id, *next_field)
+    saved = repo.get(entry.id)
+    if column == 1:
+        assert not saved.related and saved.senses == entry.senses
+    else:
+        assert saved.related == entry.related and saved.senses == entry.senses[1:]
+
+
 @pytest.mark.parametrize('failure', ['empty', 'duplicate', 'database'])
 def test_failed_save_does_not_move_editor(edit_list, repo, qtbot, monkeypatch, failure):
     table, entries = edit_list
@@ -158,6 +189,19 @@ def test_tab_does_not_edit_wrong_entry_when_saved_name_stops_matching_search(win
     assert repo.get(entry.id).text == 'renamed'
     assert table.delegate.editor is None
     assert table.model().rows[0].entry.text == 'alphabet'
+
+
+def test_tab_skips_search_result_removed_by_clearing_translation(window, repo, qtbot):
+    entry = repo.save(WordEntry('alpha', [Sense('n.', 'match'), Sense('v.', 'another')]))
+    next_entry = repo.save(WordEntry('match', [Sense('n.', 'next')]))
+    window.search_box.setText('match')
+    table = window.table
+    table.edit(table._entry_index(entry.id, -1, 0, 3))
+    editor = table.delegate.editor
+    editor.clear()
+    qtbot.keyClick(editor, Qt.Key.Key_Tab)
+    assert repo.get(entry.id).senses == [Sense('v.', 'another')]
+    assert field(table) == (next_entry.id, -1, 0, 1)
 
 
 def test_edit_completion_trims_outer_whitespace_and_preserves_internal_content(edit_list, repo, qtbot):

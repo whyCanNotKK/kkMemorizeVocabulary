@@ -28,6 +28,7 @@ from .word_paste import handle_word_paste, set_word_field
 STUDY_STAGE_COLUMN = 4
 STUDY_STAGE_HEADER = "周期"
 EDIT_WORD_LABEL = "编辑单词"
+CELL_REMOVED = object()
 
 
 def learned_action_label(learned):
@@ -190,7 +191,10 @@ class WordTableModel(QAbstractTableModel):
         return flags
 
     def setData(self, index, value, role=Qt.ItemDataRole.EditRole):
-        if role != Qt.ItemDataRole.EditRole or not self.flags(index) & Qt.ItemFlag.ItemIsEditable:
+        return role == Qt.ItemDataRole.EditRole and bool(self.commit_edit(index, value))
+
+    def commit_edit(self, index, value):
+        if not self.flags(index) & Qt.ItemFlag.ItemIsEditable:
             return False
         row = self.rows[index.row()]
         if isinstance(value, RelatedWord) and self.preview_origin is not None:
@@ -228,6 +232,7 @@ def word_tooltip_markup(text, font, maximum_width):
 
 class WordDelegate(QStyledItemDelegate):
     editingChanged = Signal(bool)
+    contentRemoved = Signal()
 
     def __init__(self, view, before_edit):
         super().__init__(view)
@@ -238,6 +243,7 @@ class WordDelegate(QStyledItemDelegate):
         self.edit_index = None
         self.last_editor_field = None
         self._committing = False
+        self.removed_field = None
 
     @staticmethod
     def mask_rect(rect):
@@ -570,14 +576,27 @@ class WordDelegate(QStyledItemDelegate):
 
     def submit(self):
         editor = self.editor
+        if self._committing:
+            return editor is None
+        self.removed_field = None
         if editor is None or not shiboken6.isValid(editor):
             return True
-        if self._committing:
-            return False
         self._committing = True
         try:
             index = QModelIndex(self.edit_index)
-            if index.isValid() and not self.view.model().setData(index, self._value(editor)):
+            model = self.view.model()
+            row = index.data(Qt.ItemDataRole.UserRole)
+            value = self._value(editor) if row is not None else None
+            # A whole-word paste can contain intentional blank translations.
+            # Apply row deletion when the translation field was then edited.
+            removed_from_preview = (isinstance(editor, QPlainTextEdit) and isinstance(value, RelatedWord)
+                                    and len(value.senses) > 1
+                                    and editor.toPlainText() != self._preview_translation_display
+                                    and not value.senses[row.sense].translation.strip())
+            if removed_from_preview:
+                del value.senses[row.sense]
+            result = model.commit_edit(index, value) if index.isValid() else True
+            if not result:
                 if isinstance(editor, PosPicker):
                     QTimer.singleShot(0, lambda: self._show_pos(editor))
                 else:
@@ -590,15 +609,37 @@ class WordDelegate(QStyledItemDelegate):
             if isinstance(editor, WordNameEditor):
                 editor.panel.hide()
             self.editor, self.edit_index = None, None
-            self.view.model().preview_origin = None
+            model.preview_origin = None
             self.last_editor_field = None
             if index.isValid():
                 self.view.resizeRowToContents(index.row())
-            self.editingChanged.emit(False)
             self.closeEditor.emit(editor, QStyledItemDelegate.EndEditHint.NoHint)
+            if result is CELL_REMOVED or removed_from_preview:
+                self.removed_field = (row.entry.id, row.owner, row.sense, index.column())
+                self.contentRemoved.emit()
+            else:
+                self.editingChanged.emit(False)
             return True
         finally:
             self._committing = False
+
+    def target_after_removal(self, target):
+        """Map a field captured before submit to its position after a deletion."""
+        if self.removed_field is None or target[0] != self.removed_field[0]:
+            return target
+        entry_id, owner, sense, column = target
+        _, removed_owner, removed_sense, removed_column = self.removed_field
+        if removed_column == 1:
+            if removed_owner == -1 or owner == removed_owner:
+                return None
+            if owner > removed_owner:
+                owner -= 1
+        elif owner == removed_owner and column in (2, 3):
+            if sense == removed_sense:
+                return None
+            if sense > removed_sense:
+                sense -= 1
+        return entry_id, owner, sense, column
 
     def _restore_editor_focus(self, editor, field):
         if self.editor is editor and shiboken6.isValid(editor):
@@ -1073,15 +1114,19 @@ class WordTable(QTableView):
                 fields.append((row.entry.id, owner, 0, 1))
                 for sense in range(len(word.senses)):
                     fields.extend((row.entry.id, owner, sense, column) for column in (2, 3))
-        position = fields.index(target) + step
+        position = fields.index(target)
         if not self.delegate.submit():
             return
-        if 0 <= position < len(fields):
-            self.edit_field(fields[position])
-            if step < 0 and isinstance(self.delegate.editor, WordNameEditor):
-                self.delegate.editor.phonetic.setFocus(Qt.FocusReason.BacktabFocusReason)
-        else:
-            self.setFocus()
+        visible_ids = ({row.entry.id for row in self.model().rows}
+                       if self.delegate.removed_field is not None else None)
+        for number in range(position + step, len(fields) if step > 0 else -1, step):
+            destination = self.delegate.target_after_removal(fields[number])
+            if destination is not None and (visible_ids is None or destination[0] in visible_ids):
+                self.edit_field(destination)
+                if step < 0 and isinstance(self.delegate.editor, WordNameEditor):
+                    self.delegate.editor.phonetic.setFocus(Qt.FocusReason.BacktabFocusReason)
+                return
+        self.setFocus()
 
     def can_navigate_entries(self):
         return (self.isVisible() and self.isEnabled() and self.delegate.editor is None
@@ -1194,23 +1239,29 @@ class WordTable(QTableView):
         if index.isValid() and event.button() == Qt.MouseButton.LeftButton:
             row = index.data(Qt.ItemDataRole.UserRole)
             column = index.column()
-            if column == self.action_column and row.first and any(
-                    action == "copy" and rect.contains(event.position().toPoint())
-                    for action, rect in self.action_rects(self.visualRect(index), row)):
+            actions = (self.action_rects(self.visualRect(index), row)
+                       if column == self.action_column and row.first else ())
+            if any(action == "copy" and rect.contains(event.position().toPoint()) for action, rect in actions):
                 self._copy_word_by_mouse(row)
                 event.accept()
                 return
             related_hit = self.related_handle_hit(index, event.position().toPoint())
             sense_hit = self.delegate.pos_hit(index, event.position())
+            removed = False
             if self.delegate.editor:
                 if not self.delegate.submit():
                     event.accept()
                     return
-                if related_hit or sense_hit:
-                    self.editPreparationRequested.emit(row.entry.id)
+                removed = self.delegate.removed_field is not None
+                if related_hit or sense_hit or removed:
+                    target = self.delegate.target_after_removal((row.entry.id, row.owner, row.sense, column))
+                    if target is None:
+                        event.accept()
+                        return
+                    if not removed:
+                        self.editPreparationRequested.emit(row.entry.id)
                     matching = next((i for i, item in enumerate(self.model().rows)
-                                     if (item.entry.id, item.owner, item.sense)
-                                     == (row.entry.id, row.owner, row.sense)), None)
+                                     if (item.entry.id, item.owner, item.sense) == target[:3]), None)
                     if matching is None:
                         event.accept()
                         return
@@ -1244,23 +1295,25 @@ class WordTable(QTableView):
                 self.actionRequested.emit(row.entry.id, "important")
                 event.accept()
                 return
-            if column == self.action_column and row.first:
-                for action, rect in self.action_rects(self.visualRect(index), row):
-                    if rect.contains(event.position().toPoint()):
-                        if action == "drag":
-                            if self.reorder_enabled:
-                                self.setCurrentIndex(index)
-                                self.setFocus()
-                                self._drag_candidate = (row.entry.id, event.position().toPoint())
-                                self.viewport().setCursor(Qt.CursorShape.OpenHandCursor)
-                            event.accept()
-                            return
+            for action, rect in actions:
+                if rect.contains(event.position().toPoint()):
+                    if action == "drag":
+                        if self.reorder_enabled:
+                            self.setCurrentIndex(index)
+                            self.setFocus()
+                            self._drag_candidate = (row.entry.id, event.position().toPoint())
+                            self.viewport().setCursor(Qt.CursorShape.OpenHandCursor)
+                    else:
                         self.actionRequested.emit(row.entry.id, action)
-                        event.accept()
-                        return
+                    event.accept()
+                    return
             if not row.hidden and column == 3 and event.modifiers() & Qt.KeyboardModifier.ControlModifier:
                 self.setFocus(Qt.FocusReason.MouseFocusReason)
                 self.set_entry_revealed(row.entry.id, False)
+                event.accept()
+                return
+            if removed and index != self.indexAt(event.position().toPoint()):
+                self.setCurrentIndex(index)
                 event.accept()
                 return
             if self.delegate.copy_hit(index, event.position()):
@@ -1271,7 +1324,8 @@ class WordTable(QTableView):
         if not self.delegate.mask_hit(index, point):
             return False
         entry_id = index.data(Qt.ItemDataRole.UserRole).entry.id
-        if self.delegate.submit():
+        if (self.delegate.submit()
+                and self.delegate.target_after_removal((entry_id, -1, 0, 1)) is not None):
             self._just_revealed = (entry_id, time.monotonic())
             self.setFocus(Qt.FocusReason.MouseFocusReason)
             self.set_entry_revealed(entry_id, True)
@@ -1537,8 +1591,12 @@ class WordTable(QTableView):
             return
         row = index.data(Qt.ItemDataRole.UserRole)
         target = (row.entry.id, row.owner, row.sense, index.column())
-        if self.delegate.editor is not None and not self.delegate.submit():
-            return
+        if self.delegate.editor is not None:
+            if not self.delegate.submit():
+                return
+            target = self.delegate.target_after_removal(target)
+            if target is None:
+                return
         if not self.delegate.before_edit():
             return
         matching = next((i for i, item in enumerate(self.model().rows)

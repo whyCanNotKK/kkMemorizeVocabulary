@@ -4,7 +4,7 @@ import sqlite3
 import pytest
 from PySide6.QtCore import Qt
 
-from vocabulary.domain import Sense, WordEntry
+from vocabulary.domain import RelatedWord, Sense, WordEntry
 from vocabulary.learning import StudyContext
 
 
@@ -70,9 +70,38 @@ def test_shift_enter_adds_newline_then_enter_saves(inline_table, repo, qtbot, ke
     assert repo.get(entry.id).senses[0].translation == 'first\nsecond'
 
 
+def test_blank_main_removes_entry_and_detaches_open_form(inline_table, window, repo, qtbot):
+    table, entry = inline_table
+    studying = window.filter_name == 'study17'
+    window.reset_form(entry)
+    if not studying:
+        window.blocks[0].rows[0].translation.setPlainText('unsaved draft')
+    table.edit(table.model().index(0, 1))
+    editor = table.delegate.editor
+    editor.setText(' \t\n ')
+    qtbot.keyClick(editor, Qt.Key.Key_Return)
+    assert table.delegate.editor is None
+    assert table.model().rowCount() == 0
+    assert repo.list_entries() == []
+    assert window.edit_id is None
+    if studying:
+        assert repo.study_participant_count() == 0
+        assert window.study_page.timer.history.new_total == 0
+        assert not window.study_page.timer.running
+        assert not window.is_dirty()
+    else:
+        assert window.is_dirty()
+        assert window.blocks[0].rows[0].translation.toPlainText() == 'unsaved draft'
+        assert window.save_current()
+        assert repo.list_entries()[0].senses == [Sense('n.', 'unsaved draft')]
+
+
 @pytest.mark.parametrize('failure', ['empty', 'duplicate', 'database'])
 def test_enter_save_failure_preserves_input_and_editor(inline_table, repo, qtbot, monkeypatch, failure):
     table, entry = inline_table
+    if failure == 'empty':
+        entry.related.append(RelatedWord('child', [Sense('n.', 'child')]))
+        repo.save(entry)
     repo.save(WordEntry('existing', [Sense('n.', '已有')]))
     table.edit(table.model().index(0, 1))
     editor = table.delegate.editor

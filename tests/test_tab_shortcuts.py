@@ -3,7 +3,7 @@ from PySide6.QtCore import QEvent, Qt, QTimer
 from PySide6.QtGui import QKeyEvent
 from PySide6.QtWidgets import QApplication
 
-from vocabulary.domain import Sense, ValidationError, WordEntry
+from vocabulary.domain import RelatedWord, Sense, ValidationError, WordEntry
 
 
 @pytest.fixture
@@ -56,7 +56,8 @@ def test_incomplete_draft_does_not_stop_tab_switch(window, repo, qtbot, modifier
 
 
 def test_tab_switch_submits_inline_edit_and_blocks_invalid_input(window, repo, qtbot, modifier):
-    saved = repo.save(WordEntry("original", [Sense("n.", "原词")]))
+    saved = repo.save(WordEntry("original", [Sense("n.", "原词")],
+                                [RelatedWord("child", [Sense("n.", "child")])]))
     window.reveal(saved.id, True)
     window.table.edit(window.model.index(0, 1))
     editor = window.table.delegate.editor

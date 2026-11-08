@@ -205,10 +205,12 @@ class StudyPage(QWidget):
         self.render()
 
     def complete(self, word_id, action):
-        position = next((i for i, task in enumerate(self.tasks) if task.entry.id == word_id), None)
-        if action != "study" or self.context is None or position is None:
+        if action != "study" or self.context is None:
             return
         if not self.table.delegate.submit():
+            return
+        position = next((i for i, task in enumerate(self.tasks) if task.entry.id == word_id), None)
+        if position is None:
             return
         # A paused task resumes as a lifecycle transition, including a retry of a
         # failed pause save. The first mark still creates its record atomically.

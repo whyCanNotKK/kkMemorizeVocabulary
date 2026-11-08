@@ -196,7 +196,8 @@ def test_visibility_shortcut_preserves_bottom_draft_and_search_scope(window, rep
 
 
 def test_visibility_shortcut_blocks_on_invalid_cell_and_when_suspended(window, repo, qtbot):
-    entry = repo.save(WordEntry("word", [Sense("n.", "释义")]))
+    entry = repo.save(WordEntry("word", [Sense("n.", "释义")],
+                                [RelatedWord("child", [Sense("n.", "child")])]))
     window.reveal(entry.id, True)
     window.table.edit(window.model.index(0, 1))
     editor = window.table.delegate.editor

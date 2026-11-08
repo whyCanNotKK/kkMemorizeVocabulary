@@ -394,6 +394,21 @@ def test_inline_smaller_payload_tab_and_failed_save(window, repo, qtbot):
     table.delegate.cancel()
 
 
+def test_clearing_translation_after_whole_word_paste_removes_only_that_sense(window, repo, qtbot):
+    entry = entry_with_children(repo)
+    window.reveal(entry.id, True)
+    table = window.table
+    table.edit(table._entry_index(entry.id, 0, 0, 3))
+    editor = table.delegate.editor
+    paste(qtbot, editor)
+    editor.setPlainText(" \n ")
+    qtbot.keyClick(editor, Qt.Key.Key_Return)
+    assert table.delegate.editor is None
+    saved = repo.get(entry.id)
+    assert saved.related == [RelatedWord(REPLACEMENT.text, REPLACEMENT.senses[1:], REPLACEMENT.phonetic),
+                             entry.related[1]]
+
+
 @pytest.mark.parametrize("owner", [-1, 0], ids=["main", "related"])
 def test_inline_preview_moves_deleted_editor_and_esc_restores_original_row(window, repo, qtbot, owner):
     definitions = [Sense("n.", f"saved {i}") for i in range(4)]

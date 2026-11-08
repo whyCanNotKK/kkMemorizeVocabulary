@@ -118,7 +118,8 @@ def test_holding_and_dragging_reorders_only_pos(mouse_list, repo, qtbot, owner, 
 
 
 def test_right_click_keeps_invalid_editor_and_independent_draft(window, repo, qtbot):
-    entry = repo.save(WordEntry("word", [Sense("n.", "definition")]))
+    entry = repo.save(WordEntry("word", [Sense("n.", "definition")],
+                                [RelatedWord("child", [Sense("n.", "child")])]))
     window.reveal(entry.id, True)
     window.blocks[0].word.setText("independent draft")
     table = window.table
@@ -129,6 +130,32 @@ def test_right_click_keeps_invalid_editor_and_independent_draft(window, repo, qt
     qtbot.mouseClick(table.viewport(), Qt.MouseButton.RightButton, pos=point)
     assert table.delegate.editor is editor and editor.text() == ""
     assert repo.get(entry.id) == entry and window.blocks[0].word.text() == "independent draft"
+
+
+def test_right_click_edits_the_same_sibling_after_removing_a_related_word(window, repo, qtbot):
+    entry = repo.save(WordEntry("main", [Sense("n.", "main")],
+                                [RelatedWord(name, [Sense("n.", name)]) for name in ("first", "second")]))
+    window.reveal(entry.id, True)
+    table = window.table
+    table.edit(table._entry_index(entry.id, 0))
+    table.delegate.editor.setText(" ")
+    _, point = field(table, 1, 1)
+    qtbot.mouseClick(table.viewport(), Qt.MouseButton.RightButton, pos=point)
+    assert repo.get(entry.id).related == entry.related[1:]
+    assert table.delegate.editor.text() == "second"
+
+
+def test_edit_button_keeps_its_target_when_clearing_the_word_above(window, repo, qtbot):
+    first, second = [repo.save(WordEntry(name, [Sense("n.", name)])) for name in ("first", "second")]
+    window.refresh()
+    table = window.table
+    table.edit(table._entry_index(first.id))
+    table.delegate.editor.clear()
+    index = table._entry_index(second.id, column=table.action_column)
+    actions = dict(table.action_rects(table.visualRect(index), index.data(Qt.ItemDataRole.UserRole)))
+    qtbot.mouseClick(table.viewport(), Qt.MouseButton.LeftButton, pos=actions["edit"].center())
+    assert repo.list_entries() == [second]
+    assert window.edit_id == second.id
 
 
 @pytest.mark.parametrize("owner", [-1, 0])

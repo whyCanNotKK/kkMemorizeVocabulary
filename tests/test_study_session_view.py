@@ -7,6 +7,7 @@ from PySide6.QtWidgets import QToolTip
 
 from vocabulary.domain import RelatedWord, Sense, WordEntry
 from vocabulary.learning import StudyContext, format_study_duration
+from vocabulary.study_history import DURATION_COLUMN
 
 
 DAY = date(2026, 11, 5)
@@ -56,10 +57,10 @@ def test_marks_do_not_write_duration_and_history_reads_only_saved_time(window, r
     assert page.elapsed_label.text() == '5 s'
     assert repo.study_task_history(AM).duration_seconds == 0
     panel.update_live()
-    assert panel.model.data(panel.model.index(0, 4)) == '0 s'
+    assert panel.model.index(0, DURATION_COLUMN).data() == '0 s'
     repo.connection.execute('DROP TRIGGER no_duration_on_mark')
     page.toggle_timer()
-    assert panel.model.data(panel.model.index(0, 4)) == '5 s'
+    assert panel.model.index(0, DURATION_COLUMN).data() == '5 s'
     page.toggle_timer()
     ticks[0] += 1_600_000_000
     page.complete(words[1].id, 'study')
@@ -67,7 +68,7 @@ def test_marks_do_not_write_duration_and_history_reads_only_saved_time(window, r
     assert repo.study_task_history(AM).duration_seconds == 5
     page.complete(words[2].id, 'study')
     assert repo.study_task_history(AM).duration_seconds == 7
-    assert panel.model.data(panel.model.index(0, 4)) == '7 s'
+    assert panel.model.index(0, DURATION_COLUMN).data() == '7 s'
     assert page.elapsed_label.text() == '7 s' and not page.timer.running
 
 

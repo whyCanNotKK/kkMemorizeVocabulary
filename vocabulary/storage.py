@@ -5,8 +5,9 @@ import json
 import random
 import sqlite3
 
-from .domain import (CLEANUP_COMMANDS, DEFAULT_SHORTCUTS, DuplicateWord, RelatedWord, Sense, WordEntry,
-                     clean_entry, clean_word_content, same_entry_content, shortcut_candidates)
+from .domain import (CLEANUP_COMMANDS, DEFAULT_SHORTCUTS, DuplicateWord, RelatedWord, Sense,
+                     WordContentValidationError, WordEntry, clean_entry, clean_word_content,
+                     same_entry_content, shortcut_candidates)
 from .transfer import ImportConflict, ImportResult
 from .learning import (STAGE_GAPS, StudyContext, StudyDrawSettings, StudyTask,
                        StudyTaskHistory, next_stage, study_due, study_timestamp)
@@ -143,6 +144,39 @@ class Repository:
             if child is not None:
                 return "related_id", child[0]
         raise ValueError("释义所属单词已失效，请重试。")
+
+    def remove_inline_content(self, expected: WordEntry, owner: int, sense: int | None,
+                              context: StudyContext | None):
+        """Remove a blank list field while the displayed target is still current."""
+        with self.connection:
+            self.connection.execute("BEGIN IMMEDIATE")
+            entry = self.get(expected.id)
+            stale = "单词内容已变化，当前输入已保留。"
+            if owner == -1:
+                if sense is None and entry.related:
+                    raise WordContentValidationError("单词拼写", "单词拼写不可为空")
+                if (entry.text, entry.phonetic, entry.senses) != (expected.text, expected.phonetic, expected.senses):
+                    raise ValueError(stale)
+                word = entry
+            else:
+                if entry.related != expected.related:
+                    raise ValueError(stale)
+                word = entry.related[owner]
+
+            if sense is None and owner == -1:
+                self._delete_word(entry.id, context or StudyContext.now())
+                return
+            column, target_id = self._sense_owner(entry.id, owner)
+            if sense is None:
+                self.connection.execute("DELETE FROM related_words WHERE id=?", (target_id,))
+            else:
+                if len(word.senses) < 2 or not 0 <= sense < len(word.senses):
+                    raise ValueError(stale)
+                self.connection.execute(f"""DELETE FROM senses WHERE id=(
+                    SELECT id FROM senses WHERE {column}=? ORDER BY position,id LIMIT 1 OFFSET ?
+                )""", (target_id, sense))
+            self.connection.execute(
+                "UPDATE words SET updated_at=strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id=?", (entry.id,))
 
     def move_sense(self, entry_id: int, owner: int, source: int, target: int):
         """Reorder definitions of one word without rewriting content or study state."""
@@ -294,21 +328,23 @@ class Repository:
     def delete(self, entry_id: int, context: StudyContext | None = None):
         with self.connection:
             self.connection.execute('BEGIN IMMEDIATE')
-            context = context or StudyContext.now()
-            progress = self.connection.execute(
-                'SELECT * FROM memorize_vocabulary_17day WHERE word_id=?', (entry_id,)).fetchone()
-            history = self.study_task_history(context)
-            if progress is not None and history is not None:
-                completed_today = progress['last_completed_on'] == context.day.isoformat()
-                if completed_today or study_due(progress['stage'], progress['last_completed_on'], context.day):
-                    kind = ('new' if progress['stage'] == 1 or
-                            (completed_today and progress['stage'] == 2) else 'review')
-                    done = completed_today or progress['afternoon_done' if context.afternoon else 'morning_done']
-                    total = max(0, getattr(history, f'{kind}_total') - 1)
-                    count = min(total, max(0, getattr(history, f'{kind}_done') - int(bool(done))))
-                    self.connection.execute(f'''UPDATE study_task_history
-                        SET {kind}_total=?,{kind}_done=? WHERE id=?''', (total, count, history.id))
-            self.connection.execute("DELETE FROM words WHERE id=?", (entry_id,))
+            self._delete_word(entry_id, context or StudyContext.now())
+
+    def _delete_word(self, entry_id, context):
+        progress = self.connection.execute(
+            'SELECT * FROM memorize_vocabulary_17day WHERE word_id=?', (entry_id,)).fetchone()
+        history = self.study_task_history(context)
+        if progress is not None and history is not None:
+            completed_today = progress['last_completed_on'] == context.day.isoformat()
+            if completed_today or study_due(progress['stage'], progress['last_completed_on'], context.day):
+                kind = ('new' if progress['stage'] == 1 or
+                        (completed_today and progress['stage'] == 2) else 'review')
+                done = completed_today or progress['afternoon_done' if context.afternoon else 'morning_done']
+                total = max(0, getattr(history, f'{kind}_total') - 1)
+                count = min(total, max(0, getattr(history, f'{kind}_done') - int(bool(done))))
+                self.connection.execute(f'''UPDATE study_task_history
+                    SET {kind}_total=?,{kind}_done=? WHERE id=?''', (total, count, history.id))
+        self.connection.execute("DELETE FROM words WHERE id=?", (entry_id,))
 
     def clear_content(self, command: str):
         """Clear the requested scope atomically, including dependent word content."""

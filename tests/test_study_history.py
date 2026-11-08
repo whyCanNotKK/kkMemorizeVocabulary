@@ -4,12 +4,13 @@ from datetime import date, timedelta
 import pytest
 from PySide6.QtCore import QRect, Qt
 from PySide6.QtGui import QImage, QPainter
-from PySide6.QtWidgets import QStyleOptionViewItem
+from PySide6.QtWidgets import QHeaderView, QStyleOptionViewItem
 
 from vocabulary.domain import RelatedWord, Sense, WordEntry
 from vocabulary.learning import StudyContext, StudyTaskHistory
 from vocabulary.storage import Repository
-from vocabulary.study_history import HistoryModel
+from vocabulary.study_history import (DURATION_COLUMN, INTERVAL_COLUMN, NEW_COLUMN,
+                                      REVIEW_COLUMN, STATUS_COLUMN, HistoryModel)
 
 
 DAY = date(2026, 11, 5)
@@ -28,7 +29,7 @@ def text(model, row, column):
 
 
 def status(model, row):
-    return model.data(model.index(row, 7), Qt.ItemDataRole.AccessibleTextRole)
+    return model.data(model.index(row, STATUS_COLUMN), Qt.ItemDataRole.AccessibleTextRole)
 
 
 def period_label(model, row):
@@ -62,14 +63,45 @@ def test_gaps_are_virtual_dates_descending_and_periods_paired(qapp):
     assert status(model, 1) == '当前任务未完成'
     assert text(model, 1, 0) == ''  # Date is shared visually by the pair.
     assert status(model, 2) == status(model, 3) == '完全没背单词'
-    assert text(model, 4, 4) == '1 s'
-    assert text(model, 4, 5) == '3 / 7' and text(model, 4, 6) == '2 / 5'
-    assert model.HEADERS == ('日期', '时段', '开始时间', '结束时间', '有效用时', '复习词', '新词', '状态')
+    assert text(model, 4, DURATION_COLUMN) == '1 s'
+    assert text(model, 4, REVIEW_COLUMN) == '3 / 7' and text(model, 4, NEW_COLUMN) == '2 / 5'
+    assert model.HEADERS == ('日期', '时段', '开始时间', '结束时间', '记忆间隔',
+                             '有效用时', '复习词', '新词', '状态')
     assert model.data(model.index(0, 0), Qt.ItemDataRole.BackgroundRole) == model.data(
         model.index(1, 0), Qt.ItemDataRole.BackgroundRole)
     model.load([record(earliest)], AM)
     assert model.rowCount() == 5
     assert model.period(0) == (DAY, 0) and model.period(1) == (DAY - timedelta(days=1), 0)
+
+
+def test_memory_interval_uses_latest_completed_period_and_skips_gaps(qapp):
+    model = HistoryModel()
+    yesterday = DAY - timedelta(days=1)
+    earlier = DAY - timedelta(days=3)
+    current = record(afternoon=1, started_at=f'{DAY}T15:30:00+08:00')
+    morning = record(started_at=f'{DAY}T08:00:00+08:00')
+    previous = record(yesterday, 1, status=1, ended_at=f'{yesterday}T16:00:00+08:00')
+    first = record(earlier, status=1, ended_at=f'{earlier}T08:00:00+08:00')
+    model.load([current, morning, previous, first], PM)
+    assert [text(model, row, INTERVAL_COLUMN) for row in (0, 1, 2, 3, 6)] == [
+        '16 h', '24 h', '—', '48 h', '—']
+
+    completed = replace(morning, status=1, ended_at=f'{DAY}T15:00:00+08:00')
+    model.load([current, completed, previous, first], PM)
+    assert text(model, 1, INTERVAL_COLUMN) == '1 h'
+    model.load([current], PM)
+    assert text(model, 1, INTERVAL_COLUMN) == '—'
+
+
+@pytest.mark.parametrize('end_time,expected', [
+    ('15:30:01', '0 h'), ('15:30:00', '1 h'), ('14:30:00', '2 h'), ('16:00:01', '—'),
+])
+def test_memory_interval_rounds_half_hours_up_and_omits_overlaps(qapp, end_time, expected):
+    model = HistoryModel()
+    morning = record(status=1, ended_at=f'{DAY}T{end_time}+08:00')
+    afternoon = record(afternoon=1, started_at=f'{DAY}T16:00:00+08:00')
+    model.load([morning, afternoon], PM)
+    assert text(model, 1, INTERVAL_COLUMN) == expected
 
 
 def test_period_icons_are_colored_with_tooltips_and_keep_their_own_records(qapp):
@@ -89,8 +121,8 @@ def test_period_icons_are_colored_with_tooltips_and_keep_their_own_records(qapp)
                    for color in pixels)
         images.append(image)
     assert images[0] != images[1]
-    assert text(model, 0, 4) == '1 m'
-    assert text(model, 1, 4) == '1 h'
+    assert text(model, 0, DURATION_COLUMN) == '1 m'
+    assert text(model, 1, DURATION_COLUMN) == '1 h'
 
 
 def test_participant_count_includes_finished_future_and_learned_words_but_not_related(repo):
@@ -202,14 +234,14 @@ def test_history_live_timer_and_completion_refresh(window, repo, monkeypatch, qt
     assert status(panel.model, 0) == '当前任务未完成'
     ticks[0] = 1234_000_000
     panel.update_live()
-    assert text(panel.model, 0, 4) == '0 s'
+    assert text(panel.model, 0, DURATION_COLUMN) == '0 s'
     page.update_elapsed()
     assert page.elapsed_label.text() == '1 s'
     assert repo.study_task_history(AM).duration_seconds == 0  # Displaying history does not write time.
     page.complete(word.id, 'study')
     assert status(panel.model, 0) == '已完成'
-    assert text(panel.model, 0, 6) == '1 / 1'
-    assert text(panel.model, 0, 4) == '1 s'
+    assert text(panel.model, 0, NEW_COLUMN) == '1 / 1'
+    assert text(panel.model, 0, DURATION_COLUMN) == '1 s'
     qtbot.wait(20)
     window.grab().save(str(tmp_path / 'study-history.png'))
 
@@ -286,7 +318,7 @@ def test_status_last_column_uses_icons_and_preserves_accessible_meaning(qapp, ki
         records = [record(status=1, ended_at=f'{DAY.isoformat()}T09:12:34+08:00')]
     context = PM if kind == 'unfinished' else AM
     model.load(records, AM, context)
-    index = model.index(0, 7)
+    index = model.index(0, STATUS_COLUMN)
     assert index.data() == ''
     assert not index.data(Qt.ItemDataRole.DecorationRole).isNull()
     assert index.data(Qt.ItemDataRole.ToolTipRole) == tooltip
@@ -314,12 +346,12 @@ def test_history_duration_centers_groups_and_reserves_two_digits(window, qtbot):
     qtbot.wait(20)
     option = QStyleOptionViewItem()
     table.initViewItemOption(option)
-    option.rect = QRect(0, 0, table.columnWidth(4), table.rowHeight(0))
+    option.rect = QRect(0, 0, table.columnWidth(DURATION_COLUMN), table.rowHeight(0))
 
     def ink_bounds(row):
         image = QImage(option.rect.size(), QImage.Format.Format_RGB32)
         painter = QPainter(image)
-        table.itemDelegate().paint(painter, option, model.index(row, 4))
+        table.itemDelegate().paint(painter, option, model.index(row, DURATION_COLUMN))
         painter.end()
         columns = [x for x in range(image.width())
                    if any(image.pixelColor(x, y).red() > 100 for y in range(image.height()))]
@@ -345,7 +377,7 @@ def test_history_duration_paints_all_digits_at_minimum_window_width(window, qtbo
     qtbot.wait(20)
     option = QStyleOptionViewItem()
     table.initViewItemOption(option)
-    option.rect = QRect(0, 0, table.columnWidth(4), table.rowHeight(0))
+    option.rect = QRect(0, 0, table.columnWidth(DURATION_COLUMN), table.rowHeight(0))
 
     drawn = []
     draw_text = QPainter.drawText
@@ -359,11 +391,12 @@ def test_history_duration_paints_all_digits_at_minimum_window_width(window, qtbo
     painter = QPainter(image)
     try:
         for row in range(2):
-            table.itemDelegate().paint(painter, option, model.index(row, 4))
+            table.itemDelegate().paint(painter, option, model.index(row, DURATION_COLUMN))
     finally:
         painter.end()
     assert drawn == ['1', 'h', '59', 'm', '22', 'm', '48', 's']
-    assert table.columnWidth(2) == table.columnWidth(3) < table.columnWidth(4)
+    assert table.columnWidth(2) == table.columnWidth(3)
+    assert table.horizontalHeader().sectionResizeMode(2) == QHeaderView.ResizeMode.Fixed
 
 
 def test_history_count_slash_stays_centered_for_different_digit_counts(window, qtbot):
@@ -391,7 +424,7 @@ def test_history_count_slash_stays_centered_for_different_digit_counts(window, q
         return {(x - center, y) for x in range(center - half_width, center + half_width + 1)
                 for y in range(image.height()) if image.pixelColor(x, y).red() > 100}
 
-    for column in (5, 6):
+    for column in (REVIEW_COLUMN, NEW_COLUMN):
         reference = slash_pixels(0, column)
         assert reference
         for i in range(1, len(counts)):
@@ -405,7 +438,7 @@ def test_times_hide_seconds_and_value_cells_have_no_tooltips(qapp):
     model.load([record(started_at=start, ended_at=end, status=1)], AM)
     assert text(model, 0, 2) == '08：12'
     assert text(model, 0, 3) == '11-06 00：03'
-    for column in range(2, 7):
+    for column in range(2, STATUS_COLUMN):
         assert model.index(0, column).data(Qt.ItemDataRole.ToolTipRole) is None
     model.load([record()], AM)
     assert text(model, 0, 3) == '—'

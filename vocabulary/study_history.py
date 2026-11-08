@@ -13,10 +13,24 @@ from .widgets import button
 
 
 DURATION_PARTS_ROLE = Qt.ItemDataRole.UserRole
+INTERVAL_COLUMN, DURATION_COLUMN, REVIEW_COLUMN, NEW_COLUMN, STATUS_COLUMN = range(4, 9)
+
+
+def _memory_intervals(records):
+    intervals = {}
+    previous_end = None
+    for period, record in sorted(records.items()):
+        if previous_end is not None:
+            gap = datetime.fromisoformat(record.started_at) - previous_end
+            if gap >= timedelta(0):
+                intervals[period] = (gap + timedelta(minutes=30)) // timedelta(hours=1)
+        if record.status and record.ended_at is not None:
+            previous_end = datetime.fromisoformat(record.ended_at)
+    return intervals
 
 
 class HistoryModel(QAbstractTableModel):
-    HEADERS = ('日期', '时段', '开始时间', '结束时间', '有效用时', '复习词', '新词', '状态')
+    HEADERS = ('日期', '时段', '开始时间', '结束时间', '记忆间隔', '有效用时', '复习词', '新词', '状态')
     PERIODS = (('sun', GOLD, '上午'), ('moon', '#a5baf3', '下午'))
     STATUS = {
         'missing': ('task_cross', MUTED, '未完成', '完全没背单词'),
@@ -28,16 +42,20 @@ class HistoryModel(QAbstractTableModel):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.records = {}
+        self.intervals = {}
         self.today = StudyContext.now()
         self.current_context = self.today
         self.first = self.last = self.today.day
 
     def load(self, records, today, current_context=None):
+        by_period = {(record.task_date, record.afternoon): record for record in records}
+        intervals = _memory_intervals(by_period) if by_period != self.records else self.intervals
+        dates = [date.fromisoformat(day) for day, _ in by_period]
         self.beginResetModel()
-        self.records = {(record.task_date, record.afternoon): record for record in records}
+        self.records = by_period
+        self.intervals = intervals
         self.today = today
         self.current_context = current_context or today
-        dates = [date.fromisoformat(record.task_date) for record in records]
         self.first = min([today.day, *dates])
         self.last = today.day
         self.endResetModel()
@@ -72,8 +90,9 @@ class HistoryModel(QAbstractTableModel):
         if not index.isValid():
             return None
         day, afternoon = self.period(index.row())
-        record = self.records.get((day.isoformat(), afternoon))
-        if index.column() in (1, 7):
+        period = (day.isoformat(), afternoon)
+        record = self.records.get(period)
+        if index.column() in (1, STATUS_COLUMN):
             if index.column() == 1:
                 name, color, tooltip = self.PERIODS[afternoon]
                 accessible_text = tooltip
@@ -93,13 +112,13 @@ class HistoryModel(QAbstractTableModel):
             return Qt.AlignmentFlag.AlignCenter
         if role == Qt.ItemDataRole.ToolTipRole and index.column() == 0:
             return '周' + '一二三四五六日'[day.weekday()]
-        if role == DURATION_PARTS_ROLE and index.column() == 4 and record:
+        if role == DURATION_PARTS_ROLE and index.column() == DURATION_COLUMN and record:
             return study_duration_parts(record.duration_seconds)
         if role != Qt.ItemDataRole.DisplayRole:
             return None
         if index.column() == 0:
             return day.isoformat() if not afternoon else ''
-        if index.column() in (1, 7):
+        if index.column() in (1, STATUS_COLUMN):
             return ''
         if record is None:
             return '—'
@@ -110,9 +129,12 @@ class HistoryModel(QAbstractTableModel):
             instant = datetime.fromisoformat(value)
             clock = f'{instant.hour:02d}：{instant.minute:02d}'
             return clock if instant.date() == day else f'{instant:%m-%d} {clock}'
-        if index.column() == 4:
+        if index.column() == INTERVAL_COLUMN:
+            hours = self.intervals.get(period)
+            return f'{hours} h' if hours is not None else '—'
+        if index.column() == DURATION_COLUMN:
             return format_study_duration(record.duration_seconds)
-        if index.column() == 5:
+        if index.column() == REVIEW_COLUMN:
             return f'{record.review_done} / {record.review_total}'
         return f'{record.new_done} / {record.new_total}'
 
@@ -202,9 +224,9 @@ class HistoryDelegate(QStyledItemDelegate):
 
     def paint(self, painter, option, index):
         column = index.column()
-        parts = index.data(DURATION_PARTS_ROLE) if column == 4 else None
-        pair = index.data() if column in (2, 3, 5, 6) else None
-        if column in (1, 7):
+        parts = index.data(DURATION_PARTS_ROLE) if column == DURATION_COLUMN else None
+        pair = index.data() if column in (2, 3, REVIEW_COLUMN, NEW_COLUMN) else None
+        if column in (1, STATUS_COLUMN):
             painter.fillRect(option.rect, index.data(Qt.ItemDataRole.BackgroundRole))
             target = QRect(0, 0, 20, 20)
             target.moveCenter(option.rect.center())
@@ -284,7 +306,9 @@ class StudyHistoryPanel(QFrame):
         metrics = QFontMetricsF(self.table.font(), self.table)
         # Include room for the larger colon and the cell's side padding.
         time_width = ceil(metrics.horizontalAdvance('88-88 88：88')) + 14
-        for column, width in ((0, 100), (1, 48), (2, time_width), (3, time_width), (7, 60)):
+        interval_width = ceil(metrics.horizontalAdvance(HistoryModel.HEADERS[INTERVAL_COLUMN])) + 20
+        for column, width in ((0, 100), (1, 48), (2, time_width), (3, time_width),
+                              (INTERVAL_COLUMN, interval_width), (STATUS_COLUMN, 60)):
             self.table.horizontalHeader().setSectionResizeMode(column, QHeaderView.ResizeMode.Fixed)
             self.table.setColumnWidth(column, width)
         layout.addWidget(self.table)

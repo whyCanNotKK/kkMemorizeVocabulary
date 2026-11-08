@@ -108,7 +108,8 @@ def test_modified_keys_on_toolbar_do_not_route_to_table(review_area, window, qtb
 
 
 def test_navigation_does_not_force_commit_or_focus_from_invalid_editor(window, repo, qtbot):
-    entry = repo.save(WordEntry("word", [Sense("n.", "释义")]))
+    entry = repo.save(WordEntry("word", [Sense("n.", "释义")],
+                                [RelatedWord("child", [Sense("n.", "child")])]))
     window.refresh()
     table = window.table
     table.setCurrentIndex(window.model.index(0, 1))

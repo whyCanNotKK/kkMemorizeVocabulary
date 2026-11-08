@@ -550,12 +550,12 @@ def test_inline_translation_save_and_cancel(window, repo, qtbot):
     assert repo.get(saved.id).senses[0].translation == "新的多行\n翻译"
 
 
-@pytest.mark.parametrize("owner, spelling", [(-1, ""), (0, "   ")], ids=["main", "related"])
-def test_inline_invalid_content_stays_in_editor(window, repo, qtbot, owner, spelling):
+@pytest.mark.parametrize("spelling", ["", "   "])
+def test_blank_main_with_related_words_stays_in_editor(window, repo, qtbot, spelling):
     saved = seed(repo)
     window.reveal(saved.id, True)
     table = window.table
-    index = table._entry_index(saved.id, owner, 0, 1)
+    index = table._entry_index(saved.id, -1, 0, 1)
     table.setCurrentIndex(index)
     table.edit(index)
     editor = table.delegate.editor

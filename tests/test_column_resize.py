@@ -257,10 +257,10 @@ def test_invalid_inline_edit_blocks_drag_and_reset(resize_list, qtbot):
     table.scrollTo(index)
     table.edit(index)
     editor = table.delegate.editor
-    editor.clear()
+    editor.setText("filler-0")
     widths = column_widths(table)
     for column in table.resizable_boundaries():
         drag_boundary(qtbot, table, column, -50)
         double_boundary(qtbot, table, column)
         assert column_widths(table) == widths
-        assert table.delegate.editor is editor and not editor.text()
+        assert table.delegate.editor is editor and editor.text() == "filler-0"

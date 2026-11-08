@@ -148,3 +148,59 @@ def test_all_pages_can_clear_and_reedit_translation(window, repo, qtbot, monkeyp
         current = repo.get(saved.id)
         target = current if owner == -1 else current.related[0]
         assert target.senses == [Sense('n.' if owner == -1 else 'adj.', value)]
+
+
+@pytest.mark.parametrize('page,owner,submit', [
+    ('pending', -1, 'enter'), ('all', 0, 'focus'), ('learned', -1, 'shortcut'),
+    ('study17', 0, 'keypad'),
+])
+def test_clearing_one_of_multiple_translations_removes_only_its_sense(
+        window, repo, qtbot, monkeypatch, page, owner, submit):
+    entry = draft()
+    target = entry if owner == -1 else entry.related[0]
+    target.senses = [Sense('n.', 'first'), Sense('v.', 'remove'), Sense('adj.', '')]
+    entry.learned = page == 'learned'
+    saved = repo.save(entry)
+    am = StudyContext(date(2026, 11, 5), False)
+    monkeypatch.setattr(StudyContext, 'now', classmethod(lambda cls: am))
+    window.set_filter(page)
+    table = window.current_table()
+    table.revealRequested.emit(saved.id, True)
+    table.edit(table._entry_index(saved.id, owner, 1, 3))
+    editor = table.delegate.editor
+    editor.setPlainText(' \n\t\n ')
+    if submit == 'focus':
+        window.search_box.setFocus()
+    elif submit == 'shortcut':
+        qtbot.keyClick(editor, Qt.Key.Key_Return, Qt.KeyboardModifier.ControlModifier)
+    elif submit == 'keypad':
+        qtbot.keyClick(editor, Qt.Key.Key_Enter, Qt.KeyboardModifier.KeypadModifier)
+    else:
+        qtbot.keyClick(editor, Qt.Key.Key_Return)
+    qtbot.waitUntil(lambda: table.delegate.editor is None)
+    expected = saved if owner == -1 else saved.related[owner]
+    expected.senses.pop(1)
+    current = repo.get(saved.id)
+    assert current == saved
+    assert [row.sense for row in table.model().rows if row.owner == owner] == [0, 1]
+
+
+def test_failed_or_stale_sense_removal_preserves_input(window, repo, qtbot):
+    saved = repo.save(draft())
+    window.reveal(saved.id, True)
+    table = window.table
+    table.edit(table._entry_index(saved.id, -1, 1, 3))
+    editor = table.delegate.editor
+    editor.setPlainText(' \n ')
+    with repo.connection:
+        repo.connection.execute("""CREATE TRIGGER reject_removal BEFORE DELETE ON senses
+            BEGIN SELECT RAISE(ABORT, 'delete failed'); END""")
+    qtbot.keyClick(editor, Qt.Key.Key_Return)
+    assert table.delegate.editor is editor and editor.toPlainText() == ' \n '
+    assert repo.get(saved.id) == saved
+    with repo.connection:
+        repo.connection.execute("DROP TRIGGER reject_removal")
+    repo.move_sense(saved.id, -1, 0, 1)
+    qtbot.keyClick(editor, Qt.Key.Key_Return)
+    assert table.delegate.editor is editor
+    assert repo.get(saved.id).senses == saved.senses[::-1]

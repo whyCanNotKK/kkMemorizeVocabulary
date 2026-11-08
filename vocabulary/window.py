@@ -19,7 +19,7 @@ from .pos_picker import PosPicker
 from .form_reorder import FormReorderDrag
 from .form_focus import FormFocusContext
 from .shortcuts import SettingsDialog, ShortcutManager
-from .table import WordTable, WordTableModel
+from .table import CELL_REMOVED, WordTable, WordTableModel
 from .review_navigation import ReviewKeyRouter
 from .study_page import StudyPage
 from .study_history import StudyHistoryPanel
@@ -116,11 +116,13 @@ class MainWindow(QMainWindow):
         self.table.senseMoveRequested.connect(self.move_word_sense)
         self.table.shuffleRequested.connect(self.shuffle_words)
         self.table.delegate.editingChanged.connect(self.inline_changed)
+        self.table.delegate.contentRemoved.connect(self.inline_content_removed)
         self.table.editPreparationRequested.connect(self.prepare_list_edit)
         list_layout.addWidget(self.table, 1)
         self.study_page = StudyPage(repository, self.commit_cell)
         self.destroyed.connect(self.study_page.timer.dispose)
         self.study_page.table.delegate.editingChanged.connect(self.inline_changed)
+        self.study_page.table.delegate.contentRemoved.connect(self.inline_content_removed)
         self.study_page.table.editPreparationRequested.connect(self.prepare_list_edit)
         self.study_page.table.copyRequested.connect(self.copy_text)
         for table in (self.table, self.study_page.table):
@@ -909,6 +911,28 @@ class MainWindow(QMainWindow):
         if not editing and not self._closing:
             QTimer.singleShot(0, self.refresh_after_inline)
 
+    def inline_content_removed(self):
+        entry_id, owner, _, column = self.current_table().delegate.removed_field
+        if owner == -1 and column == 1:
+            self.revealed.discard(entry_id)
+            self.study_page.revealed.discard(entry_id)
+            self.study_page._known_ids.discard(entry_id)
+            for hidden in self._search_hidden.values():
+                hidden.discard(entry_id)
+            if self.duplicate_id == entry_id:
+                self.duplicate_id = None
+            if self.edit_id == entry_id:
+                if self.is_dirty():
+                    self.edit_id = None
+                    self.form_title.setText("添加单词")
+                    self.form_changed()
+                else:
+                    self.reset_form()
+            if self.filter_name != 'study17' and self.study_page.context is not None:
+                self.study_page.load(self.study_page.context)
+            self.history_panel.refresh()
+        self.refresh_after_inline()
+
     def refresh_after_inline(self):
         if self._closing or self.current_table().delegate.editor is not None:
             return
@@ -942,10 +966,15 @@ class MainWindow(QMainWindow):
                 elif isinstance(value, tuple):
                     spelling = value[0]
                 if not spelling.strip():
-                    self.toast.show_message("单词拼写不可为空", self.current_table().delegate.editor)
-                    return False
+                    self.repository.remove_inline_content(row.entry, row.owner, None, self.study_page.context)
+                    self.show_notice(f"已删除 {row.word.text}")
+                    return CELL_REMOVED
             if isinstance(value, RelatedWord):
                 self.repository.replace_word_content(row.entry, row.owner, value)
+            elif column == 3 and not value.strip() and len(row.word.senses) > 1:
+                self.repository.remove_inline_content(row.entry, row.owner, row.sense, self.study_page.context)
+                self.show_notice("已删除释义")
+                return CELL_REMOVED
             else:
                 entry = self.repository.get(row.entry.id)
                 target = entry if row.owner == -1 else entry.related[row.owner]
@@ -962,6 +991,9 @@ class MainWindow(QMainWindow):
             self.duplicate_id = error.entry_id
             self.show_notice(str(error), True, duplicate=True)
             return False
+        except WordContentValidationError as error:
+            self.toast.show_message(str(error), self.current_table().delegate.editor)
+            return False
         except Exception as error:
             self.show_notice(str(error), True)
             return False
@@ -977,7 +1009,8 @@ class MainWindow(QMainWindow):
             self.list_action(row.entry.id, 'edit')
 
     def list_action(self, entry_id, action):
-        if not self.current_table().delegate.submit():
+        delegate = self.current_table().delegate
+        if not delegate.submit() or delegate.target_after_removal((entry_id, -1, 0, 1)) is None:
             return
         if action == "edit":
             if self.edit_id == entry_id:

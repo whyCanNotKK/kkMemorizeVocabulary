@@ -119,7 +119,7 @@ def test_edit_selected_does_nothing_without_selection_or_on_study_page(window, r
 
 @pytest.mark.parametrize('valid', [True, False])
 def test_edit_selected_submits_inline_edit_and_blocks_on_failure(window, repo, qtbot, valid):
-    entry = repo.save(WordEntry('word', [Sense('n.', '词')]))
+    entry = repo.save(WordEntry('word', [Sense('n.', '词')], [RelatedWord('child', [Sense('n.', 'child')])]))
     window.refresh()
     select_word(window, entry.id)
     index = window.table.currentIndex()
