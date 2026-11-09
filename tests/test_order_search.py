@@ -307,6 +307,41 @@ def test_search_all_fields_and_filtered_export(window, repo, qtbot, tmp_path, mo
     assert all(row.hidden for row in window.model.rows)
 
 
+@pytest.mark.parametrize("page", ["pending", "learned", "all"])
+def test_search_prioritizes_main_matches_and_preserves_order(window, repo, page):
+    groups = {}
+    for learned, prefix in [(False, "pending"), (True, "learned")]:
+        entries = [
+            WordEntry(f"{prefix}-related", [Sense("n.", "普通译文")],
+                      [RelatedWord("MATCH-child", [Sense("n.", "关联译文")])]),
+            WordEntry(f"{prefix}-translation", [Sense("n.", "普通译文"), Sense("v.", "Match")]),
+            WordEntry(f"{prefix}-other", [Sense("n.", "普通译文")]),
+            WordEntry(f"{prefix}-child-translation", [Sense("n.", "普通译文")],
+                      [RelatedWord("child", [Sense("n.", "普通译文"), Sense("v.", "match")])]),
+            WordEntry(f"{prefix}-MATCH", [Sense("n.", "普通译文")]),
+            WordEntry(f"{prefix}-both-match", [Sense("n.", "match")],
+                      [RelatedWord("match", [Sense("n.", "match")])]),
+        ]
+        # Explicit ordering differs from both creation order and spelling order.
+        orders = {}
+        for index in reversed(range(len(entries))):
+            saved = repo.save(replace(entries[index], learned=learned))
+            orders[saved.id] = index + 1
+        repo.batch_update_sort_orders(orders)
+        groups[learned] = entries
+    original = repo.list_entries()
+    window.set_filter(page)
+    window.refresh()
+    categories = [False, True] if page == "all" else [page == "learned"]
+    window.search_box.setText(" MaTcH ")
+    assert visible(window) == [groups[category][index].text
+                               for indices in ([1, 4, 5], [0, 3])
+                               for category in categories for index in indices]
+    assert repo.list_entries() == original
+    window.search_box.setText("   ")
+    assert visible(window) == [entry.text for category in categories for entry in groups[category]]
+
+
 def test_search_count_tracks_main_words_in_current_results(window, repo, qtbot):
     pending = repo.save(WordEntry("record", [Sense("n.", "match"), Sense("v.", "match")],
         [RelatedWord("recorder", [Sense("n.", "match")])]))

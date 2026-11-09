@@ -431,12 +431,23 @@ class MainWindow(QMainWindow):
 
     def _filter_entries(self, entries):
         keyword = self.search_box.text().strip().casefold()
-        return [entry for entry in entries
-                if (self.filter_name == "all" or
-                    (entry.learned if self.filter_name == "learned" else not entry.learned))
-                and (not keyword or any(keyword in text.casefold()
-                     for word in [entry, *entry.related]
-                     for text in [word.text, *(sense.translation for sense in word.senses)]))]
+        visible = [entry for entry in entries
+                   if (self.filter_name == "all" or
+                       (entry.learned if self.filter_name == "learned" else not entry.learned))]
+        if not keyword:
+            return visible
+
+        def matches(word):
+            return (keyword in word.text.casefold() or
+                    any(keyword in sense.translation.casefold() for sense in word.senses))
+
+        main_matches, related_matches = [], []
+        for entry in visible:
+            if matches(entry):
+                main_matches.append(entry)
+            elif any(matches(word) for word in entry.related):
+                related_matches.append(entry)
+        return main_matches + related_matches
 
     def search_changed(self):
         if not self.current_table().delegate.submit():
