@@ -37,7 +37,7 @@ def test_duration_format_boundaries(seconds, text):
     assert format_study_duration(seconds) == text
 
 
-def test_learning_interval_updates_only_before_task_starts(window, repo, qtbot, monkeypatch):
+def test_learning_interval_hides_only_while_running(window, repo, qtbot, monkeypatch):
     word = repo.save(WordEntry('word', [Sense('n.', '释义')]))
     monkeypatch.setattr(StudyContext, 'now', classmethod(lambda cls: AM))
     window.set_filter('study17')
@@ -56,22 +56,60 @@ def test_learning_interval_updates_only_before_task_starts(window, repo, qtbot, 
     monkeypatch.setattr('vocabulary.study_page.datetime', FrozenDateTime)
     repo.complete_study(word.id, AM, instant=finished)
     assert page.load(AM)
-    assert page.interval_label.isHidden()
+    assert page.interval_label.isVisible()
+    assert page.interval_label.text() == '学习间隔： 2 h 6 m'
 
     window.resize(window.minimumSize())
     assert page.load(PM)
     qtbot.waitUntil(lambda: page.interval_label.geometry().right() < page.timer_button.geometry().left())
     assert page.interval_label.isVisible()
-    assert page.interval_label.text() == '学习间隔： 2 h 6 min'
+    assert page.interval_label.text() == '学习间隔： 2 h 6 m'
     now += timedelta(seconds=1)
     page._clock_display.timeout.emit()
-    assert page.interval_label.text() == '学习间隔： 2 h 7 min'
+    assert page.interval_label.text() == '学习间隔： 2 h 6 m'
+    assert page._interval_display.interval() == 70_000
+    assert page._interval_display.isActive()
+    page._interval_display.timeout.emit()
+    assert page.interval_label.text() == '学习间隔： 2 h 7 m'
 
     page.toggle_timer()
     assert page.timer.running and page.interval_label.isHidden()
     page.toggle_timer()
-    assert not page.timer.running and page.interval_label.isHidden()
-    assert page.load(PM) and page.interval_label.isHidden()
+    assert not page.timer.running and page.interval_label.isVisible()
+    assert page.load(PM) and page.interval_label.isVisible()
+    monkeypatch.setattr('vocabulary.storage.study_timestamp',
+                        lambda instant=None: (instant or now).isoformat(timespec='seconds'))
+    page.complete(word.id, 'study')
+    assert page.timer.history.status == 1
+    assert page.interval_label.isVisible()
+    assert page.interval_label.text() == '学习间隔： 0 m'
+    assert page.load(PM) and page.interval_label.isVisible()
+    now += timedelta(minutes=2)
+    page._interval_display.timeout.emit()
+    assert page.interval_label.text() == '学习间隔： 2 m'
+    window.set_filter('pending')
+    assert not page._interval_display.isActive()
+
+
+@pytest.mark.parametrize('gap,text', [
+    (timedelta(seconds=-1), '—'), (timedelta(seconds=59), '0 m'),
+    (timedelta(minutes=59), '59 m'), (timedelta(hours=1), '1 h'),
+    (timedelta(hours=23, minutes=59), '23 h 59 m'), (timedelta(days=1), '1 d'),
+    (timedelta(days=365, hours=2, minutes=3, seconds=59), '365 d 2 h 3 m'),
+])
+def test_learning_interval_units(window, repo, monkeypatch, gap, text):
+    finished = datetime(2026, 11, 5, 13, 4, 31, tzinfo=BEIJING)
+
+    class FrozenDateTime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return (finished + gap).astimezone(tz)
+
+    monkeypatch.setattr('vocabulary.study_page.datetime', FrozenDateTime)
+    page = window.study_page
+    page._last_study_end = finished
+    page.update_interval()
+    assert page.interval_label.text() == f'学习间隔： {text}'
 
 
 def test_marks_do_not_write_duration_and_history_reads_only_saved_time(window, repo, monkeypatch):

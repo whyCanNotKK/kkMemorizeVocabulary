@@ -92,6 +92,9 @@ class StudyPage(QWidget):
         self._clock_display = QTimer(self)
         self._clock_display.setInterval(1000)
         self._clock_display.timeout.connect(self.update_elapsed)
+        self._interval_display = QTimer(self)
+        self._interval_display.setInterval(70_000)
+        self._interval_display.timeout.connect(self.update_interval)
 
     def reload(self):
         return self.load(StudyContext.now(), generate=True)
@@ -123,6 +126,7 @@ class StudyPage(QWidget):
             self.revealed.update(task.entry.id for task in completed)
         self.period_label.setText(context.label)
         self.render()
+        self.update_interval()
         return True
 
     def render(self):
@@ -162,16 +166,16 @@ class StudyPage(QWidget):
         duration = format_study_duration(self.timer.duration_seconds())
         self.elapsed_label.setText(duration)
         self.elapsed_label.setAccessibleName(f'用时：{duration}')
-        if not self.interval_label.isHidden():
-            self.update_interval()
 
     def update_interval(self):
         interval = '—'
         if self._last_study_end is not None:
             minutes = (datetime.now(BEIJING) - self._last_study_end) // timedelta(minutes=1)
             if minutes >= 0:
+                days, minutes = divmod(minutes, 24 * 60)
                 hours, minutes = divmod(minutes, 60)
-                interval = f'{hours} h {minutes} min'
+                interval = ' '.join(f'{value} {unit}' for value, unit in
+                                    ((days, 'd'), (hours, 'h'), (minutes, 'm')) if value) or '0 m'
         self.interval_label.setText(f'学习间隔： {interval}')
 
     def update_completed_button(self):
@@ -243,6 +247,8 @@ class StudyPage(QWidget):
                 self.load(self.context)
                 return
             history, stage = result
+            if history.status:
+                self._last_study_end = datetime.fromisoformat(history.ended_at)
             self.timer.completed(history)
         except Exception as error:
             self.error.emit(str(error))
@@ -269,7 +275,10 @@ class StudyPage(QWidget):
         completed = history is not None and bool(history.status)
         for control in (self.elapsed_icon, self.elapsed_label, self.timer_button):
             control.setVisible(not completed)
-        self.interval_label.setVisible(self.context is not None and history is None)
+        show_interval = self.context is not None and not self.timer.running
+        if show_interval and self.interval_label.isHidden():
+            self.update_interval()
+        self.interval_label.setVisible(show_interval)
         text = ('暂停' if self.timer.running else '继续' if history is not None else '开始背单词')
         if completed:
             text = '任务已完成'
@@ -296,8 +305,11 @@ class StudyPage(QWidget):
     def showEvent(self, event):
         super().showEvent(event)
         self.update_elapsed()
+        self.update_interval()
         self._clock_display.start()
+        self._interval_display.start()
 
     def hideEvent(self, event):
         self._clock_display.stop()
+        self._interval_display.stop()
         super().hideEvent(event)
