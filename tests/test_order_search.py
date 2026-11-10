@@ -308,7 +308,7 @@ def test_search_all_fields_and_filtered_export(window, repo, qtbot, tmp_path, mo
 
 
 @pytest.mark.parametrize("page", ["pending", "learned", "all"])
-def test_search_prioritizes_main_matches_and_preserves_order(window, repo, page):
+def test_search_prioritizes_spellings_before_translations_and_preserves_order(window, repo, page):
     groups = {}
     for learned, prefix in [(False, "pending"), (True, "learned")]:
         entries = [
@@ -321,6 +321,8 @@ def test_search_prioritizes_main_matches_and_preserves_order(window, repo, page)
             WordEntry(f"{prefix}-MATCH", [Sense("n.", "普通译文")]),
             WordEntry(f"{prefix}-both-match", [Sense("n.", "match")],
                       [RelatedWord("match", [Sense("n.", "match")])]),
+            WordEntry(f"{prefix}-child-and-translation", [Sense("n.", "match")],
+                      [RelatedWord("match", [Sense("n.", "关联译文")])]),
         ]
         # Explicit ordering differs from both creation order and spelling order.
         orders = {}
@@ -335,7 +337,7 @@ def test_search_prioritizes_main_matches_and_preserves_order(window, repo, page)
     categories = [False, True] if page == "all" else [page == "learned"]
     window.search_box.setText(" MaTcH ")
     assert visible(window) == [groups[category][index].text
-                               for indices in ([1, 4, 5], [0, 3])
+                               for indices in ([4, 5], [0, 6], [1, 3])
                                for category in categories for index in indices]
     assert repo.list_entries() == original
     window.search_box.setText("   ")

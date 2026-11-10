@@ -1,6 +1,7 @@
 """SQLite aggregate repository. Every write is transactional."""
 from pathlib import Path
 from contextlib import contextmanager
+from datetime import datetime
 import json
 import random
 import sqlite3
@@ -468,6 +469,11 @@ class Repository:
     def study_task_histories(self) -> list[StudyTaskHistory]:
         return [StudyTaskHistory(**dict(row)) for row in self.connection.execute(
             'SELECT * FROM study_task_history ORDER BY task_date DESC,afternoon DESC')]
+
+    def latest_study_end(self) -> datetime | None:
+        ended_at = self.connection.execute(
+            'SELECT MAX(ended_at) FROM study_task_history WHERE status=1').fetchone()[0]
+        return datetime.fromisoformat(ended_at) if ended_at is not None else None
 
     def _start_study_task(self, context, instant):
         history = self.study_task_history(context)

@@ -1,4 +1,4 @@
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 
 import pytest
 from PySide6.QtCore import QEvent, Qt
@@ -6,7 +6,7 @@ from PySide6.QtGui import QHelpEvent
 from PySide6.QtWidgets import QToolTip
 
 from vocabulary.domain import RelatedWord, Sense, WordEntry
-from vocabulary.learning import StudyContext, format_study_duration
+from vocabulary.learning import BEIJING, StudyContext, format_study_duration
 from vocabulary.study_history import DURATION_COLUMN
 
 
@@ -35,6 +35,43 @@ def mixed_words(repo):
 ])
 def test_duration_format_boundaries(seconds, text):
     assert format_study_duration(seconds) == text
+
+
+def test_learning_interval_updates_only_before_task_starts(window, repo, qtbot, monkeypatch):
+    word = repo.save(WordEntry('word', [Sense('n.', '释义')]))
+    monkeypatch.setattr(StudyContext, 'now', classmethod(lambda cls: AM))
+    window.set_filter('study17')
+    page = window.study_page
+    assert page.interval_label.isVisible()
+    assert page.interval_label.text() == '学习间隔： —'
+
+    finished = datetime(2026, 11, 5, 13, 4, 31, tzinfo=BEIJING)
+    now = finished + timedelta(hours=2, minutes=6, seconds=59)
+
+    class FrozenDateTime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return now.astimezone(tz)
+
+    monkeypatch.setattr('vocabulary.study_page.datetime', FrozenDateTime)
+    repo.complete_study(word.id, AM, instant=finished)
+    assert page.load(AM)
+    assert page.interval_label.isHidden()
+
+    window.resize(window.minimumSize())
+    assert page.load(PM)
+    qtbot.waitUntil(lambda: page.interval_label.geometry().right() < page.timer_button.geometry().left())
+    assert page.interval_label.isVisible()
+    assert page.interval_label.text() == '学习间隔： 2 h 6 min'
+    now += timedelta(seconds=1)
+    page._clock_display.timeout.emit()
+    assert page.interval_label.text() == '学习间隔： 2 h 7 min'
+
+    page.toggle_timer()
+    assert page.timer.running and page.interval_label.isHidden()
+    page.toggle_timer()
+    assert not page.timer.running and page.interval_label.isHidden()
+    assert page.load(PM) and page.interval_label.isHidden()
 
 
 def test_marks_do_not_write_duration_and_history_reads_only_saved_time(window, repo, monkeypatch):

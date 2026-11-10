@@ -1,10 +1,11 @@
 """Study projection with a frozen date/period and a separate live task clock."""
 from dataclasses import replace
+from datetime import datetime, timedelta
 
 from PySide6.QtCore import QModelIndex, QSize, Qt, QTimer, Signal
 from PySide6.QtWidgets import QHBoxLayout, QLabel, QVBoxLayout, QWidget
 
-from .learning import StudyContext, format_study_duration
+from .learning import BEIJING, StudyContext, format_study_duration
 from .study_timer import StudyTimer
 from .study_completion import StudyCompletionNotice
 from .table import WordTable, WordTableModel
@@ -19,6 +20,7 @@ class StudyPage(QWidget):
         super().__init__(parent)
         self.repository = repository
         self.context = None
+        self._last_study_end = None
         self.tasks = []
         self.completed_tasks = []
         self.show_completed = False
@@ -53,6 +55,9 @@ class StudyPage(QWidget):
         self.elapsed_label = QLabel('0 s')
         self.elapsed_label.setObjectName('muted')
         toolbar.addWidget(self.elapsed_label)
+        self.interval_label = QLabel()
+        self.interval_label.setObjectName('muted')
+        toolbar.addWidget(self.interval_label)
         toolbar.addWidget(self.timer_button)
         toolbar.addStretch()
         self.review_count = QLabel()
@@ -99,6 +104,7 @@ class StudyPage(QWidget):
                      self.repository.study_tasks(context))
             total = self.repository.study_task_total(context)
             completed = self.repository.study_completed_tasks(context) if self.show_completed else []
+            last_study_end = self.repository.latest_study_end()
             self.timer.bind(context)
             if not tasks:
                 self.timer.pause()
@@ -106,6 +112,7 @@ class StudyPage(QWidget):
             self.error.emit(str(error))
             return False
         self.context, self.tasks = context, tasks
+        self._last_study_end = last_study_end
         self.completed_tasks = completed
         self.total_tasks = total
         ids = {task.entry.id for task in tasks}
@@ -155,6 +162,17 @@ class StudyPage(QWidget):
         duration = format_study_duration(self.timer.duration_seconds())
         self.elapsed_label.setText(duration)
         self.elapsed_label.setAccessibleName(f'用时：{duration}')
+        if not self.interval_label.isHidden():
+            self.update_interval()
+
+    def update_interval(self):
+        interval = '—'
+        if self._last_study_end is not None:
+            minutes = (datetime.now(BEIJING) - self._last_study_end) // timedelta(minutes=1)
+            if minutes >= 0:
+                hours, minutes = divmod(minutes, 60)
+                interval = f'{hours} h {minutes} min'
+        self.interval_label.setText(f'学习间隔： {interval}')
 
     def update_completed_button(self):
         text = '隐藏已完成' if self.show_completed else '显示已完成'
@@ -251,6 +269,7 @@ class StudyPage(QWidget):
         completed = history is not None and bool(history.status)
         for control in (self.elapsed_icon, self.elapsed_label, self.timer_button):
             control.setVisible(not completed)
+        self.interval_label.setVisible(self.context is not None and history is None)
         text = ('暂停' if self.timer.running else '继续' if history is not None else '开始背单词')
         if completed:
             text = '任务已完成'
