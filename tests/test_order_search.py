@@ -314,15 +314,19 @@ def test_search_prioritizes_spellings_before_translations_and_preserves_order(wi
         entries = [
             WordEntry(f"{prefix}-related", [Sense("n.", "普通译文")],
                       [RelatedWord("MATCH-child", [Sense("n.", "关联译文")])]),
-            WordEntry(f"{prefix}-translation", [Sense("n.", "普通译文"), Sense("v.", "Match")]),
-            WordEntry(f"{prefix}-other", [Sense("n.", "普通译文")]),
             WordEntry(f"{prefix}-child-translation", [Sense("n.", "普通译文")],
                       [RelatedWord("child", [Sense("n.", "普通译文"), Sense("v.", "match")])]),
+            WordEntry(f"{prefix}-other", [Sense("n.", "普通译文")]),
+            WordEntry(f"{prefix}-translation", [Sense("n.", "普通译文"), Sense("v.", "Match")]),
             WordEntry(f"{prefix}-MATCH", [Sense("n.", "普通译文")]),
             WordEntry(f"{prefix}-both-match", [Sense("n.", "match")],
                       [RelatedWord("match", [Sense("n.", "match")])]),
             WordEntry(f"{prefix}-child-and-translation", [Sense("n.", "match")],
                       [RelatedWord("match", [Sense("n.", "关联译文")])]),
+            WordEntry(f"{prefix}-both-translations", [Sense("n.", "MATCH")],
+                      [RelatedWord("child", [Sense("n.", "match")])]),
+            WordEntry(f"{prefix}-second-child-translation", [Sense("n.", "普通译文")],
+                      [RelatedWord("child", [Sense("n.", "MaTcH")])]),
         ]
         # Explicit ordering differs from both creation order and spelling order.
         orders = {}
@@ -337,7 +341,7 @@ def test_search_prioritizes_spellings_before_translations_and_preserves_order(wi
     categories = [False, True] if page == "all" else [page == "learned"]
     window.search_box.setText(" MaTcH ")
     assert visible(window) == [groups[category][index].text
-                               for indices in ([4, 5], [0, 6], [1, 3])
+                               for indices in ([4, 5], [0, 6], [3, 7], [1, 8])
                                for category in categories for index in indices]
     assert repo.list_entries() == original
     window.search_box.setText("   ")

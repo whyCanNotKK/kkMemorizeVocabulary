@@ -440,15 +440,18 @@ class MainWindow(QMainWindow):
         def matches_translation(word):
             return any(keyword in sense.translation.casefold() for sense in word.senses)
 
-        main_matches, related_matches, translation_matches = [], [], []
+        main_matches, related_matches = [], []
+        main_translation_matches, related_translation_matches = [], []
         for entry in visible:
             if keyword in entry.text.casefold():
                 main_matches.append(entry)
             elif any(keyword in word.text.casefold() for word in entry.related):
                 related_matches.append(entry)
-            elif matches_translation(entry) or any(matches_translation(word) for word in entry.related):
-                translation_matches.append(entry)
-        return main_matches + related_matches + translation_matches
+            elif matches_translation(entry):
+                main_translation_matches.append(entry)
+            elif any(matches_translation(word) for word in entry.related):
+                related_translation_matches.append(entry)
+        return main_matches + related_matches + main_translation_matches + related_translation_matches
 
     def search_changed(self):
         if not self.current_table().delegate.submit():
