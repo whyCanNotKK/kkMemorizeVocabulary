@@ -174,6 +174,68 @@ def test_cleanup_warning_defaults_to_cancel(window, repo, qtbot, action):
         assert dialog.cleanup_input.text() == 'remove all'
 
 
+@pytest.mark.parametrize('key', [Qt.Key.Key_Return, Qt.Key.Key_Enter])
+@pytest.mark.parametrize('choice', ['confirm', 'cancel'])
+def test_cleanup_input_enter_opens_warning_with_keyboard_choice(window, repo, qtbot, key, choice):
+    seed(repo)
+    before = repo.study_backup()
+    dialog = SettingsDialog(window.shortcuts, window, clear_content=window.clear_content)
+    qtbot.addWidget(dialog)
+    dialog.show()
+    dialog.scroll.ensureWidgetVisible(dialog.cleanup_input)
+    dialog.cleanup_input.setText('remove all')
+    dialog.cleanup_input.setFocus()
+    responses, errors = [], []
+
+    def respond():
+        warning = QApplication.activeModalWidget()
+        try:
+            assert isinstance(warning, DraftResetDialog)
+            qtbot.waitUntil(warning.isActiveWindow)
+            assert warning.cancel_button.hasFocus() and warning.cancel_button.isDefault()
+            qtbot.keyClick(warning.cancel_button, Qt.Key.Key_Tab)
+            assert warning.confirm_button.hasFocus()
+            qtbot.keyClick(warning.confirm_button, Qt.Key.Key_Tab)
+            assert warning.cancel_button.hasFocus()
+            qtbot.keyClick(warning.cancel_button, Qt.Key.Key_Backtab, Qt.KeyboardModifier.ShiftModifier)
+            assert warning.confirm_button.hasFocus()
+            if choice == 'cancel':
+                qtbot.keyClick(warning.confirm_button, Qt.Key.Key_Tab)
+            qtbot.keyClick(QApplication.focusWidget(), key)
+            responses.append(choice)
+        except BaseException as error:
+            errors.append(error)
+        finally:
+            if isinstance(warning, DraftResetDialog) and warning.isVisible():
+                warning.reject()
+
+    timer = QTimer(dialog)
+    timer.setSingleShot(True)
+    timer.timeout.connect(respond)
+    timer.start(0)
+    qtbot.keyClick(dialog.cleanup_input, key)
+    timer.stop()
+    assert not errors, errors
+    assert responses == [choice]
+    assert dialog.isVisible()
+    if choice == 'confirm':
+        assert not repo.list_entries() and not dialog.cleanup_input.text()
+    else:
+        assert repo.study_backup() == before
+        assert dialog.cleanup_input.text() == 'remove all'
+
+
+def test_cleanup_input_enter_ignores_invalid_commands(window, qtbot, monkeypatch):
+    dialog = SettingsDialog(window.shortcuts, window)
+    qtbot.addWidget(dialog)
+    dialog.show()
+    monkeypatch.setattr(DraftResetDialog, 'exec', lambda self: pytest.fail('Invalid command opened warning'))
+    for command in ('', 'del', 'Remove all', 'remove all '):
+        dialog.cleanup_input.setText(command)
+        qtbot.keyClick(dialog.cleanup_input, Qt.Key.Key_Return)
+        assert dialog.cleanup_input.text() == command and dialog.isVisible()
+
+
 def test_cleanup_resets_active_clock_and_deleted_edit_draft_without_redraw(window, repo):
     entries = seed(repo)
     window.study_page.load(AM)

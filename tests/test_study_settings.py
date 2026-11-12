@@ -63,7 +63,7 @@ def test_custom_draw_capacity_partial_groups_and_no_topup(repo, size, groups, co
     assert list(Counter(task.group_number for task in tasks).values()) == expected
     before = repo.study_backup()
     assert before.group_counter == len(expected)
-    assert before.study_last_add_new_vocabulary == AM.day.isoformat()
+    assert before.study_last_add_new_vocabulary == (AM.day.isoformat() if count else None)
     repo.write_study_draw_settings(StudyDrawSettings(20, 5))
     assert repo.prepare_study(AM) == tasks
     assert repo.study_backup() == before

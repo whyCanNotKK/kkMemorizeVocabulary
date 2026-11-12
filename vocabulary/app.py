@@ -36,6 +36,7 @@ def main(argv=None):
         logging.basicConfig(handlers=[handler], level=logging.INFO,
                             format="%(asctime)s %(levelname)s %(message)s", force=True)
         repository = Repository(data_dir / "vocabulary.sqlite3")
+        repository.initialize_study_new_words()
         window = MainWindow(repository)
     except Exception as error:
         QMessageBox.critical(None, "无法启动单词本", f"无法读取程序数据：\n{error}\n\n可用 --data-dir 指定其他可写目录。")

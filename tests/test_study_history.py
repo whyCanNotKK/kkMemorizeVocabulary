@@ -177,7 +177,7 @@ def test_history_total_updates_on_draw_completion_clear_restore_delete_and_reent
     entry = repo.save(WordEntry('word', [Sense('n.', '词')]))
     window.set_filter('study17')
     page, panel = window.study_page, window.history_panel
-    assert panel.collapsed and panel.total_count.accessibleName() == '合计 0 个单词'
+    assert not panel.collapsed and panel.total_count.accessibleName() == '合计 0 个单词'
     now[0] = AM
     page.reload()
     assert panel.total_count.accessibleName() == '合计 1 个单词'
@@ -200,25 +200,48 @@ def test_history_total_updates_on_draw_completion_clear_restore_delete_and_reent
     assert panel.total_count.accessibleName() == '合计 0 个单词'
 
 
-def test_panel_starts_collapsed_keeps_independent_state_and_does_not_create_tasks(window, repo, monkeypatch, qtbot):
+@pytest.mark.parametrize('has_tasks', [False, True])
+def test_panel_defaults_on_entry_preserves_manual_state_within_page_and_keeps_form_independent(
+        window, repo, monkeypatch, qtbot, has_tasks):
     monkeypatch.setattr(StudyContext, 'now', classmethod(lambda cls: AM))
+    if has_tasks:
+        repo.save(WordEntry('word', [Sense('n.', '释义')]))
     panel = window.history_panel
     assert not window.form_collapsed
     window.set_filter('study17')
-    assert panel.isVisible() and panel.collapsed and not panel.table.isVisible()
+    assert panel.isVisible() and panel.collapsed == has_tasks
+    assert panel.table.isVisible() != has_tasks
     qtbot.mouseClick(panel.collapse_button, Qt.MouseButton.LeftButton)
-    assert not panel.collapsed and panel.table.isVisible()
+    assert panel.collapsed != has_tasks
+    window.study_page.reload()
+    assert panel.collapsed != has_tasks
     assert panel.height() <= window.centralWidget().height() // 2
-    assert status(panel.model, 0) == '完全没背单词'
+    if has_tasks:
+        assert status(panel.model, 0) == '完全没背单词'
     assert repo.study_task_histories() == []
     window.set_filter('pending')
     assert not panel.isVisible() and not window.form_collapsed and window.editor_body.isVisible()
     window.set_form_collapsed(True)
     window.set_filter('study17')
-    assert not panel.collapsed and panel.table.isVisible()
-    qtbot.mouseClick(panel.collapse_button, Qt.MouseButton.LeftButton)
+    assert panel.collapsed == has_tasks and panel.table.isVisible() != has_tasks
     window.set_filter('pending')
     assert window.form_collapsed
+
+
+def test_panel_opens_on_reentry_after_completion_even_with_completed_words_visible(window, repo, monkeypatch):
+    monkeypatch.setattr(StudyContext, 'now', classmethod(lambda cls: AM))
+    entry = repo.save(WordEntry('word', [Sense('n.', '释义')]))
+    window.set_filter('study17')
+    page, panel = window.study_page, window.history_panel
+    assert panel.collapsed
+    page.complete(entry.id, 'study')
+    assert not page.tasks and panel.collapsed
+    page.toggle_completed(True)
+    assert page.model.rowCount() > 0
+    window.set_filter('pending')
+    window.set_filter('study17')
+    assert not page.tasks and page.model.rowCount() > 0
+    assert not panel.collapsed and panel.table.isVisible()
 
 
 def test_history_live_timer_and_completion_refresh(window, repo, monkeypatch, qtbot, tmp_path):

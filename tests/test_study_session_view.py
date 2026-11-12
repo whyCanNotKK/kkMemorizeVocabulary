@@ -61,7 +61,7 @@ def test_learning_interval_hides_only_while_running(window, repo, qtbot, monkeyp
 
     window.resize(window.minimumSize())
     assert page.load(PM)
-    qtbot.waitUntil(lambda: page.interval_label.geometry().right() < page.timer_button.geometry().left())
+    qtbot.waitUntil(lambda: page.timer_button.geometry().right() < page.interval_label.geometry().left())
     assert page.interval_label.isVisible()
     assert page.interval_label.text() == '学习间隔： 2 h 6 m'
     now += timedelta(seconds=1)
@@ -230,7 +230,7 @@ def test_session_buttons_order_and_group_column_has_no_tooltip(window, repo, mon
     window.set_filter('study17')
     qtbot.wait(20)
     page = window.study_page
-    controls = (page.refresh_button, page.period_label, page.elapsed_icon, page.elapsed_label, page.timer_button,
+    controls = (page.refresh_button, page.period_label, page.elapsed_icon, page.elapsed_label, page.timer_button, page.interval_label,
                 page.review_count, page.new_count, page.completed_button)
     assert all(left.geometry().right() < right.geometry().left() for left, right in zip(controls, controls[1:]))
     index = page.model.index(0, 0)

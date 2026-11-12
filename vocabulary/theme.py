@@ -111,6 +111,13 @@ def draw_symbol(p: QPainter, name: str, rect: QRectF, color: str):
         p.drawEllipse(QRectF(-8, -8, 16, 16))
         if name == "circle_check":
             p.drawPolyline(QPolygonF([QPointF(-4, 0), QPointF(-1, 3), QPointF(4, -3)]))
+    elif name in {"study_new_on", "study_new_off"}:
+        p.setPen(QPen(QColor(MUTED), 1.5))
+        p.drawRoundedRect(QRectF(-8, -6, 14, 14), 1, 1)
+        if name == "study_new_on":
+            p.setPen(QPen(QColor('#63dc91'), 3, Qt.PenStyle.SolidLine,
+                          Qt.PenCapStyle.RoundCap, Qt.PenJoinStyle.RoundJoin))
+            p.drawPolyline(QPolygonF([QPointF(-6, 0), QPointF(-1, 5), QPointF(10, -10)]))
     elif name == "plus_circle":
         p.drawEllipse(QRectF(-9, -9, 18, 18))
         p.drawLine(QPointF(-4, 0), QPointF(4, 0))

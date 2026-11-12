@@ -6,7 +6,7 @@ import json
 import random
 import sqlite3
 
-from .domain import (CLEANUP_COMMANDS, DEFAULT_SHORTCUTS, DuplicateWord, RelatedWord, Sense,
+from .domain import (CLEANUP_COMMANDS, DEFAULT_SHORTCUTS, DuplicateWord, RelatedWord, Sense, ValidationError,
                      WordContentValidationError, WordEntry, clean_entry, clean_word_content,
                      same_entry_content, shortcut_candidates)
 from .transfer import ImportConflict, ImportResult
@@ -399,30 +399,69 @@ class Repository:
             ])
 
     def prepare_study(self, context: StudyContext) -> list[StudyTask]:
-        """Draw when the morning date differs from the last draw, including empty batches."""
-        if not context.afternoon:
-            key = 'study_last_add_new_vocabulary'
-            with self.connection:
-                self.connection.execute("BEGIN IMMEDIATE")
-                generated = self.connection.execute("SELECT value FROM settings WHERE key=?", (key,)).fetchone()
-                if generated is None or generated[0] != context.day.isoformat():
-                    settings = self.study_draw_settings()
-                    ids = [row[0] for row in self.connection.execute("""SELECT id FROM words
-                        WHERE learned=0 AND NOT EXISTS
-                        (SELECT 1 FROM memorize_vocabulary_17day WHERE word_id=words.id)
-                        ORDER BY random() LIMIT ?""", (settings.daily_word_count,))]
-                    counter = self.connection.execute(
-                        "SELECT value FROM settings WHERE key='study17.group_counter'").fetchone()
-                    maximum = int(counter[0]) if counter else 0
-                    self.connection.executemany("""INSERT INTO memorize_vocabulary_17day
-                        (word_id,group_number) VALUES (?,?)""",
-                        [(word_id, maximum + i // settings.words_per_group + 1) for i, word_id in enumerate(ids)])
-                    self.connection.execute("INSERT OR REPLACE INTO settings(key,value) VALUES (?,?)",
-                                            ('study17.group_counter', str(maximum + (
-                                                len(ids) + settings.words_per_group - 1) // settings.words_per_group)))
-                    self.connection.execute("INSERT OR REPLACE INTO settings(key,value) VALUES (?,?)",
-                                            (key, context.day.isoformat()))
+        with self.connection:
+            self.connection.execute('BEGIN IMMEDIATE')
+            self._draw_study(context)
         return self.study_tasks(context)
+
+    _NEW_STUDY_WORDS = '''FROM words WHERE learned=0 AND NOT EXISTS
+        (SELECT 1 FROM memorize_vocabulary_17day WHERE word_id=words.id)'''
+
+    def has_new_study_words(self) -> bool:
+        return self.connection.execute('SELECT 1 ' + self._NEW_STUDY_WORDS + ' LIMIT 1').fetchone() is not None
+
+    def study_new_words_enabled(self) -> bool:
+        row = self.connection.execute(
+            "SELECT value FROM settings WHERE key='study17.new_words_enabled'").fetchone()
+        return row is None or row[0] == '1'
+
+    def initialize_study_new_words(self):
+        """Run once at application startup, never when opening worker connections."""
+        with self.connection:
+            self.connection.execute('BEGIN IMMEDIATE')
+            enabled = self.study_new_words_enabled() and self.has_new_study_words()
+            self._write_study_new_words_enabled(enabled)
+
+    def _write_study_new_words_enabled(self, enabled):
+        self.connection.execute('INSERT OR REPLACE INTO settings(key,value) VALUES (?,?)',
+                                ('study17.new_words_enabled', '1' if enabled else '0'))
+
+    def set_study_new_words_enabled(self, enabled: bool, context: StudyContext):
+        with self.connection:
+            self.connection.execute('BEGIN IMMEDIATE')
+            previous = self.study_new_words_enabled()
+            if enabled and not previous and not self.has_new_study_words():
+                raise ValidationError('当前待记单词列表中的词均已背过')
+            self._write_study_new_words_enabled(enabled)
+            if enabled and not previous:
+                self._draw_study(context)
+
+    def _draw_study(self, context):
+        """Caller owns the transaction; only a nonempty draw consumes the date."""
+        if context.afternoon or not self.study_new_words_enabled():
+            return
+        key = 'study_last_add_new_vocabulary'
+        generated = self.connection.execute('SELECT value FROM settings WHERE key=?', (key,)).fetchone()
+        if generated is not None and generated[0] == context.day.isoformat():
+            return
+        settings = self.study_draw_settings()
+        ids = [row[0] for row in self.connection.execute(
+            'SELECT id ' + self._NEW_STUDY_WORDS + ' ORDER BY random() LIMIT ?', (settings.daily_word_count,))]
+        if not ids:
+            return
+        counter = self.connection.execute("SELECT value FROM settings WHERE key='study17.group_counter'").fetchone()
+        maximum = int(counter[0]) if counter else 0
+        self.connection.executemany('''INSERT INTO memorize_vocabulary_17day
+            (word_id,group_number) VALUES (?,?)''',
+            [(word_id, maximum + i // settings.words_per_group + 1) for i, word_id in enumerate(ids)])
+        self.connection.execute('INSERT OR REPLACE INTO settings(key,value) VALUES (?,?)',
+                                ('study17.group_counter', str(maximum + (
+                                    len(ids) + settings.words_per_group - 1) // settings.words_per_group)))
+        self.connection.execute('INSERT OR REPLACE INTO settings(key,value) VALUES (?,?)', (key, context.day.isoformat()))
+        # A user may enable new words after starting or finishing today's review.
+        self.connection.execute('''UPDATE study_task_history
+            SET new_total=new_total+?,status=0,ended_at=NULL WHERE task_date=?''',
+            (len(ids), context.day.isoformat()))
 
     @staticmethod
     def _study_due_clause():

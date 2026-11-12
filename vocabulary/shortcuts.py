@@ -1,15 +1,16 @@
 import sys
 
-from PySide6.QtCore import QEvent, QObject, QSignalBlocker, Qt, Signal
+from PySide6.QtCore import QEvent, QObject, QSignalBlocker, QSize, Qt, Signal
 from PySide6.QtGui import QKeySequence, QShortcut
 from PySide6.QtWidgets import QAbstractButton, QApplication, QDialog, QFrame, QHBoxLayout, QLabel, QLineEdit, QMessageBox, QScrollArea, QSpinBox, QVBoxLayout, QWidget
 
 from .domain import CLEANUP_COMMANDS, DEFAULT_SHORTCUTS, SHORTCUT_LABELS, ValidationError, shortcut_candidates
 from .cleanup_input import CleanupInput
 from .draft_reset_dialog import DraftResetDialog
-from .learning import StudyDrawSettings
+from .learning import StudyContext, StudyDrawSettings
 from .native_shortcuts import WindowHotkeys
-from .widgets import button
+from .widgets import FloatingNotice, button
+from .theme import icon
 
 
 RESERVED_DIGITS = {f"{modifier}+{keypad}{number}"
@@ -221,10 +222,11 @@ def add_settings_separator(layout):
 
 
 class SettingsDialog(QDialog):
-    def __init__(self, manager, parent=None, *, clear_content=None):
+    def __init__(self, manager, parent=None, *, clear_content=None, set_study_new_words=None):
         super().__init__(parent)
         self.manager = manager
         self.clear_content_callback = clear_content or manager.repository.clear_content
+        self.set_study_new_words_callback = set_study_new_words or manager.repository.set_study_new_words_enabled
         self.setWindowTitle("设置")
         self.setMinimumWidth(407)
         self._recording = None
@@ -267,6 +269,15 @@ class SettingsDialog(QDialog):
             row.addWidget(editor)
         row.addWidget(QLabel("个新单词"))
         row.addStretch()
+        self.new_words_toggle = button('', quiet=True)
+        self.new_words_toggle.setAutoDefault(False)
+        self.new_words_toggle.setCheckable(True)
+        self.new_words_toggle.setFixedSize(28, 30)
+        self.new_words_toggle.setIconSize(QSize(24, 24))
+        self.new_words_toggle.setStyleSheet('padding: 0px;')
+        self.update_new_words_toggle()
+        self.new_words_toggle.clicked.connect(self.toggle_new_words)
+        row.addWidget(self.new_words_toggle)
         layout.addLayout(row)
         self.words_per_group.valueChanged.connect(self.save_study_settings)
         self.groups_per_day.valueChanged.connect(self.save_study_settings)
@@ -321,6 +332,7 @@ class SettingsDialog(QDialog):
         self.cleanup_input.textChanged.connect(
             lambda text: self.cleanup_button.setEnabled(text in CLEANUP_COMMANDS))
         self.cleanup_button.clicked.connect(self.confirm_cleanup)
+        self.cleanup_input.returnPressed.connect(self.cleanup_button.click)
         cleanup_row.addWidget(self.cleanup_input, 1)
         cleanup_row.addWidget(self.cleanup_button)
         layout.addLayout(cleanup_row)
@@ -331,6 +343,24 @@ class SettingsDialog(QDialog):
         self.installEventFilter(self)
         for widget in self.findChildren(QWidget):
             widget.installEventFilter(self)
+        self.toast = FloatingNotice(self)
+
+    def update_new_words_toggle(self):
+        enabled = self.manager.repository.study_new_words_enabled()
+        self.new_words_toggle.setChecked(enabled)
+        self.new_words_toggle.setIcon(icon('study_new_on' if enabled else 'study_new_off'))
+        text = '点击关闭每日新背单词' if enabled else '点击开启每日新背单词'
+        self.new_words_toggle.setToolTip(text)
+        self.new_words_toggle.setAccessibleName(text)
+
+    def toggle_new_words(self, enabled):
+        self.toast.dismiss()
+        try:
+            self.set_study_new_words_callback(enabled, StudyContext.now())
+        except Exception as error:
+            self.toast.show_message(str(error), self.new_words_toggle)
+        finally:
+            self.update_new_words_toggle()
 
     def showEvent(self, event):
         super().showEvent(event)
@@ -344,6 +374,8 @@ class SettingsDialog(QDialog):
         if command != 'delete study record':
             prompt += '\n被删除词条的编辑草稿也将丢弃。'
         dialog = DraftResetDialog(self.cleanup_button, prompt, self)
+        for control in (dialog.confirm_button, dialog.cancel_button):
+            control.setAutoDefault(True)
         try:
             if dialog.exec() != QDialog.DialogCode.Accepted:
                 return

@@ -35,8 +35,8 @@ def test_beijing_period_and_date():
         StudyContext.at(datetime(2026, 10, 30))
 
 
-@pytest.mark.parametrize("count", [0, 1, 9, 10, 11, 29, 30, 45])
-def test_daily_batch_fixed_short_or_empty_and_restart(repo, count):
+@pytest.mark.parametrize("count", [1, 9, 10, 11, 29, 30, 45])
+def test_daily_batch_fixed_short_and_restart(repo, count):
     add(repo, count)
     add(repo, 2, prefix="learned", learned=True)
     tasks = repo.prepare_study(AM)

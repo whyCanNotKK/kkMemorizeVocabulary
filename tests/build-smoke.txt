@@ -4,6 +4,7 @@ tests/test_transfer.py
 tests/test_study.py
 tests/test_study_migration.py
 tests/test_study_settings.py
+tests/test_study_new_words.py
 tests/test_task_history.py
 tests/test_duration_seconds.py
 tests/test_content_cleanup.py

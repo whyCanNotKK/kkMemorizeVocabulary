@@ -537,6 +537,8 @@ class MainWindow(QMainWindow):
             return
         self.toast.dismiss()
         self.filter_name = key
+        if key == "study17":
+            self.history_panel.set_collapsed(bool(self.study_page.tasks))
         self.refresh()
 
     def reveal(self, entry_id, expanded):
@@ -1081,7 +1083,8 @@ class MainWindow(QMainWindow):
         previous = (self._last_form_focus if not self.form_collapsed else None) or QApplication.focusWidget()
         self.shortcuts.set_suspended(True)
         try:
-            dialog = SettingsDialog(self.shortcuts, self, clear_content=self.clear_content)
+            dialog = SettingsDialog(self.shortcuts, self, clear_content=self.clear_content,
+                                    set_study_new_words=self.set_study_new_words)
             dialog.exec()
             dialog.deleteLater()
         finally:
@@ -1092,6 +1095,14 @@ class MainWindow(QMainWindow):
                 # Qt restores the modal parent's old focus during dialog teardown.
                 # Reapply our last input target after that restoration completes.
                 QTimer.singleShot(0, lambda: self.restore_input_focus(previous))
+
+    def set_study_new_words(self, enabled, context):
+        # Save the live clock before a draw can reopen a completed task or change its totals.
+        self.study_page.timer.checkpoint()
+        self.repository.set_study_new_words_enabled(enabled, context)
+        if enabled and self.study_page.context is not None:
+            self.study_page.load(context)
+        self.history_panel.refresh()
 
     def clear_content(self, command):
         self.repository.clear_content(command)

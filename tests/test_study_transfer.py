@@ -150,13 +150,13 @@ def test_old_study_file_is_rejected(document, version):
         parse_study_backup(json.dumps(document))
 
 
-def test_empty_draw_date_survives_export_restore_and_prevents_topup(repo, source):
-    repo.prepare_study(AM)  # no entries, but today's draw has run
+def test_empty_draw_backup_allows_later_draw_after_restore(repo, source):
+    repo.prepare_study(AM)
     backup = parse_study_backup(serialize_study_backup(repo.study_backup()))
-    assert backup.study_last_add_new_vocabulary == DAY.isoformat()
+    assert backup.study_last_add_new_vocabulary is None
     source.replace_study_progress(backup)
-    assert source.prepare_study(AM) == []
-    assert not source.has_study_progress()
+    assert len(source.prepare_study(AM)) == 1
+    assert source.has_study_progress()
 
 
 @pytest.mark.parametrize('corruption', [
