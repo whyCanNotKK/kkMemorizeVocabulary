@@ -21,6 +21,8 @@ if ! command -v python3 >/dev/null 2>&1; then
     exit 1
 fi
 
+python3 scripts/update_source.py || :
+
 if [ ! -x .venv/bin/python ]; then
     echo "Creating the project virtual environment..."
     python3 -m venv .venv

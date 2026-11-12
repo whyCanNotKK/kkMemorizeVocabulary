@@ -5,4 +5,5 @@ if not exist ".venv\Scripts\pythonw.exe" (
   pause
   exit /b 1
 )
+".venv\Scripts\python.exe" "scripts\update_source.py"
 start "" ".venv\Scripts\pythonw.exe" "main.py" %*
