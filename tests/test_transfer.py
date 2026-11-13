@@ -1,10 +1,12 @@
 from dataclasses import replace
 from datetime import date
+from pathlib import Path
 import json
 import sqlite3
 
 import pytest
-from PySide6.QtCore import Qt
+from PySide6.QtCore import QStandardPaths, Qt
+from PySide6.QtGui import QTextDocument
 from PySide6.QtWidgets import QDialog, QFileDialog, QLabel, QMessageBox
 
 from vocabulary.domain import RelatedWord, Sense, ValidationError, WordEntry
@@ -12,6 +14,7 @@ from vocabulary.import_dialog import ImportConflictDialog
 from vocabulary.learning import StudyContext
 from vocabulary.study_transfer import serialize_study_backup
 from vocabulary.storage import Repository
+from vocabulary.theme import ACCENT
 from vocabulary.transfer import parse_entries, read_entries, serialize_entries, write_entries
 
 
@@ -228,8 +231,9 @@ def test_conflict_dialog_shows_complete_plain_text_and_immediate_choices(repo, q
     dialog.show()
     left, right = dialog.cards[0]
     assert left.star.accessibleName() == "非重点" and right.star.accessibleName() == "重点"
-    assert left.learned.isVisible() and not right.learned.isVisible()
-    assert left.learned.toolTip() == "已记住此单词"
+    assert left.learned.isVisible() and right.learned.isVisible()
+    assert right.learned.toolTip() == '待记'
+    assert left.learned.toolTip() == "已记住"
     assert "    record" in left.description.text() and "\n第二行" in left.description.text()
     assert left.description.text().startswith("n. 记录")
     assert "    else 关联释义" in left.description.text()
@@ -314,7 +318,11 @@ def test_window_import_new_first_then_review_and_clear_stale_editor(window, repo
     monkeypatch.setattr(QMessageBox, "information", lambda *args: messages.append(args[2]))
     window.import_words()
     assert not by_text(repo, "record").learned and by_text(repo, "record").important
-    assert "新增 1" in messages[0] and "覆盖 1" in messages[0]
+    message = QTextDocument()
+    message.setHtml(messages[0])
+    assert message.toPlainText() == '新增 1 个主词，覆盖 1 个主词。'
+    assert messages[0].count(f'<span style="color:{ACCENT}">1</span>') == 2
+    assert 'font-size' not in messages[0]
     assert window.filter_buttons["all"].text() == "全部  2"
 
 
@@ -340,7 +348,9 @@ def test_identical_imports_do_not_appear_in_comparison(window, repo, tmp_path, m
     window.import_words()
     assert reviewed == ([['changed']] if with_changes else [])
     assert repo.get(original.id) == original
-    assert f'发现 {int(with_changes)} 条重复记录' in messages[0]
+    message = QTextDocument()
+    message.setHtml(messages[0])
+    assert message.toPlainText() == f'新增 {int(with_changes)} 个主词，覆盖 0 个主词。'
 
 
 def test_window_invalid_file_keeps_draft_and_data(window, repo, tmp_path, monkeypatch):
@@ -374,7 +384,9 @@ def test_window_reports_committed_choices_even_when_remaining_dialog_is_closed(w
     monkeypatch.setattr(QMessageBox, "information", lambda *args: messages.append(args[2]))
     window.import_words()
     assert by_text(repo, "one").learned and not repo.get(second.id).learned
-    assert "2 条重复记录" in messages[0] and "覆盖 1" in messages[0]
+    message = QTextDocument()
+    message.setHtml(messages[0])
+    assert message.toPlainText() == '新增 0 个主词，覆盖 1 个主词。'
 
 
 def test_window_import_respects_dirty_cancel(window, repo, tmp_path, monkeypatch):
@@ -387,13 +399,26 @@ def test_window_import_respects_dirty_cancel(window, repo, tmp_path, monkeypatch
     assert not repo.list_entries() and window.blocks[0].word.text() == "未保存"
 
 
-def test_cancel_file_pickers_does_not_change_form(window, repo, monkeypatch):
+@pytest.mark.parametrize('page', ['pending', 'study17'])
+def test_cancel_file_pickers_start_on_desktop_and_do_not_change_form(window, repo, monkeypatch, tmp_path, page):
+    window.set_filter(page)
     window.blocks[0].word.setText("draft")
     draft = window.form_value()
-    monkeypatch.setattr(QFileDialog, "getOpenFileName", lambda *args: ("", ""))
-    monkeypatch.setattr(QFileDialog, "getSaveFileName", lambda *args: ("", ""))
+    desktop = tmp_path / '桌面'
+    calls = []
+    def desktop_location(location):
+        assert location == QStandardPaths.StandardLocation.DesktopLocation
+        return str(desktop)
+    def picker(*args):
+        calls.append(Path(args[2]))
+        return '', ''
+    monkeypatch.setattr(QStandardPaths, 'writableLocation', desktop_location)
+    monkeypatch.setattr(QFileDialog, "getOpenFileName", picker)
+    monkeypatch.setattr(QFileDialog, "getSaveFileName", picker)
     window.import_words()
     window.export_words()
+    filename = 'kkMemorizeVocabulary-study17.json' if page == 'study17' else 'kkMemorizeVocabulary.json'
+    assert calls == [desktop, desktop / filename]
     assert window.form_value() == draft and repo.list_entries() == []
 
 

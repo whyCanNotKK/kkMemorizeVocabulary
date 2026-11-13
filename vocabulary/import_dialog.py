@@ -1,24 +1,74 @@
 """Resolve duplicate aggregates immediately by choosing a complete card."""
-from PySide6.QtCore import QEvent, Qt, Signal
+from PySide6.QtCore import QEvent, QSize, Qt, Signal
+from PySide6.QtGui import QColor, QPainter, QPixmap
 from PySide6.QtWidgets import (
-    QDialog, QFrame, QHBoxLayout, QLabel, QMessageBox, QScrollArea, QVBoxLayout, QWidget,
+    QDialog, QFrame, QGridLayout, QHBoxLayout, QLabel, QMessageBox, QScrollArea, QSizePolicy, QVBoxLayout, QWidget,
 )
 
 from .domain import POS_OPTIONS
 from .busy_overlay import BusyOverlay
 from .transfer_jobs import run_repository_task
-from .theme import ACCENT, GOLD, icon
+from .theme import ACCENT, GOLD, draw_related_arrow, icon
 from .widgets import button
+
+
+def word_heading(word):
+    return word.text + ('\n' + word.phonetic if word.phonetic else '')
+
+
+def display_phonetic(text):
+    return text.strip().strip('/').strip()
+
+
+class ElidedLabel(QLabel):
+    """Keep full text for accessibility and show a single line with literal dots."""
+    def __init__(self, text, parent=None):
+        super().__init__(text, parent)
+        self.setTextFormat(Qt.TextFormat.PlainText)
+        self.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Fixed)
+        self._update_display()
+
+    def _update_display(self):
+        self.setFixedHeight(self.fontMetrics().height() + 4)
+        text = self.text().replace('\r', ' ').replace('\n', ' ')
+        metrics, width = self.fontMetrics(), self.contentsRect().width()
+        self.display_text = text
+        if metrics.horizontalAdvance(text) > width:
+            low, high = 0, len(text)
+            while low < high:
+                middle = (low + high + 1) // 2
+                if metrics.horizontalAdvance(text[:middle] + '...') <= width:
+                    low = middle
+                else:
+                    high = middle - 1
+            self.display_text = text[:low] + '...'
+        self.setToolTip(self.text() if self.display_text != self.text() else '')
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self._update_display()
+
+    def changeEvent(self, event):
+        super().changeEvent(event)
+        if event.type() in (QEvent.Type.FontChange, QEvent.Type.StyleChange):
+            self._update_display()
+
+    def minimumSizeHint(self):
+        return QSize(0, self.fontMetrics().height() + 4)
+
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        painter.setPen(self.palette().color(self.foregroundRole()))
+        painter.drawText(self.contentsRect(), Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
+                         self.display_text)
 
 
 def entry_description(entry):
     """Plain text preserves explicit line breaks and the related-word indentation."""
     lines = []
     for word, indent in [(entry, "")] + [(child, "    ") for child in entry.related]:
-        if indent:
-            lines.append(indent + word.text)
-        if word.phonetic:
-            lines.append(indent + word.phonetic)
+        if indent or word.phonetic:
+            lines.append(indent + word_heading(word))
         for sense in word.senses:
             translations = sense.translation.split("\n")
             lines.append(f"{indent}{sense.pos} {translations[0]}")
@@ -26,13 +76,29 @@ def entry_description(entry):
     return "\n".join(lines)
 
 
+class RelatedArrow(QWidget):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setFixedSize(16, 22)
+        self.setAccessibleName('关联词')
+
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        draw_related_arrow(painter, 3, 5)
+
+
 class EntryDescription(QWidget):
     """Use actual columns so proportional fonts cannot shift the translations."""
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.lines = QVBoxLayout(self)
+        self.lines = QGridLayout(self)
         self.lines.setContentsMargins(0, 0, 0, 0)
-        self.lines.setSpacing(3)
+        self.lines.setHorizontalSpacing(8)
+        self.lines.setVerticalSpacing(6)
+        self.lines.setColumnStretch(0, 3)
+        self.lines.setColumnStretch(2, 10)
+        self.word_labels = []
         self._text = ""
 
     def text(self):
@@ -44,36 +110,44 @@ class EntryDescription(QWidget):
             item.widget().hide()
             item.widget().deleteLater()
         metrics = self.fontMetrics()
-        indent_width = metrics.horizontalAdvance("    ")
         badge_width = max(metrics.horizontalAdvance(pos) for pos, _ in POS_OPTIONS) + 12
         badge_height = metrics.height() + 6
+        self.word_labels = []
+        row = 0
         for word, related in [(entry, False)] + [(child, True) for child in entry.related]:
+            name_cell = QWidget()
+            name_layout = QHBoxLayout(name_cell)
+            name_layout.setContentsMargins(0, 0, 0, 0)
+            name_layout.setSpacing(4)
             if related:
-                self._add_line(indent_width, None, word.text, badge_width, badge_height)
+                name_layout.addWidget(RelatedArrow(), 0, Qt.AlignmentFlag.AlignTop)
+            text_column = QVBoxLayout()
+            text_column.setContentsMargins(0, 0, 0, 0)
+            text_column.setSpacing(2)
+            name = ElidedLabel(word.text)
+            name.setObjectName('wordCell')
+            text_column.addWidget(name)
             if word.phonetic:
-                self._add_line(indent_width if related else 0, None, word.phonetic, badge_width, badge_height)
-            for sense in word.senses:
-                self._add_line(indent_width if related else 0, sense.pos, sense.translation,
-                               badge_width, badge_height)
+                phonetic = ElidedLabel(display_phonetic(word.phonetic))
+                phonetic.setObjectName('muted')
+                text_column.addWidget(phonetic)
+            name_layout.addLayout(text_column, 1)
+            self.word_labels.append(name)
+            self.lines.addWidget(name_cell, row, 0, max(1, len(word.senses)), 1, Qt.AlignmentFlag.AlignTop)
+            for offset, sense in enumerate(word.senses):
+                self._add_sense(row + offset, sense, badge_width, badge_height)
+            row += max(1, len(word.senses))
         self._text = entry_description(entry)
         self.setAccessibleName(self._text)
 
-    def _add_line(self, indent, pos, text, badge_width, badge_height):
-        row = QWidget()
-        layout = QHBoxLayout(row)
-        layout.setContentsMargins(indent, 0, 0, 0)
-        layout.setSpacing(6)
-        if pos is not None:
-            label = QLabel(pos)
-            label.setObjectName("posBadge")
-            label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            label.setFixedSize(badge_width, badge_height)
-            layout.addWidget(label, 0, Qt.AlignmentFlag.AlignTop)
-        translation = QLabel(text)
-        translation.setTextFormat(Qt.TextFormat.PlainText)
-        translation.setWordWrap(True)
-        layout.addWidget(translation, 1, Qt.AlignmentFlag.AlignTop)
-        self.lines.addWidget(row)
+    def _add_sense(self, row, sense, badge_width, badge_height):
+        label = QLabel(sense.pos)
+        label.setObjectName("posBadge")
+        label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        label.setFixedSize(badge_width, badge_height)
+        self.lines.addWidget(label, row, 1, Qt.AlignmentFlag.AlignTop)
+        translation = ElidedLabel(sense.translation)
+        self.lines.addWidget(translation, row, 2, Qt.AlignmentFlag.AlignTop)
 
 
 class ConflictCard(QFrame):
@@ -84,40 +158,47 @@ class ConflictCard(QFrame):
         self.side = side
         self._pressed = False
         self.setObjectName("conflictCard")
+        self.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Maximum)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
         cell = QVBoxLayout(self)
         cell.setContentsMargins(14, 12, 14, 12)
         cell.setSpacing(6)
-        header = QHBoxLayout()
-        header.setSpacing(7)
-        self.star = QLabel()
-        self.star.setFixedSize(20, 20)
-        header.addWidget(self.star)
-        self.word = QLabel()
-        self.word.setObjectName("section")
-        self.word.setTextFormat(Qt.TextFormat.PlainText)
-        self.word.setWordWrap(True)
-        header.addWidget(self.word, 1)
-        self.learned = QLabel()
-        self.learned.setFixedSize(22, 22)
-        self.learned.setPixmap(icon("circle", ACCENT).pixmap(22, 22))
-        self.learned.setToolTip("已记住此单词")
-        self.learned.setAccessibleName("已记住此单词")
-        header.addWidget(self.learned, 0, Qt.AlignmentFlag.AlignTop)
-        cell.addLayout(header)
         self.description = EntryDescription()
         cell.addWidget(self.description)
-        cell.addStretch()
+        self.status_badges = QWidget(self)
+        self.status_badges.setFixedSize(36, 12)
+        self.status_badges.setStyleSheet('background: #202630;')
+        self.star = QLabel(self.status_badges)
+        self.star.setGeometry(2, 0, 12, 12)
+        self.learned = QLabel(self.status_badges)
+        self.learned.setGeometry(22, 0, 12, 12)
         self.set_entry(entry)
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self.status_badges.move(self.width() - self.status_badges.width() - 14, 0)
+        self.status_badges.raise_()
 
     def set_entry(self, entry):
         self.entry = entry
-        self.star.setPixmap(icon("star", GOLD if entry.important else "#596371").pixmap(20, 20))
+        self.star.setPixmap(icon("star", GOLD if entry.important else "#596371").pixmap(12, 12))
         self.star.setAccessibleName("重点" if entry.important else "非重点")
-        self.word.setText(entry.text)
-        self.learned.setVisible(entry.learned)
+        self.star.setToolTip(self.star.accessibleName())
+        state_icon = QPixmap(12, 12)
+        state_icon.fill(Qt.GlobalColor.transparent)
+        painter = QPainter(state_icon)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        green = QColor('#68c997')
+        painter.setPen(green)
+        painter.setBrush(green if entry.learned else Qt.BrushStyle.NoBrush)
+        painter.drawEllipse(2, 2, 8, 8)
+        painter.end()
+        self.learned.setPixmap(state_icon)
+        self.learned.setToolTip('已记住' if entry.learned else '待记')
+        self.learned.setAccessibleName(self.learned.toolTip())
         self.description.set_entry(entry)
+        self.word = self.description.word_labels[0]
         # Keep every part clickable after rebuilding a candidate's description.
         self.description.installEventFilter(self)
         for widget in self.findChildren(QWidget):
@@ -169,27 +250,35 @@ class ImportConflictDialog(QDialog):
         self.cards = []
         self.rows = []
         self.inserted = result.inserted
-        self.setWindowTitle("重复主词对比")
+        self.setWindowTitle("导入重复词对比选取")
         self.resize(960, 680)
-        self.setMinimumSize(720, 460)
+        self.setMinimumSize(720, 240)
+        self._initial_size_applied = False
         layout = QVBoxLayout(self)
         self.summary = QLabel()
+        self.summary.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.summary.setWordWrap(True)
         layout.addWidget(self.summary)
-        actions = QHBoxLayout()
-        self.all_left_button = button("全部使用左侧")
-        self.all_right_button = button("全部使用右侧")
+        self.all_left_button = button("全部选用")
+        self.all_right_button = button("全部选用")
+        self.all_left_button.setAccessibleName('全部选用本地单词')
+        self.all_right_button.setAccessibleName('全部选用导入单词')
         self.all_left_button.clicked.connect(lambda: self.choose_all(False))
         self.all_right_button.clicked.connect(lambda: self.choose_all(True))
-        actions.addWidget(self.all_left_button)
-        actions.addWidget(self.all_right_button)
-        actions.addStretch()
-        layout.addLayout(actions)
         headers = QHBoxLayout()
-        for title in ("当前程序中的单词", "导入文件中的单词"):
+        self.column_titles = []
+        for title, control in (("本地单词", self.all_left_button), ("导入单词", self.all_right_button)):
+            group = QWidget()
+            group_layout = QHBoxLayout(group)
+            group_layout.setContentsMargins(0, 0, 0, 0)
+            group_layout.setSpacing(self.fontMetrics().horizontalAdvance('   '))
             label = QLabel(title)
             label.setObjectName("section")
-            headers.addWidget(label, 1)
+            label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            self.column_titles.append(label)
+            group_layout.addWidget(label)
+            group_layout.addWidget(control)
+            headers.addWidget(group, 1, Qt.AlignmentFlag.AlignHCenter)
         layout.addLayout(headers)
         self.scroll = QScrollArea()
         self.scroll.setWidgetResizable(True)
@@ -199,6 +288,7 @@ class ImportConflictDialog(QDialog):
         self.card_layout.setSpacing(8)
         for conflict in self.conflicts:
             row = QWidget()
+            row.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Maximum)
             pair = QHBoxLayout(row)
             pair.setContentsMargins(0, 0, 0, 0)
             left = ConflictCard(conflict.current, "left")
@@ -213,17 +303,26 @@ class ImportConflictDialog(QDialog):
         self.card_layout.addStretch()
         self.scroll.setWidget(self.content)
         layout.addWidget(self.scroll, 1)
-        footer = QHBoxLayout()
-        self.cancel_button = button("关闭")
-        self.cancel_button.clicked.connect(self.reject)
-        footer.addStretch()
-        footer.addWidget(self.cancel_button)
-        layout.addLayout(footer)
         self._update_summary()
         self.busy_overlay = BusyOverlay(self)
 
+    def showEvent(self, event):
+        super().showEvent(event)
+        if not self._initial_size_applied:
+            self._initial_size_applied = True
+            self.layout().activate()
+            content_height = max(self.card_layout.totalHeightForWidth(self.scroll.viewport().width()),
+                                 self.card_layout.minimumSize().height())
+            chrome_height = self.height() - self.scroll.height() + 2 * self.scroll.frameWidth()
+            self.resize(self.width(), min(680, self.screen().availableGeometry().height() - 80,
+                                          max(self.minimumHeight(), content_height + chrome_height)))
+
     def _update_summary(self):
-        self.summary.setText(f"已导入 {self.inserted} 个新主词，剩余 {len(self.conflicts)} 条重复记录。点击卡片立即采用。")
+        self.summary.setText(
+            f'导入新词：<span style="color:{ACCENT}">{self.inserted}</span> 个，'
+            f'重复单词：<span style="color:{ACCENT}">{len(self.conflicts)}</span> 个，点击卡片立即采用')
+        self.summary.setAccessibleName(
+            f'导入新词：{self.inserted} 个，重复单词：{len(self.conflicts)} 个，点击卡片立即采用')
 
     def choose(self, conflict, incoming):
         if not any(item is conflict for item in self.conflicts):

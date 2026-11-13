@@ -3,7 +3,7 @@ import logging
 from pathlib import Path
 
 import shiboken6
-from PySide6.QtCore import QPoint, QSize, Qt, QTimer
+from PySide6.QtCore import QPoint, QSize, QStandardPaths, Qt, QTimer
 from PySide6.QtWidgets import (
     QApplication, QDialog, QDialogButtonBox, QFileDialog, QFrame, QGridLayout, QHBoxLayout, QLabel, QMainWindow, QMessageBox,
     QPlainTextEdit, QScrollArea, QVBoxLayout, QWidget,
@@ -1133,7 +1133,9 @@ class MainWindow(QMainWindow):
         self.shortcuts.set_suspended(True)
         try:
             path, _ = QFileDialog.getSaveFileName(
-                self, "导出当前页面所有单词", "kkMemorizeVocabulary.json", "JSON 文件 (*.json)")
+                self, "导出当前页面所有单词",
+                str(Path(QStandardPaths.writableLocation(QStandardPaths.StandardLocation.DesktopLocation))
+                    / "kkMemorizeVocabulary.json"), "JSON 文件 (*.json)")
             if not path:
                 return
             if not Path(path).suffix:
@@ -1157,7 +1159,9 @@ class MainWindow(QMainWindow):
             return self.import_study_progress()
         self.shortcuts.set_suspended(True)
         try:
-            path, _ = QFileDialog.getOpenFileName(self, "导入单词", "", "JSON 文件 (*.json)")
+            path, _ = QFileDialog.getOpenFileName(
+                self, "导入单词", QStandardPaths.writableLocation(QStandardPaths.StandardLocation.DesktopLocation),
+                "JSON 文件 (*.json)")
             if not path:
                 return
             try:
@@ -1176,14 +1180,17 @@ class MainWindow(QMainWindow):
             self.refresh_after_transfer()
             replaced_ids = self.resolve_word_conflicts(result)
             self.refresh_after_transfer()
-            QMessageBox.information(
-                self, "导入完成", f"新增 {result.inserted} 个主词，发现 {len(result.conflicts)} 条重复记录，"
-                f"覆盖 {len(replaced_ids)} 个主词。")
+            self.show_import_result(result.inserted, len(replaced_ids))
         except Exception as error:
             logging.exception("Could not import words")
             QMessageBox.critical(self, "导入失败", str(error))
         finally:
             self.shortcuts.set_suspended(False)
+
+    def show_import_result(self, inserted, replaced):
+        QMessageBox.information(
+            self, '导入完成', f'新增 <span style="color:{ACCENT}">{inserted}</span> 个主词，'
+            f'覆盖 <span style="color:{ACCENT}">{replaced}</span> 个主词。')
 
     def refresh_after_transfer(self, overlay=None):
         overlay = overlay or self.busy_overlay
@@ -1211,7 +1218,9 @@ class MainWindow(QMainWindow):
         self.shortcuts.set_suspended(True)
         try:
             path, _ = QFileDialog.getSaveFileName(
-                self, '导出学习进度', 'kkMemorizeVocabulary-study17.json', 'JSON 文件 (*.json)')
+                self, '导出学习进度',
+                str(Path(QStandardPaths.writableLocation(QStandardPaths.StandardLocation.DesktopLocation))
+                    / 'kkMemorizeVocabulary-study17.json'), 'JSON 文件 (*.json)')
             if not path:
                 return
             if not Path(path).suffix:
@@ -1251,7 +1260,10 @@ class MainWindow(QMainWindow):
         result = None
         try:
             if backup is None:
-                path, _ = QFileDialog.getOpenFileName(self, '导入学习进度', '', 'JSON 文件 (*.json)')
+                path, _ = QFileDialog.getOpenFileName(
+                    self, '导入学习进度',
+                    QStandardPaths.writableLocation(QStandardPaths.StandardLocation.DesktopLocation),
+                    'JSON 文件 (*.json)')
                 if not path:
                     return
                 backup = self.busy_overlay.run('正在读取学习进度…', lambda: read_study_backup(path))
@@ -1274,14 +1286,10 @@ class MainWindow(QMainWindow):
                 self.study_page.timer.reset()
                 self.study_page.revealed.clear()
                 self.study_page.load(StudyContext.now())
-                status = f'已恢复 {len(backup.records)} 条学习进度及 {len(backup.task_history)} 条任务历史。'
             else:
                 self.study_page.load(self.study_page.context or StudyContext.now())
-                status = '本机学习进度已保留。'
             self.refresh_after_transfer()
-            QMessageBox.information(self, '导入完成',
-                f'新增 {result.inserted} 个主词，发现 {len(result.conflicts)} 条重复记录，'
-                f'覆盖 {len(replaced)} 个主词。\n{status}')
+            self.show_import_result(result.inserted, len(replaced))
         except Exception as error:
             logging.exception('Could not import study progress')
             detail = str(error)

@@ -5,12 +5,14 @@ import sqlite3
 
 import pytest
 from PySide6.QtCore import QTimer, Qt
+from PySide6.QtGui import QTextDocument
 from PySide6.QtWidgets import QApplication, QFileDialog, QMessageBox
 
 from vocabulary.domain import RelatedWord, Sense, ValidationError, WordEntry
 from vocabulary.import_dialog import ImportConflictDialog
 from vocabulary.learning import StudyContext
 from vocabulary.storage import Repository
+from vocabulary.theme import ACCENT
 from vocabulary.study_transfer import (parse_study_backup, read_study_backup,
                                        serialize_study_backup, write_study_backup)
 from vocabulary.transfer import parse_entries, serialize_entries
@@ -283,6 +285,12 @@ def test_ui_import_modes(source, window, monkeypatch, tmp_path, mode):
     else:
         assert window.repository.study_backup() == before
         assert len(window.repository.list_entries()) == 1 and not info
+    if mode != 'cancel':
+        message = QTextDocument()
+        message.setHtml(info[0])
+        assert message.toPlainText() == '新增 1 个主词，覆盖 0 个主词。'
+        assert f'<span style="color:{ACCENT}">1</span>' in info[0]
+        assert f'<span style="color:{ACCENT}">0</span>' in info[0]
 
 
 @pytest.mark.parametrize('incoming', [True, False, None])
