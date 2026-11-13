@@ -319,7 +319,7 @@ def test_search_prioritizes_spellings_before_translations_and_preserves_order(wi
             WordEntry(f"{prefix}-other", [Sense("n.", "普通译文")]),
             WordEntry(f"{prefix}-translation", [Sense("n.", "普通译文"), Sense("v.", "Match")]),
             WordEntry(f"{prefix}-MATCH", [Sense("n.", "普通译文")]),
-            WordEntry(f"{prefix}-both-match", [Sense("n.", "match")],
+            WordEntry(f"{prefix}-match-both", [Sense("n.", "match")],
                       [RelatedWord("match", [Sense("n.", "match")])]),
             WordEntry(f"{prefix}-child-and-translation", [Sense("n.", "match")],
                       [RelatedWord("match", [Sense("n.", "关联译文")])]),
@@ -346,6 +346,39 @@ def test_search_prioritizes_spellings_before_translations_and_preserves_order(wi
     assert repo.list_entries() == original
     window.search_box.setText("   ")
     assert visible(window) == [entry.text for category in categories for entry in groups[category]]
+
+
+@pytest.mark.parametrize('page', ['pending', 'learned', 'all'])
+def test_search_ranks_match_position_within_each_priority(window, repo, page):
+    groups = {}
+    for priority in reversed(range(4)):
+        entries = []
+        for index, text in enumerate(['revival', 'VALID', 'Valley', 'xxval']):
+            entry = WordEntry(f'entry-{priority}-{index}', [Sense('n.', 'plain')],
+                              learned=page == 'learned')
+            if priority == 0:
+                entry.text = text
+                # A lower-priority prefix hit cannot promote the main spelling hit.
+                entry.related = [RelatedWord('val', [Sense('n.', 'val')])]
+            elif priority == 1:
+                entry.related = [RelatedWord('long-val', [Sense('n.', 'val')]),
+                                 RelatedWord(text, [Sense('n.', 'plain')])]
+            elif priority == 2:
+                entry.senses = [Sense('n.', 'long-val'), Sense('v.', text)]
+            else:
+                entry.related = [RelatedWord('child', [Sense('n.', 'long-val')]),
+                                 RelatedWord('child-two', [Sense('n.', 'plain'), Sense('v.', text)])]
+            entries.append(repo.save(entry))
+        groups[priority] = entries
+    original = repo.list_entries()
+    window.set_filter(page)
+    window.refresh()
+    window.search_box.setText(' VaL ')
+    assert visible(window) == [groups[priority][index].text
+                               for priority in range(4) for index in [1, 2, 3, 0]]
+    assert repo.list_entries() == original
+    window.search_box.clear()
+    assert visible(window) == [entry.text for entry in original]
 
 
 def test_search_count_tracks_main_words_in_current_results(window, repo, qtbot):

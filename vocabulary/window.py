@@ -437,21 +437,22 @@ class MainWindow(QMainWindow):
         if not keyword:
             return visible
 
-        def matches_translation(word):
-            return any(keyword in sense.translation.casefold() for sense in word.senses)
-
-        main_matches, related_matches = [], []
-        main_translation_matches, related_translation_matches = [], []
+        matches = []
         for entry in visible:
-            if keyword in entry.text.casefold():
-                main_matches.append(entry)
-            elif any(keyword in word.text.casefold() for word in entry.related):
-                related_matches.append(entry)
-            elif matches_translation(entry):
-                main_translation_matches.append(entry)
-            elif any(matches_translation(word) for word in entry.related):
-                related_translation_matches.append(entry)
-        return main_matches + related_matches + main_translation_matches + related_translation_matches
+            fields = (
+                (entry.text,),
+                (word.text for word in entry.related),
+                (sense.translation for sense in entry.senses),
+                (sense.translation for word in entry.related for sense in word.senses),
+            )
+            for priority, texts in enumerate(fields):
+                position = min((index for text in texts
+                                if (index := text.casefold().find(keyword)) >= 0), default=None)
+                if position is not None:
+                    matches.append(((priority, position), entry))
+                    break
+        matches.sort(key=lambda match: match[0])
+        return [entry for _, entry in matches]
 
     def search_changed(self):
         if not self.current_table().delegate.submit():
