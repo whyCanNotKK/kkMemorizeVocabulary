@@ -180,6 +180,12 @@ def draw_symbol(p: QPainter, name: str, rect: QRectF, color: str):
         p.setPen(Qt.PenStyle.NoPen)
         p.setBrush(QColor(color))
         p.drawPath(disk.subtracted(cutout))
+    elif name == "sparkle":
+        p.setPen(Qt.PenStyle.NoPen)
+        p.setBrush(QColor(color))
+        p.drawPolygon(QPolygonF([QPointF(0, -10), QPointF(2, -2), QPointF(10, 0),
+                                QPointF(2, 2), QPointF(0, 10), QPointF(-2, 2),
+                                QPointF(-10, 0), QPointF(-2, -2)]))
     elif name == "task_cross":
         p.drawLine(QPointF(-6, -6), QPointF(6, 6))
         p.drawLine(QPointF(-6, 6), QPointF(6, -6))

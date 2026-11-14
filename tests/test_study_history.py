@@ -460,9 +460,11 @@ def test_times_hide_seconds_and_value_cells_have_no_tooltips(qapp):
     end = f'{(DAY + timedelta(days=1)).isoformat()}T00:03:41+08:00'
     model.load([record(started_at=start, ended_at=end, status=1)], AM)
     assert text(model, 0, 2) == '08：12'
-    assert text(model, 0, 3) == '11-06 00：03'
+    assert text(model, 0, 3) == '00：03'
+    assert model.index(0, 3).data(Qt.ItemDataRole.ToolTipRole) == '次日凌晨'
     for column in range(2, STATUS_COLUMN):
-        assert model.index(0, column).data(Qt.ItemDataRole.ToolTipRole) is None
+        if column != 3:
+            assert model.index(0, column).data(Qt.ItemDataRole.ToolTipRole) is None
     model.load([record()], AM)
     assert text(model, 0, 3) == '—'
 

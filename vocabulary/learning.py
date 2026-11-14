@@ -39,7 +39,11 @@ class StudyContext:
         if instant.tzinfo is None:
             raise ValueError("学习时间必须包含时区。")
         local = instant.astimezone(BEIJING)
-        return cls(local.date(), local.hour >= 15)
+        # The learning day rolls over at 05:00; after midnight and before
+        # 05:00, the afternoon task still belongs to the previous learning day.
+        learning_day = (local - timedelta(hours=5)).date()
+        afternoon = local.hour >= 15 or local.hour < 5
+        return cls(learning_day, afternoon)
 
     @property
     def label(self):
