@@ -112,6 +112,15 @@ class HistoryModel(QAbstractTableModel):
             return Qt.AlignmentFlag.AlignCenter
         if role == Qt.ItemDataRole.ToolTipRole and index.column() == 0:
             return '周' + '一二三四五六日'[day.weekday()]
+        if index.column() in (2, 3) and record:
+            value = record.started_at if index.column() == 2 else record.ended_at
+            if value is not None:
+                instant = datetime.fromisoformat(value)
+                if instant.date() == day + timedelta(days=1) and instant.hour < 5:
+                    if role == Qt.ItemDataRole.DecorationRole:
+                        return icon('sparkle', '#e8edf4')
+                    if role == Qt.ItemDataRole.ToolTipRole:
+                        return '次日凌晨'
         if role == DURATION_PARTS_ROLE and index.column() == DURATION_COLUMN and record:
             return study_duration_parts(record.duration_seconds)
         if role != Qt.ItemDataRole.DisplayRole:
@@ -127,8 +136,7 @@ class HistoryModel(QAbstractTableModel):
             if value is None:
                 return '—'
             instant = datetime.fromisoformat(value)
-            clock = f'{instant.hour:02d}：{instant.minute:02d}'
-            return clock if instant.date() == day else f'{instant:%m-%d} {clock}'
+            return f'{instant.hour:02d}：{instant.minute:02d}'
         if index.column() == INTERVAL_COLUMN:
             hours = self.intervals.get(period)
             return f'{hours} h' if hours is not None else '—'
@@ -241,6 +249,11 @@ class HistoryDelegate(QStyledItemDelegate):
                 self._paint_duration(painter, option, index, parts)
             else:
                 self._paint_number_pair(painter, option, index, pair)
+                if column in (2, 3) and index.data(Qt.ItemDataRole.DecorationRole):
+                    marker = QRect(0, 0, 14, 14)
+                    marker.moveCenter(option.rect.center())
+                    marker.moveRight(option.rect.right() - 8)
+                    index.data(Qt.ItemDataRole.DecorationRole).paint(painter, marker)
             painter.restore()
         else:
             super().paint(painter, option, index)
