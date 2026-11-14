@@ -93,6 +93,40 @@ def test_bulk_choice_immediately_commits_remaining_and_finishes(repo, qtbot, inc
             assert actual.id != original.id
 
 
+def test_each_comparison_pair_has_equal_height_and_top_aligned_content(repo, qtbot, themed_app, tmp_path):
+    short = [Sense('n.', '简短释义')]
+    tall = [Sense('n.', f'释义 {i}') for i in range(6)]
+    for name, senses in [('local-tall', tall), ('import-tall', short), ('both-short', short)]:
+        repo.save(WordEntry(name, senses))
+    candidates = [WordEntry('local-tall', [Sense('v.', '导入释义')]),
+                  WordEntry('import-tall', tall), WordEntry('both-short', [Sense('v.', '导入释义')])]
+    dialog = ImportConflictDialog(repo, repo.import_entries(candidates))
+    qtbot.addWidget(dialog)
+    dialog.show()
+    qtbot.wait(20)
+
+    def check_pairs():
+        for left, right in dialog.cards:
+            assert left.geometry().top() == right.geometry().top()
+            assert left.height() == right.height() and abs(left.width() - right.width()) <= 1
+            assert left.description.y() == right.description.y()
+            assert left.description.y() <= 14
+        assert dialog.cards[0][0].height() > dialog.cards[2][0].height() + 50
+        assert dialog.cards[1][0].height() > dialog.cards[2][0].height() + 50
+        for short_card in (dialog.cards[0][1], dialog.cards[1][0]):
+            assert short_card.height() - short_card.description.geometry().bottom() > 50
+
+    check_pairs()
+    dialog.resize(720, dialog.height())
+    qtbot.wait(20)
+    check_pairs()
+    dialog.grab().save(str(tmp_path / 'equal-height-pairs.png'))
+    left, right = dialog.cards[0]
+    previous_height = left.height()
+    left.set_entry(WordEntry('local-tall', short))
+    qtbot.waitUntil(lambda: left.height() == right.height() and left.height() < previous_height)
+
+
 def test_card_removal_preserves_pixel_scroll_and_clamps_at_bottom(repo, qtbot):
     dialog, originals, imported = dialog_with_words(repo, qtbot)
     bar = dialog.scroll.verticalScrollBar()

@@ -158,14 +158,15 @@ class ConflictCard(QFrame):
         self.side = side
         self._pressed = False
         self.setObjectName("conflictCard")
-        self.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Maximum)
+        self.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Preferred)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
         cell = QVBoxLayout(self)
         cell.setContentsMargins(14, 12, 14, 12)
         cell.setSpacing(6)
         self.description = EntryDescription()
-        cell.addWidget(self.description)
+        cell.addWidget(self.description, 0, Qt.AlignmentFlag.AlignTop)
+        cell.addStretch()
         self.status_badges = QWidget(self)
         self.status_badges.setFixedSize(36, 12)
         self.status_badges.setStyleSheet('background: #202630;')
