@@ -37,8 +37,7 @@ def test_toolbar_navigation_uses_active_table(review_area, window, qtbot):
     for control in controls:
         if not control.isVisible() or not control.isEnabled():
             continue
-        for key, target in ((Qt.Key.Key_Up, 0), (Qt.Key.Key_W, 0),
-                            (Qt.Key.Key_Down, 2), (Qt.Key.Key_S, 2)):
+        for key, target in ((Qt.Key.Key_Up, 0), (Qt.Key.Key_Down, 2)):
             table.setCurrentIndex(primary[1])
             control.setFocus()
             assert control.hasFocus()
@@ -51,12 +50,25 @@ def test_toolbar_navigation_uses_active_table(review_area, window, qtbot):
                 primary[target].data(Qt.ItemDataRole.UserRole).entry.id}
 
 
+def test_toolbar_ws_does_not_route_to_list(review_area, window, qtbot):
+    table = review_area
+    current = primary_indexes(table)[1]
+    table.setCurrentIndex(current)
+    control = window.filter_buttons[window.filter_name]
+    control.setFocus()
+    for key in (Qt.Key.Key_W, Qt.Key.Key_S):
+        with qtbot.assertNotEmitted(control.clicked):
+            qtbot.keyClick(control, key)
+        assert control.hasFocus()
+        assert table.currentIndex() == current
+
+
 def test_toolbar_navigation_without_selection_keeps_viewport(review_area, window, qtbot):
     table = review_area
     primary = primary_indexes(table)
     bar = table.verticalScrollBar()
     position = table.rowViewportPosition(primary[8].row()) + bar.value() + 2
-    for key in (Qt.Key.Key_Up, Qt.Key.Key_Down, Qt.Key.Key_W, Qt.Key.Key_S):
+    for key in (Qt.Key.Key_Up, Qt.Key.Key_Down):
         table.setCurrentIndex(QModelIndex())
         bar.setValue(position)
         control = window.filter_buttons[window.filter_name]
@@ -86,7 +98,7 @@ def test_search_and_form_inputs_keep_navigation_keys(window, repo, qtbot):
 
 def test_empty_list_receives_focus_from_filter_button(window, qtbot):
     table = window.table
-    for key in (Qt.Key.Key_Up, Qt.Key.Key_Down, Qt.Key.Key_W, Qt.Key.Key_S):
+    for key in (Qt.Key.Key_Up, Qt.Key.Key_Down):
         control = window.filter_buttons["pending"]
         control.setFocus()
         qtbot.keyClick(control, key)
@@ -102,7 +114,7 @@ def test_modified_keys_on_toolbar_do_not_route_to_table(review_area, window, qtb
     for modifier in (Qt.KeyboardModifier.ControlModifier, Qt.KeyboardModifier.AltModifier,
                      Qt.KeyboardModifier.ShiftModifier, Qt.KeyboardModifier.MetaModifier):
         control.setFocus()
-        qtbot.keyClick(control, Qt.Key.Key_W, modifier)
+        qtbot.keyClick(control, Qt.Key.Key_Down, modifier)
         assert not table.hasFocus()
         assert table.currentIndex() == current
 
@@ -117,7 +129,7 @@ def test_navigation_does_not_force_commit_or_focus_from_invalid_editor(window, r
     editor = table.delegate.editor
     editor.setText("")
     window.settings_button.setFocus()
-    qtbot.keyClick(window.settings_button, Qt.Key.Key_S)
+    qtbot.keyClick(window.settings_button, Qt.Key.Key_Down)
     assert table.delegate.editor is editor
     assert editor.text() == ""
     assert repo.get(entry.id).text == "word"

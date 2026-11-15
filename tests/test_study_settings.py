@@ -1,4 +1,5 @@
 from collections import Counter
+from dataclasses import replace
 from datetime import date, timedelta
 import sqlite3
 
@@ -22,6 +23,8 @@ def seed(repo, count):
 
 
 def test_defaults_and_preferences_survive_restart_without_changing_other_settings(repo):
+    assert not repo.study_hide_word_while_spelling()
+    repo.set_study_hide_word_while_spelling(True)
     assert repo.study_draw_settings() == StudyDrawSettings(10, 3)
     repo.write_shortcuts({'save': 'Alt+S'})
     repo.write_study_draw_settings(StudyDrawSettings(12, 4))
@@ -29,6 +32,7 @@ def test_defaults_and_preferences_survive_restart_without_changing_other_setting
     try:
         assert reopened.study_draw_settings() == StudyDrawSettings(12, 4)
         assert reopened.shortcuts()['save'] == 'Alt+S'
+        assert reopened.study_hide_word_while_spelling()
         assert reopened.study_backup().group_counter == 0
         assert reopened.connection.execute('PRAGMA user_version').fetchone()[0] == 10
     finally:
@@ -66,7 +70,7 @@ def test_custom_draw_capacity_partial_groups_and_no_topup(repo, size, groups, co
     assert before.study_last_add_new_vocabulary == (AM.day.isoformat() if count else None)
     repo.write_study_draw_settings(StudyDrawSettings(20, 5))
     assert repo.prepare_study(AM) == tasks
-    assert repo.study_backup() == before
+    assert repo.study_backup() == replace(before, words_per_group=20, groups_per_day=5)
 
 
 def test_changes_only_apply_to_future_batches_and_preserve_old_groups(repo):
@@ -83,7 +87,7 @@ def test_changes_only_apply_to_future_batches_and_preserve_old_groups(repo):
     assert after.group_counter == 4
 
 
-def test_custom_group_backup_roundtrip_keeps_local_draw_preferences(repo, tmp_path):
+def test_custom_group_backup_roundtrip_restores_draw_preferences(repo, tmp_path):
     seed(repo, 24)
     repo.write_study_draw_settings(StudyDrawSettings(12, 2))
     repo.prepare_study(AM)
@@ -94,10 +98,47 @@ def test_custom_group_backup_roundtrip_keeps_local_draw_preferences(repo, tmp_pa
         target.import_entries(backup.words)
         target.replace_study_progress(backup)
         assert target.study_backup().records == backup.records
-        assert target.study_draw_settings() == StudyDrawSettings(2, 1)
+        assert target.study_draw_settings() == StudyDrawSettings(12, 2)
         assert len(target.prepare_study(AM)) == 24  # no redraw or re-grouping
     finally:
         target.close()
+
+
+def test_hide_word_setting_saves_reopens_and_rolls_back_on_failure(window, repo, qtbot):
+    dialog = SettingsDialog(window.shortcuts, window)
+    qtbot.addWidget(dialog)
+    dialog.show()
+    assert not dialog.hide_word_toggle.isChecked()
+    assert dialog.hide_word_toggle.mapTo(dialog, dialog.hide_word_toggle.rect().center()).y() > (
+        dialog.new_words_toggle.mapTo(dialog, dialog.new_words_toggle.rect().center()).y())
+    assert dialog.hide_word_toggle.x() == dialog.new_words_toggle.x()
+    with qtbot.waitSignal(dialog.spellingVisibilityChanged) as changed:
+        qtbot.mouseClick(dialog.hide_word_toggle, Qt.MouseButton.LeftButton)
+    assert changed.args == [True]
+    assert repo.study_hide_word_while_spelling()
+    dialog.close()
+    again = SettingsDialog(window.shortcuts, window)
+    qtbot.addWidget(again)
+    again.show()
+    assert again.hide_word_toggle.isChecked()
+    repo.connection.execute("""CREATE TRIGGER fail_hide_setting BEFORE INSERT ON settings
+        WHEN NEW.key='study17.hide_word_while_spelling'
+        BEGIN SELECT RAISE(ABORT,'save failed'); END""")
+    with qtbot.assertNotEmitted(again.spellingVisibilityChanged):
+        qtbot.mouseClick(again.hide_word_toggle, Qt.MouseButton.LeftButton)
+    assert repo.study_hide_word_while_spelling()
+    assert again.hide_word_toggle.isChecked()
+    assert 'save failed' in again.toast.label.text()
+
+
+def test_settings_opened_by_window_updates_practice_mode(window, repo, monkeypatch):
+    def interact(dialog):
+        dialog.hide_word_toggle.click()
+        assert window.study_page.table.hide_word_while_spelling
+        return 0
+    monkeypatch.setattr(SettingsDialog, 'exec', interact)
+    window.open_settings()
+    assert repo.study_hide_word_while_spelling()
 
 
 def test_settings_section_order_save_and_reopen(window, repo, qtbot):

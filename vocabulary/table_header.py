@@ -1,7 +1,7 @@
 """Word-table boundaries: fixed star and POS columns, adjustable content widths."""
-from PySide6.QtCore import Qt
+from PySide6.QtCore import QEvent, QRect, Qt
 from PySide6.QtGui import QColor, QPainter, QPen
-from PySide6.QtWidgets import QHeaderView
+from PySide6.QtWidgets import QHeaderView, QStyle, QStyleOptionHeader, QToolTip
 
 
 class WordTableHeader(QHeaderView):
@@ -10,6 +10,23 @@ class WordTableHeader(QHeaderView):
         self.table = table
         self._resize_drag = None
         self.setMouseTracking(True)
+
+    def viewportEvent(self, event):
+        if (event.type() == QEvent.Type.ToolTip and self.table.study_mode
+                and self.logicalIndexAt(event.pos()) == 3):
+            option = QStyleOptionHeader()
+            self.initStyleOption(option)
+            self.initStyleOptionForIndex(option, 3)
+            option.rect = QRect(self.sectionViewportPosition(3), 0, self.sectionSize(3), self.height())
+            label = self.style().subElementRect(QStyle.SubElement.SE_HeaderLabel, option, self)
+            visible = option.fontMetrics.elidedText(option.text, self.textElideMode(), label.width())
+            if visible != option.text:
+                QToolTip.showText(event.globalPos(), option.text, self)
+            else:
+                QToolTip.hideText()
+            event.accept()
+            return True
+        return super().viewportEvent(event)
 
     def paintEvent(self, event):
         super().paintEvent(event)

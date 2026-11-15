@@ -212,6 +212,7 @@ def test_enable_after_finished_review_reopens_visible_task(window, repo, monkeyp
     monkeypatch.setattr(StudyContext, 'now', classmethod(lambda cls: AM))
     window.set_filter('study17')
     page = window.study_page
+    page.set_global_hidden(False)
     page.complete(review.id, 'study')
     assert page.completion_notice.isVisible()
     assert page.timer_button.isHidden()
@@ -221,6 +222,7 @@ def test_enable_after_finished_review_reopens_visible_task(window, repo, monkeyp
     assert page.timer_button.isVisible() and page.timer_button.isEnabled()
     assert page.new_count.accessibleName() == '新词：剩余1/1'
     assert page.review_count.accessibleName() == '复习：剩余0/1'
+    page.set_global_hidden(False)
     page.complete(added.id, 'study')
     assert page.completion_notice.isVisible()
     assert repo.study_task_history(AM).new_done == 1

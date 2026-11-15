@@ -182,9 +182,11 @@ def test_history_total_updates_on_draw_completion_clear_restore_delete_and_reent
     page.reload()
     assert panel.total_count.accessibleName() == '合计 1 个单词'
     backup = repo.study_backup()
+    page.set_global_hidden(False)
     page.complete(entry.id, 'study')
     now[0] = PM
     page.reload()
+    page.set_global_hidden(False)
     page.complete(entry.id, 'study')
     assert not page.tasks and panel.total_count.accessibleName() == '合计 1 个单词'
     window.clear_content('delete study record')
@@ -234,6 +236,7 @@ def test_panel_opens_on_reentry_after_completion_even_with_completed_words_visib
     window.set_filter('study17')
     page, panel = window.study_page, window.history_panel
     assert panel.collapsed
+    page.set_global_hidden(False)
     page.complete(entry.id, 'study')
     assert not page.tasks and panel.collapsed
     page.toggle_completed(True)
@@ -261,6 +264,7 @@ def test_history_live_timer_and_completion_refresh(window, repo, monkeypatch, qt
     page.update_elapsed()
     assert page.elapsed_label.text() == '1 s'
     assert repo.study_task_history(AM).duration_seconds == 0  # Displaying history does not write time.
+    page.set_global_hidden(False)
     page.complete(word.id, 'study')
     assert status(panel.model, 0) == '已完成'
     assert text(panel.model, 0, NEW_COLUMN) == '1 / 1'

@@ -232,6 +232,7 @@ def test_completed_study_copy_and_paste_preserve_progress(window, repo, qtbot, m
     monkeypatch.setattr(StudyContext, "now", classmethod(lambda cls: context))
     window.set_filter("study17")
     page = window.study_page
+    page.set_global_hidden(False)
     page.complete(entry.id, "study")
     page.toggle_completed(True)
     before = repo.study_backup()

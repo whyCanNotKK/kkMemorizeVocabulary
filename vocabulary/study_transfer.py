@@ -11,7 +11,7 @@ from .transfer import parse_entries, serialize_entries, write_text_atomically
 
 
 FORMAT = 'kkMemorizeVocabulary.study17'
-VERSION = 6
+VERSION = 7
 RECORD_FIELDS = ('group_number', 'stage', 'morning_done', 'afternoon_done', 'last_completed_on')
 
 
@@ -22,6 +22,10 @@ class StudyBackup:
     study_last_add_new_vocabulary: str | None
     group_counter: int
     task_history: list[dict] = field(default_factory=list)
+    new_words_enabled: bool = True
+    words_per_group: int = 10
+    groups_per_day: int = 3
+    hide_word_while_spelling: bool = False
 
 
 def validate_task_history(records):
@@ -117,7 +121,13 @@ def parse_study_backup(content: str) -> StudyBackup:
         if not valid:
             raise ValidationError(f'{name}：学习阶段、日期或完成标记不一致。')
     settings = document['study_settings']
-    _fields(settings, ('study_last_add_new_vocabulary', 'group_counter'), '学习设置')
+    _fields(settings, ('study_last_add_new_vocabulary', 'group_counter', 'new_words_enabled',
+                       'words_per_group', 'groups_per_day', 'hide_word_while_spelling'), '学习设置')
+    for key in ('new_words_enabled', 'hide_word_while_spelling'):
+        if type(settings[key]) is not bool:
+            raise ValidationError(f'学习设置 {key}：必须是true或false。')
+    for key in ('words_per_group', 'groups_per_day'):
+        _integer(settings[key], 1, 1000, f'学习设置 {key}')
     last_draw = settings['study_last_add_new_vocabulary']
     if last_draw is not None:
         _day(last_draw, '最近抽词日期')
@@ -127,7 +137,10 @@ def parse_study_backup(content: str) -> StudyBackup:
     if settings['group_counter'] < max((record['group_number'] for record in records.values()), default=0):
         raise ValidationError('组号计数不能小于已有组号。')
     validate_task_history(document['task_history'])
-    return StudyBackup(words, records, last_draw, settings['group_counter'], document['task_history'])
+    return StudyBackup(words, records, last_draw, settings['group_counter'], document['task_history'],
+                       new_words_enabled=settings['new_words_enabled'],
+                       words_per_group=settings['words_per_group'], groups_per_day=settings['groups_per_day'],
+                       hide_word_while_spelling=settings['hide_word_while_spelling'])
 
 
 def serialize_study_backup(backup: StudyBackup) -> str:
@@ -135,7 +148,11 @@ def serialize_study_backup(backup: StudyBackup) -> str:
     document = {'format': FORMAT, 'version': VERSION, 'words': words, 'task_history': backup.task_history,
                 'study_records': backup.records,
                 'study_settings': {'study_last_add_new_vocabulary': backup.study_last_add_new_vocabulary,
-                                   'group_counter': backup.group_counter}}
+                                   'group_counter': backup.group_counter,
+                                   'new_words_enabled': backup.new_words_enabled,
+                                   'words_per_group': backup.words_per_group,
+                                   'groups_per_day': backup.groups_per_day,
+                                   'hide_word_while_spelling': backup.hide_word_while_spelling}}
     content = json.dumps(document, ensure_ascii=False, indent=2) + '\n'
     parse_study_backup(content)
     return content

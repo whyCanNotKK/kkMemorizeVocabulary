@@ -222,6 +222,8 @@ def add_settings_separator(layout):
 
 
 class SettingsDialog(QDialog):
+    spellingVisibilityChanged = Signal(bool)
+
     def __init__(self, manager, parent=None, *, clear_content=None, set_study_new_words=None):
         super().__init__(parent)
         self.manager = manager
@@ -279,6 +281,19 @@ class SettingsDialog(QDialog):
         self.new_words_toggle.clicked.connect(self.toggle_new_words)
         row.addWidget(self.new_words_toggle)
         layout.addLayout(row)
+        spelling_row = QHBoxLayout()
+        spelling_row.addWidget(QLabel('拼写单词时隐藏单词'))
+        spelling_row.addStretch()
+        self.hide_word_toggle = button('', quiet=True)
+        self.hide_word_toggle.setAutoDefault(False)
+        self.hide_word_toggle.setCheckable(True)
+        self.hide_word_toggle.setFixedSize(28, 30)
+        self.hide_word_toggle.setIconSize(QSize(24, 24))
+        self.hide_word_toggle.setStyleSheet('padding: 0px;')
+        self.update_hide_word_toggle()
+        self.hide_word_toggle.clicked.connect(self.toggle_hide_word)
+        spelling_row.addWidget(self.hide_word_toggle)
+        layout.addLayout(spelling_row)
         self.words_per_group.valueChanged.connect(self.save_study_settings)
         self.groups_per_day.valueChanged.connect(self.save_study_settings)
         add_settings_separator(layout)
@@ -352,6 +367,25 @@ class SettingsDialog(QDialog):
         text = '点击关闭每日新背单词' if enabled else '点击开启每日新背单词'
         self.new_words_toggle.setToolTip(text)
         self.new_words_toggle.setAccessibleName(text)
+
+    def update_hide_word_toggle(self):
+        enabled = self.manager.repository.study_hide_word_while_spelling()
+        self.hide_word_toggle.setChecked(enabled)
+        self.hide_word_toggle.setIcon(icon('study_new_on' if enabled else 'study_new_off'))
+        text = '点击关闭拼写单词时隐藏单词' if enabled else '点击开启拼写单词时隐藏单词'
+        self.hide_word_toggle.setToolTip(text)
+        self.hide_word_toggle.setAccessibleName(text)
+
+    def toggle_hide_word(self, enabled):
+        self.toast.dismiss()
+        try:
+            self.manager.repository.set_study_hide_word_while_spelling(enabled)
+        except Exception as error:
+            self.toast.show_message(str(error), self.hide_word_toggle)
+        else:
+            self.spellingVisibilityChanged.emit(enabled)
+        finally:
+            self.update_hide_word_toggle()
 
     def toggle_new_words(self, enabled):
         self.toast.dismiss()

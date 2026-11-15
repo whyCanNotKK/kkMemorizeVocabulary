@@ -2,8 +2,8 @@
 from datetime import date
 
 import pytest
-from PySide6.QtCore import QEvent, QModelIndex, QPoint, Qt, QUrl
-from PySide6.QtGui import QHelpEvent, QKeyEvent, QTextDocument
+from PySide6.QtCore import QEvent, QModelIndex, QPoint, Qt
+from PySide6.QtGui import QHelpEvent, QKeyEvent
 from PySide6.QtWidgets import QApplication
 
 from vocabulary.domain import RelatedWord, Sense, WordEntry
@@ -114,8 +114,30 @@ def test_reveal_tooltip_only_applies_inside_mask(review_list, monkeypatch):
     assert tips == ["点击查看词性、翻译和关联词"] * 3
 
 
-@pytest.mark.parametrize("down,up", [(Qt.Key.Key_S, Qt.Key.Key_W),
-                                    (Qt.Key.Key_Down, Qt.Key.Key_Up)])
+@pytest.mark.parametrize("key", [Qt.Key.Key_Left, Qt.Key.Key_Right, Qt.Key.Key_W,
+                                Qt.Key.Key_A, Qt.Key.Key_S, Qt.Key.Key_D])
+@pytest.mark.parametrize("review_list", ["pending", "all", "learned"], indirect=True)
+def test_unused_review_keys_preserve_list_state(review_list, qtbot, key):
+    table, entries = review_list
+    table.setFocus()
+    for current in (QModelIndex(), index_for(table, entries[1]),
+                    index_for(table, entries[1], column=3)):
+        table.setCurrentIndex(current)
+        selection = table.selectionModel().selection()
+        scroll = table.verticalScrollBar().value()
+        hidden = [row.hidden for row in table.model().rows]
+        with qtbot.assertNotEmitted(table.revealRequested), qtbot.assertNotEmitted(table.actionRequested):
+            qtbot.keyClick(table, key)
+            QApplication.sendEvent(table, QKeyEvent(
+                QEvent.Type.KeyPress, key, Qt.KeyboardModifier.NoModifier, "", True, 1))
+        assert table.hasFocus()
+        assert table.currentIndex() == current
+        assert table.selectionModel().selection() == selection
+        assert table.verticalScrollBar().value() == scroll
+        assert [row.hidden for row in table.model().rows] == hidden
+
+
+@pytest.mark.parametrize("down,up", [(Qt.Key.Key_Down, Qt.Key.Key_Up)])
 def test_navigation_skips_senses_and_related_words(review_list, qtbot, down, up):
     table, entries = review_list
     for entry in entries[:2]:
@@ -137,6 +159,7 @@ def test_navigation_skips_senses_and_related_words(review_list, qtbot, down, up)
     assert_selected(table, entries[0])
 
 
+@pytest.mark.parametrize("review_list", ["pending", "all", "learned"], indirect=True)
 def test_space_toggles_same_group_and_keeps_focus(review_list, qtbot):
     table, entries = review_list
     table.setCurrentIndex(index_for(table, entries[1]))
@@ -149,7 +172,7 @@ def test_space_toggles_same_group_and_keeps_focus(review_list, qtbot):
     assert_selected(table, entries[1])
     assert table.currentIndex().data(Qt.ItemDataRole.UserRole).hidden
     assert table.hasFocus()
-    qtbot.keyClick(table, Qt.Key.Key_S)
+    qtbot.keyClick(table, Qt.Key.Key_Down)
     assert_selected(table, entries[2])
 
 
@@ -165,6 +188,7 @@ def test_review_keys_do_not_change_form_or_search_selection(window, repo, qtbot)
     assert QApplication.focusWidget() is window.search_box
 
 
+@pytest.mark.parametrize("review_list", ["pending", "all", "learned"], indirect=True)
 def test_space_repeat_and_missing_selection_do_not_toggle(review_list, qtbot):
     table, entries = review_list
     table.setFocus()
@@ -225,10 +249,11 @@ def test_search_keeps_answers_revealed_but_allows_main_word_navigation(window, r
     qtbot.keyClick(table, Qt.Key.Key_Space)
     assert window.revealed == set()
     assert all(not row.hidden for row in window.model.rows)
-    qtbot.keyClick(table, Qt.Key.Key_S)
+    qtbot.keyClick(table, Qt.Key.Key_Down)
     assert_selected(table, entries[1])
 
 
+@pytest.mark.parametrize("review_list", ["pending", "all", "learned"], indirect=True)
 def test_modified_keys_leave_review_commands_alone(review_list, qtbot):
     table, entries = review_list
     table.setCurrentIndex(index_for(table, entries[1]))
@@ -260,7 +285,7 @@ def test_navigation_scrolls_to_main_word_and_space_reveals_whole_group(window, r
     table.setCurrentIndex(index_for(table, entries[0]))
     table.setFocus()
     for _ in range(25):
-        qtbot.keyClick(table, Qt.Key.Key_S)
+        qtbot.keyClick(table, Qt.Key.Key_Down)
     assert_selected(table, entries[25])
     rect = table.visualRect(table.currentIndex())
     assert table.viewport().rect().contains(rect)
@@ -303,7 +328,7 @@ def test_single_reveal_prioritizes_complete_entry(review_list, window, repo, qtb
     position = bar.value()
     assert position > 0
     if trigger == "keyboard":
-        qtbot.keyClick(table, Qt.Key.Key_Return if table.study_mode else Qt.Key.Key_Space)
+        qtbot.keyClick(table, Qt.Key.Key_N if table.study_mode else Qt.Key.Key_Space)
     else:
         mask = table.visualRect(index_for(table, entry, column=2))
         qtbot.mouseClick(table.viewport(), Qt.MouseButton.LeftButton if trigger == "left"
@@ -335,25 +360,25 @@ def test_single_reveal_prioritizes_complete_entry(review_list, window, repo, qtb
     (Qt.Key.Key_Enter, Qt.KeyboardModifier.NoModifier),
     (Qt.Key.Key_Enter, Qt.KeyboardModifier.KeypadModifier),
 ])
-def test_study_enter_reveals_then_completes_parent_word(review_list, window, repo, qtbot, key, modifier):
+def test_study_enter_never_reveals_or_completes_parent_word(review_list, window, repo, qtbot, key, modifier):
     table, entries = review_list
     entry = entries[1]
     table.setCurrentIndex(index_for(table, entry))
     table.setFocus()
     qtbot.keyClick(table, key, modifier)
     assert_selected(table, entry)
-    assert not table.currentIndex().data(Qt.ItemDataRole.UserRole).hidden
+    assert table.currentIndex().data(Qt.ItemDataRole.UserRole).hidden
     assert entry.id in {task.entry.id for task in repo.study_tasks(window.study_page.context)}
     for _ in range(3):
         repeat = QKeyEvent(QEvent.Type.KeyPress, key, modifier, "\r", True, 1)
         QApplication.sendEvent(table, repeat)
     assert_selected(table, entry)  # Holding Enter cannot complete the newly revealed word.
+    table.revealRequested.emit(entry.id, True)
     table.setCurrentIndex(index_for(table, entry, owner=0, sense=1, column=3))
-    with qtbot.waitSignal(table.actionRequested) as signal:
+    with qtbot.assertNotEmitted(table.actionRequested):
         qtbot.keyClick(table, key, modifier)
-    assert signal.args == [entry.id, "study"]
-    assert entry.id not in {row.entry.id for row in table.model().rows}
-    assert entry.id not in {task.entry.id for task in repo.study_tasks(window.study_page.context)}
+    assert entry.id in {row.entry.id for row in table.model().rows}
+    assert entry.id in {task.entry.id for task in repo.study_tasks(window.study_page.context)}
     assert not repo.get(entry.id).learned
     assert table.hasFocus()
 
@@ -390,7 +415,7 @@ def test_study_enter_requires_selection_and_unmodified_press(review_list, window
 
 
 @pytest.mark.parametrize("review_list", ["study17"], indirect=True)
-def test_study_enter_completion_failure_keeps_word_selected(review_list, window, repo, qtbot, monkeypatch):
+def test_study_spelling_completion_failure_keeps_word_selected(review_list, window, repo, qtbot, monkeypatch):
     table, entries = review_list
     table.revealRequested.emit(entries[0].id, True)
     table.setCurrentIndex(index_for(table, entries[0]))
@@ -400,14 +425,14 @@ def test_study_enter_completion_failure_keeps_word_selected(review_list, window,
         raise OSError("无法保存学习进度")
 
     monkeypatch.setattr(repo, "complete_study", fail)
-    qtbot.keyClick(table, Qt.Key.Key_Return)
+    qtbot.keyClicks(table, entries[0].text)
     assert_selected(table, entries[0])
     assert not table.currentIndex().data(Qt.ItemDataRole.UserRole).hidden
     assert window.toast.label.text() == "无法保存学习进度"
 
 
 @pytest.mark.parametrize("review_list", ["study17"], indirect=True)
-def test_study_button_tooltip_shows_enter_keycap(review_list, monkeypatch):
+def test_study_button_tooltip_reflects_visibility(review_list, monkeypatch):
     table, entries = review_list
     tips = []
     monkeypatch.setattr("PySide6.QtWidgets.QToolTip.showText", lambda pos, text, *args: tips.append(text))
@@ -416,13 +441,10 @@ def test_study_button_tooltip_shows_enter_keycap(review_list, monkeypatch):
     event = QHelpEvent(QEvent.Type.ToolTip, point, table.viewport().mapToGlobal(point))
     QApplication.sendEvent(table.viewport(), event)
     assert len(tips) == 1
-    assert 'alt="回车"' in tips[0]
-    source = tips[0].split('src="', 1)[1].split('"', 1)[0]
-    document = QTextDocument()
-    document.setHtml(tips[0])
-    assert document.toPlainText() == "记下 · \ufffc"
-    image = document.resource(QTextDocument.ResourceType.ImageResource, QUrl(source))
-    assert not image.isNull()
+    assert tips[0] == "记下（需先展示释义）"
+    table.revealRequested.emit(entries[0].id, True)
+    QApplication.sendEvent(table.viewport(), event)
+    assert tips[-1] == "记下 · (输入单词拼写)"
 
 
 def test_ctrl_arrows_scroll_without_changing_current_cell_or_group(review_list, window, repo, qtbot):
@@ -508,7 +530,7 @@ def test_ctrl_arrows_in_form_and_search_do_not_scroll_list(window, repo, qtbot):
 
 @pytest.mark.parametrize("review_list", ["study17"], indirect=True)
 @pytest.mark.parametrize("position", [0, 1, 2])
-@pytest.mark.parametrize("trigger", ["mouse", "return", "keypad"])
+@pytest.mark.parametrize("trigger", ["mouse", "spelling"])
 @pytest.mark.parametrize("target_revealed", [False, True])
 def test_study_completion_selects_same_task_position(review_list, window, qtbot, position, trigger,
                                                     target_revealed):
@@ -528,11 +550,8 @@ def test_study_completion_selects_same_task_position(review_list, window, qtbot,
                         pos=dict(table.action_rects(rect))["study"].center())
     else:
         table.setFocus()
-        key = Qt.Key.Key_Return if trigger == "return" else Qt.Key.Key_Enter
-        modifier = (Qt.KeyboardModifier.NoModifier if trigger == "return"
-                    else Qt.KeyboardModifier.KeypadModifier)
-        qtbot.keyClick(table, key, modifier)
-        repeat = QKeyEvent(QEvent.Type.KeyPress, key, modifier, "\r", True, 1)
+        qtbot.keyClicks(table, entry.text)
+        repeat = QKeyEvent(QEvent.Type.KeyPress, Qt.Key.Key_A, Qt.KeyboardModifier.NoModifier, "a", True, 1)
         QApplication.sendEvent(table, repeat)
     assert [task.entry.id for task in window.study_page.tasks] == [item.id for item in remaining]
     assert_selected(table, target)
@@ -541,11 +560,12 @@ def test_study_completion_selects_same_task_position(review_list, window, qtbot,
 
 
 @pytest.mark.parametrize("review_list", ["study17"], indirect=True)
-@pytest.mark.parametrize("trigger", ["mouse", "return", "keypad"])
+@pytest.mark.parametrize("trigger", ["mouse", "spelling"])
 def test_completing_final_study_word_leaves_clean_empty_list(review_list, window, qtbot, trigger):
     table, entries = review_list
     page = window.study_page
     for entry in entries[:-1]:
+        page.reveal(entry.id, True)
         page.complete(entry.id, "study")
     entry = entries[-1]
     table.revealRequested.emit(entry.id, True)
@@ -556,10 +576,7 @@ def test_completing_final_study_word_leaves_clean_empty_list(review_list, window
         qtbot.mouseClick(table.viewport(), Qt.MouseButton.LeftButton,
                         pos=dict(table.action_rects(rect))["study"].center())
     else:
-        key = Qt.Key.Key_Return if trigger == "return" else Qt.Key.Key_Enter
-        modifier = (Qt.KeyboardModifier.NoModifier if trigger == "return"
-                    else Qt.KeyboardModifier.KeypadModifier)
-        qtbot.keyClick(table, key, modifier)
+        qtbot.keyClicks(table, entry.text)
     assert page.tasks == [] and table.model().rowCount() == 0
     assert not table.currentIndex().isValid()
     assert not table.selectionModel().hasSelection()
@@ -603,7 +620,7 @@ def test_navigation_without_selection_uses_visible_main_word(review_list, window
     hidden = [row.hidden for row in table.model().rows]
     table.setFocus()
     for current_entry in (None, entries[-1], expected):
-        for key in (Qt.Key.Key_Up, Qt.Key.Key_Down, Qt.Key.Key_W, Qt.Key.Key_S):
+        for key in (Qt.Key.Key_Up, Qt.Key.Key_Down):
             if current_entry is not None:
                 table.setCurrentIndex(index_for(table, current_entry))
                 table.clearSelection()

@@ -7,6 +7,7 @@ from PySide6.QtWidgets import QToolTip
 
 from vocabulary.domain import RelatedWord, Sense, WordEntry
 from vocabulary.learning import BEIJING, StudyContext, format_study_duration
+from vocabulary.study_input import STUDY_TRANSLATION_HEADER
 from vocabulary.study_history import DURATION_COLUMN
 
 
@@ -79,6 +80,7 @@ def test_learning_interval_hides_only_while_running(window, repo, qtbot, monkeyp
     assert page.load(PM) and page.interval_label.isVisible()
     monkeypatch.setattr('vocabulary.storage.study_timestamp',
                         lambda instant=None: (instant or now).isoformat(timespec='seconds'))
+    page.set_global_hidden(False)
     page.complete(word.id, 'study')
     assert page.timer.history.status == 1
     assert page.interval_label.isVisible()
@@ -126,6 +128,7 @@ def test_marks_do_not_write_duration_and_history_reads_only_saved_time(window, r
     repo.connection.execute('''CREATE TRIGGER no_duration_on_mark BEFORE UPDATE OF duration_seconds ON study_task_history
         BEGIN SELECT RAISE(ABORT,'duration was updated'); END''')
     ticks[0] = 5_400_000_000
+    page.set_global_hidden(False)
     page.complete(words[0].id, 'study')
     assert len(page.tasks) == 2
     assert page.new_count.accessibleName() == '新词：剩余0/1'
@@ -138,9 +141,11 @@ def test_marks_do_not_write_duration_and_history_reads_only_saved_time(window, r
     assert panel.model.index(0, DURATION_COLUMN).data() == '5 s'
     page.toggle_timer()
     ticks[0] += 1_600_000_000
+    page.set_global_hidden(False)
     page.complete(words[1].id, 'study')
     assert page.review_count.accessibleName() == '复习：剩余1/2'
     assert repo.study_task_history(AM).duration_seconds == 5
+    page.set_global_hidden(False)
     page.complete(words[2].id, 'study')
     assert repo.study_task_history(AM).duration_seconds == 7
     assert panel.model.index(0, DURATION_COLUMN).data() == '7 s'
@@ -174,9 +179,11 @@ def test_completed_words_are_below_pending_revealed_and_have_no_mark_actions(win
     qtbot.keyClick(page.table, Qt.Key.Key_Space)
     qtbot.keyClick(page.table, Qt.Key.Key_Space)
     assert not page.timer.running  # Reading a completed word never starts the task clock.
+    page.set_global_hidden(False)
     page.complete(words[1].id, 'study')
     assert page.table.currentIndex().data(Qt.ItemDataRole.UserRole).entry.id == words[2].id
     assert [row.entry.id for row in page.model.rows if row.first] == [words[2].id, words[0].id, words[1].id]
+    page.set_global_hidden(False)
     page.complete(words[2].id, 'study')
     assert not page.tasks and len([row for row in page.model.rows if row.first]) == 3
     assert not page.table.currentIndex().isValid()
@@ -208,7 +215,7 @@ def test_study_stage_column_shows_the_stored_stage_before_and_after_completion(w
     page = window.study_page
     model = page.model
     assert [model.headerData(i, Qt.Orientation.Horizontal) for i in range(model.columnCount())] == [
-        '组', '单词', '词性', '翻译', '周期', '操作']
+        '组', '单词', '词性', STUDY_TRANSLATION_HEADER, '周期', '操作']
     assert window.model.columnCount() == 5
     assert all(row.hidden for row in model.rows)
     assert [model.index(i, 4).data() for i in range(model.rowCount())] == ['1', '2', '15']
@@ -216,6 +223,7 @@ def test_study_stage_column_shows_the_stored_stage_before_and_after_completion(w
     assert not model.flags(model.index(0, 4)) & Qt.ItemFlag.ItemIsEditable
 
     page.toggle_completed(True)
+    page.set_global_hidden(False)
     page.complete(words[2].id, 'study')
     for reload in (False, True):
         if reload:
@@ -255,6 +263,7 @@ def test_mark_resuming_failed_pause_retries_saved_time_without_losing_it(window,
         page.timer.suspend()
     assert not page.timer.running and repo.study_task_history(AM).duration_seconds == 0
     ticks[0] += 100_000_000_000
+    page.set_global_hidden(False)
     page.complete(words[0].id, 'study')
     assert page.timer.running and len(page.tasks) == 2
     assert page.timer.duration_seconds() == repo.study_task_history(AM).duration_seconds == 5
@@ -298,6 +307,7 @@ def test_completed_task_hides_timer_and_restores_it_for_next_period(window, repo
     assert page.timer.running and all(control.isVisible() for control in controls)
     page.toggle_timer()
     assert not page.timer.running and all(control.isVisible() for control in controls)
+    page.set_global_hidden(False)
     page.complete(entry.id, 'study')
     assert repo.study_task_history(AM).status == 1
     assert not page.timer.running
@@ -315,6 +325,7 @@ def test_completed_task_hides_timer_and_restores_it_for_next_period(window, repo
     assert page.reload()
     assert all(control.isVisible() for control in controls)
     assert page.timer_button.isEnabled() and page.timer_button.toolTip() == '开始背单词'
+    page.set_global_hidden(False)
     page.complete(entry.id, 'study')
     assert all(control.isHidden() for control in controls)
 
@@ -358,9 +369,11 @@ def test_failed_completion_keeps_timer_visible(window, repo, monkeypatch):
         raise OSError('locked')
     with monkeypatch.context() as patch:
         patch.setattr(repo, 'complete_study', fail)
+        page.set_global_hidden(False)
         page.complete(entry.id, 'study')
     assert all(control.isVisible() for control in (page.elapsed_icon, page.elapsed_label, page.timer_button))
     assert page.tasks
     assert not page.completion_notice.isVisible()
+    page.set_global_hidden(False)
     page.complete(entry.id, 'study')
     assert all(control.isHidden() for control in (page.elapsed_icon, page.elapsed_label, page.timer_button))

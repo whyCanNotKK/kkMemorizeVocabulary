@@ -40,15 +40,15 @@ def test_f2_edits_current_rows_translation(edit_list, qtbot, owner, sense, colum
     assert field(table) == (entries[0].id, owner, sense, 3)
 
 
-def test_f2_reveals_hidden_entry_and_does_not_complete_it(edit_list, repo, qtbot):
+def test_f2_keeps_hidden_entry_unedited(edit_list, repo, qtbot):
     table, entries = edit_list
     table.revealRequested.emit(entries[0].id, False)
     table.setCurrentIndex(table.model().index(0, 1))
     table.setFocus()
     before = repo.study_backup()
     qtbot.keyClick(table, Qt.Key.Key_F2)
-    assert field(table) == (entries[0].id, -1, 0, 3)
-    assert not table.model().rows[0].hidden
+    assert table.delegate.editor is None
+    assert table.model().rows[0].hidden
     assert repo.study_backup() == before
 
 
@@ -164,7 +164,7 @@ def test_f2_without_selection_does_nothing(edit_list, qtbot):
     assert table.delegate.editor is None
 
 
-def test_f2_can_edit_hidden_search_result(window, repo, qtbot):
+def test_f2_does_not_edit_hidden_search_result(window, repo, qtbot):
     entry = repo.save(WordEntry('alpha', [Sense('n.', 'first')]))
     window.search_box.setText('alpha')
     window.set_global_hidden(True)
@@ -173,8 +173,8 @@ def test_f2_can_edit_hidden_search_result(window, repo, qtbot):
     table.setCurrentIndex(table.model().index(0, 1))
     table.setFocus()
     qtbot.keyClick(table, Qt.Key.Key_F2)
-    assert field(table) == (entry.id, -1, 0, 3)
-    table.delegate.cancel()
+    assert table.delegate.editor is None
+    assert table.model().rows[0].hidden
 
 
 def test_tab_does_not_edit_wrong_entry_when_saved_name_stops_matching_search(window, repo, qtbot):

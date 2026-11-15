@@ -81,6 +81,7 @@ class StudyPage(QWidget):
         self.update_completed_button()
         self.model = WordTableModel(edit_callback, self, study=True)
         self.table = WordTable(self.model, lambda: True)
+        self.table.set_hide_word_while_spelling(repository.study_hide_word_while_spelling())
         self.table.set_page_state("study17", False, 0)
         self.table.empty_text = "当前时段没有待完成的单词\n切换日期或时段后，请点击刷新"
         self.completion_notice = StudyCompletionNotice(
@@ -100,6 +101,7 @@ class StudyPage(QWidget):
         return self.load(StudyContext.now(), generate=True)
 
     def load(self, context, *, generate=False):
+        self.table.reset_study_input()
         if not self.table.delegate.submit():
             return False
         try:
@@ -130,6 +132,7 @@ class StudyPage(QWidget):
         return True
 
     def render(self):
+        self.table.set_hide_word_while_spelling(self.repository.study_hide_word_while_spelling())
         self.update_task_count()
         self.update_timer_button()
         self.update_elapsed()
@@ -229,7 +232,10 @@ class StudyPage(QWidget):
     def complete(self, word_id, action):
         if action != "study" or self.context is None:
             return
+        self.table.reset_study_input()
         if not self.table.delegate.submit():
+            return
+        if word_id not in self.revealed:
             return
         position = next((i for i, task in enumerate(self.tasks) if task.entry.id == word_id), None)
         if position is None:

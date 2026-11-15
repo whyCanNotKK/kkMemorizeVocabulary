@@ -415,6 +415,18 @@ class Repository:
             "SELECT value FROM settings WHERE key='study17.new_words_enabled'").fetchone()
         return row is None or row[0] == '1'
 
+    def study_hide_word_while_spelling(self) -> bool:
+        row = self.connection.execute(
+            "SELECT value FROM settings WHERE key='study17.hide_word_while_spelling'").fetchone()
+        return row is not None and row[0] == '1'
+
+    def set_study_hide_word_while_spelling(self, enabled: bool):
+        if type(enabled) is not bool:
+            raise ValidationError('拼写单词时隐藏单词：必须是布尔值。')
+        with self.connection:
+            self.connection.execute('INSERT OR REPLACE INTO settings(key,value) VALUES (?,?)',
+                                    ('study17.hide_word_while_spelling', '1' if enabled else '0'))
+
     def initialize_study_new_words(self):
         """Run once at application startup, never when opening worker connections."""
         with self.connection:
@@ -561,8 +573,12 @@ class Repository:
             counter = self.connection.execute(
                 "SELECT value FROM settings WHERE key='study17.group_counter'").fetchone()
             history = [dict(row) for row in self.connection.execute('SELECT * FROM study_task_history ORDER BY id')]
+            draw = self.study_draw_settings()
             return StudyBackup(words, records, last_draw[0] if last_draw else None,
-                               int(counter[0]) if counter else 0, history)
+                               int(counter[0]) if counter else 0, history,
+                               new_words_enabled=self.study_new_words_enabled(),
+                               words_per_group=draw.words_per_group, groups_per_day=draw.groups_per_day,
+                               hide_word_while_spelling=self.study_hide_word_while_spelling())
 
     def replace_study_progress(self, backup: StudyBackup):
         """Resolve final local word IDs, then atomically replace progress and its settings."""
@@ -589,6 +605,12 @@ class Repository:
                 ([('study_last_add_new_vocabulary', backup.study_last_add_new_vocabulary)]
                  if backup.study_last_add_new_vocabulary is not None else [])
                 + [('study17.group_counter', str(backup.group_counter))])
+            self.connection.executemany('INSERT OR REPLACE INTO settings(key,value) VALUES (?,?)', [
+                ('study17.new_words_enabled', '1' if backup.new_words_enabled else '0'),
+                ('study17.words_per_group', str(backup.words_per_group)),
+                ('study17.groups_per_day', str(backup.groups_per_day)),
+                ('study17.hide_word_while_spelling', '1' if backup.hide_word_while_spelling else '0'),
+            ])
 
     def complete_study(self, word_id: int, context: StudyContext, *, duration_seconds=0,
                        instant=None) -> tuple[StudyTaskHistory, int] | bool:

@@ -293,6 +293,6 @@ def copy_word_tooltip() -> str:
                               alt="鼠标右键", suffix="单词区域空白处")
 
 
-def study_mark_tooltip() -> str:
-    return _tooltip_with_icon("记下 · ", "enter_key", alt="回车")
+def study_mark_tooltip(hidden=False) -> str:
+    return "记下（需先展示释义）" if hidden else "记下 · (输入单词拼写)"
 

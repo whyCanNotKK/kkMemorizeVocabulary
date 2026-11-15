@@ -9,8 +9,7 @@ from PySide6.QtWidgets import (
 def navigation_step(event):
     if event.modifiers() != Qt.KeyboardModifier.NoModifier:
         return None
-    return {Qt.Key.Key_W: -1, Qt.Key.Key_Up: -1,
-            Qt.Key.Key_S: 1, Qt.Key.Key_Down: 1}.get(event.key())
+    return {Qt.Key.Key_Up: -1, Qt.Key.Key_Down: 1}.get(event.key())
 
 
 class ReviewKeyRouter(QObject):

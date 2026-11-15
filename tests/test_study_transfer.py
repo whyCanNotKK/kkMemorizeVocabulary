@@ -10,7 +10,7 @@ from PySide6.QtWidgets import QApplication, QFileDialog, QMessageBox
 
 from vocabulary.domain import RelatedWord, Sense, ValidationError, WordEntry
 from vocabulary.import_dialog import ImportConflictDialog
-from vocabulary.learning import StudyContext
+from vocabulary.learning import StudyContext, StudyDrawSettings
 from vocabulary.storage import Repository
 from vocabulary.theme import ACCENT
 from vocabulary.study_transfer import (parse_study_backup, read_study_backup,
@@ -82,10 +82,16 @@ def test_read_export_is_one_consistent_snapshot(repo):
         if not changed:
             changed = True
             other.set_flag(word_id, 'learned', True)
+            other.write_study_draw_settings(StudyDrawSettings(17, 4))
+            other.set_study_hide_word_while_spelling(True)
+            other.set_study_new_words_enabled(False, AM)
         return original_get(word_id)
     repo.get = concurrent_get
     try:
-        assert not repo.study_backup().words[0].learned
+        snapshot = repo.study_backup()
+        assert not snapshot.words[0].learned
+        assert (snapshot.words_per_group, snapshot.groups_per_day) == (10, 3)
+        assert not snapshot.hide_word_while_spelling and snapshot.new_words_enabled
         assert original_get(entry.id).learned
     finally:
         other.close()
@@ -145,11 +151,71 @@ def test_empty_snapshot_clears_progress_and_replaces_markers_but_keeps_words(sou
     assert source.study_backup().study_last_add_new_vocabulary is None
 
 
-@pytest.mark.parametrize('version', [1, 2, 3, 4, 5])
+@pytest.mark.parametrize('version', [1, 2, 3, 4, 5, 6, 8])
 def test_old_study_file_is_rejected(document, version):
     document['version'] = version
-    with pytest.raises(ValidationError, match='version: 6'):
+    with pytest.raises(ValidationError, match='version: 7'):
         parse_study_backup(json.dumps(document))
+
+
+@pytest.mark.parametrize('key,invalid', [
+    ('new_words_enabled', 1), ('new_words_enabled', 'false'),
+    ('hide_word_while_spelling', 0), ('hide_word_while_spelling', None),
+    ('words_per_group', 0), ('words_per_group', 1001), ('words_per_group', True),
+    ('groups_per_day', -1), ('groups_per_day', 1.5), ('groups_per_day', '3'),
+])
+def test_v7_setting_types_and_ranges_are_strict(document, key, invalid):
+    document['study_settings'][key] = invalid
+    with pytest.raises(ValidationError):
+        parse_study_backup(json.dumps(document))
+
+
+@pytest.mark.parametrize('key', ['new_words_enabled', 'hide_word_while_spelling',
+                               'words_per_group', 'groups_per_day'])
+def test_v7_missing_settings_are_rejected(document, key):
+    del document['study_settings'][key]
+    with pytest.raises(ValidationError):
+        parse_study_backup(json.dumps(document))
+
+
+@pytest.mark.parametrize('key', ['new_words_enabled', 'hide_word_while_spelling',
+                               'words_per_group', 'groups_per_day'])
+def test_import_setting_failure_rolls_back_progress_history_and_all_settings(source, repo, key):
+    source.write_study_draw_settings(StudyDrawSettings(17, 4))
+    source.set_study_hide_word_while_spelling(True)
+    source.set_study_new_words_enabled(False, AM)
+    backup = parse_study_backup(serialize_study_backup(source.study_backup()))
+    add(repo, 'local')
+    repo.prepare_study(AM)
+    repo.import_entries(backup.words)
+    before = repo.study_backup()
+    repo.connection.execute(f"""CREATE TRIGGER fail_import_setting BEFORE INSERT ON settings
+        WHEN NEW.key='study17.{key}' BEGIN SELECT RAISE(ABORT,'setting failed'); END""")
+    with pytest.raises(sqlite3.IntegrityError, match='setting failed'):
+        repo.replace_study_progress(backup)
+    assert repo.study_backup() == before
+
+
+def test_v7_roundtrip_restores_all_preferences_without_drawing(source, repo):
+    source.write_study_draw_settings(StudyDrawSettings(17, 4))
+    source.set_study_hide_word_while_spelling(True)
+    source.set_study_new_words_enabled(False, AM)
+    content = serialize_study_backup(source.study_backup())
+    assert json.loads(content)['version'] == 7
+    backup = parse_study_backup(content)
+    repo.import_entries(backup.words)
+    repo.replace_study_progress(backup)
+    snapshot = repo.study_backup()
+    assert snapshot.records == backup.records and snapshot.task_history == backup.task_history
+    assert repo.study_draw_settings() == StudyDrawSettings(17, 4)
+    assert repo.study_hide_word_while_spelling()
+    assert not repo.study_new_words_enabled()
+    reopened = Repository(repo.path)
+    try:
+        assert reopened.study_backup() == snapshot
+        assert reopened.connection.execute('PRAGMA user_version').fetchone()[0] == 10
+    finally:
+        reopened.close()
 
 
 def test_empty_draw_backup_allows_later_draw_after_restore(repo, source):
@@ -191,7 +257,7 @@ def test_invalid_backup_rejected_before_import(document, corruption):
 def test_duplicate_json_keys_custom_groups_and_bad_stage_dates(document):
     content = json.dumps(document)
     with pytest.raises(ValidationError):
-        parse_study_backup(content.replace('"version": 6', '"version": 6, "version": 6'))
+        parse_study_backup(content.replace('"version": 7', '"version": 7, "version": 7'))
     large_group = deepcopy(document)
     for i in range(10):
         name = f'beta{i}'
@@ -269,6 +335,9 @@ def import_ui(window, monkeypatch, tmp_path, backup, mode='full'):
 
 @pytest.mark.parametrize('mode', ['full', 'words', 'cancel'])
 def test_ui_import_modes(source, window, monkeypatch, tmp_path, mode):
+    source.write_study_draw_settings(StudyDrawSettings(17, 4))
+    source.set_study_hide_word_while_spelling(True)
+    source.set_study_new_words_enabled(False, AM)
     add(window.repository, 'local')
     page = enter(window, monkeypatch, AM)
     before = window.repository.study_backup()
@@ -277,6 +346,10 @@ def test_ui_import_modes(source, window, monkeypatch, tmp_path, mode):
     assert not errors
     if mode == 'full':
         assert window.repository.study_backup().records == source.study_backup().records
+        assert window.repository.study_draw_settings() == StudyDrawSettings(17, 4)
+        assert window.repository.study_hide_word_while_spelling()
+        assert not window.repository.study_new_words_enabled()
+        assert page.table.hide_word_while_spelling
         assert page.tasks == []
         assert len(window.repository.list_entries()) == 2
     elif mode == 'words':

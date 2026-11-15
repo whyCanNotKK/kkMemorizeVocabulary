@@ -2,10 +2,10 @@ import pytest
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QFont, QImage, QPainter, QTextDocument
 
-from vocabulary.theme import copy_word_tooltip, study_mark_tooltip
+from vocabulary.theme import copy_word_tooltip
 
 
-@pytest.mark.parametrize("tooltip", [copy_word_tooltip, study_mark_tooltip])
+@pytest.mark.parametrize("tooltip", [copy_word_tooltip])
 def test_tooltip_icon_and_text_have_the_same_visible_center(qapp, tooltip):
     document = QTextDocument()
     font = QFont("Microsoft YaHei UI")

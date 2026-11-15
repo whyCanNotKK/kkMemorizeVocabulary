@@ -74,6 +74,7 @@ def test_task_counter_shows_remaining_on_right(window, repo, qtbot, monkeypatch,
     assert page.elapsed_label.geometry().right() < page.timer_button.geometry().left()
     assert page.new_count.geometry().right() < page.completed_button.geometry().left()
     assert page.completed_button.geometry().right() >= page.width() - 20
+    page.set_global_hidden(False)
     page.complete(entries[0].id, "study")
     assert page.new_count.accessibleName() == '新词：剩余2/3'
     window.grab().save(str(tmp_path / "study-task-counter.png"))
@@ -82,11 +83,13 @@ def test_task_counter_shows_remaining_on_right(window, repo, qtbot, monkeypatch,
     window.set_filter("study17")
     assert page.new_count.accessibleName() == '新词：剩余2/3'
     for entry in entries[1:]:
+        page.set_global_hidden(False)
         page.complete(entry.id, "study")
     assert page.new_count.accessibleName() == '新词：剩余0/3'
     monkeypatch.setattr(StudyContext, "now", classmethod(lambda cls: PM))
     assert page.reload() and page.new_count.accessibleName() == '新词：剩余3/3'
     for entry in entries:
+        page.set_global_hidden(False)
         page.complete(entry.id, "study")
     assert page.new_count.accessibleName() == '新词：剩余0/3'
     assert page.reload() and page.new_count.accessibleName() == '新词：剩余0/3'
@@ -106,6 +109,7 @@ def test_counter_empty_and_failures_preserve_previous_value(window, repo, monkey
         raise OSError("locked")
 
     monkeypatch.setattr(repo, "complete_study", fail)
+    page.set_global_hidden(False)
     page.complete(entry.id, "study")
     assert page.new_count.text() == before
     monkeypatch.setattr(repo, "study_task_total", fail)

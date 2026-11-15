@@ -7,7 +7,7 @@ from html import escape
 
 import shiboken6
 from PySide6.QtCore import QAbstractTableModel, QEasingCurve, QEvent, QItemSelection, QItemSelectionModel, QModelIndex, QPoint, QPointF, QPersistentModelIndex, QRect, QRectF, QSize, Qt, QTimer, QVariantAnimation, Signal
-from PySide6.QtGui import QColor, QCursor, QFont, QFontMetricsF, QPainter, QPainterPath, QPen, QTextDocument, QTextOption
+from PySide6.QtGui import QColor, QCursor, QFont, QFontMetricsF, QPainter, QPainterPath, QPen, QTextCharFormat, QTextDocument, QTextLayout, QTextOption
 from PySide6.QtWidgets import (
     QAbstractItemView, QAbstractSlider, QApplication, QHeaderView, QLineEdit, QPlainTextEdit,
     QPushButton, QStyle, QStyledItemDelegate, QStyleOptionViewItem, QTableView, QToolTip,
@@ -16,6 +16,7 @@ from PySide6.QtWidgets import (
 from .domain import POS_OPTIONS, RelatedWord, WordEntry
 from .drag_reorder import ANIMATION_MS, edge_scroll_delta, group_positions, insertion_index
 from .review_navigation import navigation_step
+from .study_input import STUDY_TRANSLATION_HEADER, StudyInput, matches_pos
 from .table_style import WordGroupStyle
 from .table_header import WordTableHeader
 from .word_name_editor import WordNameEditor
@@ -72,7 +73,8 @@ class WordTableModel(QAbstractTableModel):
         self.rows = []
         self.edit_callback = edit_callback
         study_headers = (STUDY_STAGE_HEADER,) if study else ()
-        self.headers = ("组" if study else "", "单词", "词性", "翻译", *study_headers, "操作")
+        self.headers = ("组" if study else "", "单词", "词性",
+                        STUDY_TRANSLATION_HEADER if study else "翻译", *study_headers, "操作")
         self.action_column = len(self.headers) - 1
         self.study_tasks = {} if study else None
         self.study_completed_ids = set()
@@ -140,6 +142,8 @@ class WordTableModel(QAbstractTableModel):
     def headerData(self, section, orientation, role=Qt.ItemDataRole.DisplayRole):
         if orientation == Qt.Orientation.Horizontal:
             if role == Qt.ItemDataRole.DisplayRole:
+                return self.headers[section]
+            if self.study_tasks is not None and section == 3 and role == Qt.ItemDataRole.ToolTipRole:
                 return self.headers[section]
             if (self.study_tasks is not None and section in (0, STUDY_STAGE_COLUMN)
                     and role == Qt.ItemDataRole.TextAlignmentRole):
@@ -316,6 +320,10 @@ class WordDelegate(QStyledItemDelegate):
     def word_tooltip(self, index):
         if index.column() != 1 or index.data(Qt.ItemDataRole.UserRole) is None:
             return ''
+        row = index.data(Qt.ItemDataRole.UserRole)
+        if (row.first and self.view.hide_word_while_spelling
+                and self.view.study_input.entry_id == row.entry.id and self.view.study_input.position):
+            return ''
         return self.name_layout(index, self.view.visualRect(index), self.view.font())[2]
 
     def word_hit(self, index, point):
@@ -392,7 +400,35 @@ class WordDelegate(QStyledItemDelegate):
                     x, y = int(rect.left()) + 12, int(rect.top()) + top + 3
                     draw_related_arrow(painter, x, y)
                     painter.setPen(QColor("#bdc8d5"))
-                painter.drawText(area, Qt.AlignmentFlag.AlignTop, text)
+                matched = self.view.study_input.position if (
+                    self.view.study_mode and row.first and not row.hidden
+                    and self.view.study_input.entry_id == row.entry.id) else 0
+                if self.view.study_mode and row.first:
+                    if matched and self.view.hide_word_while_spelling:
+                        text = QFontMetricsF(font).elidedText(
+                            row.entry.text[:matched], Qt.TextElideMode.ElideRight, max(0, area.width()))
+                    layout = QTextLayout(text, font)
+                    text_option = QTextOption()
+                    text_option.setWrapMode(QTextOption.WrapMode.NoWrap)
+                    layout.setTextOption(text_option)
+                    color = QTextCharFormat()
+                    color.setForeground(QColor(GOLD))
+                    span = QTextLayout.FormatRange()
+                    span.start = 0
+                    visible = text[:-1] if text != row.entry.text and text.endswith("…") else text
+                    # QTextLayout offsets use UTF-16, whereas matching uses Python characters.
+                    span.length = len(visible[:matched].encode("utf-16-le")) // 2
+                    span.format = color
+                    layout.setFormats([span])
+                    layout.beginLayout()
+                    layout.createLine().setLineWidth(area.width())
+                    layout.endLayout()
+                    painter.save()
+                    painter.setClipRect(area, Qt.ClipOperation.IntersectClip)
+                    layout.draw(painter, area.topLeft())
+                    painter.restore()
+                else:
+                    painter.drawText(area, Qt.AlignmentFlag.AlignTop, text)
                 phonetic = self.phonetic_layout(index, rect, option.font)
                 if phonetic is not None:
                     font, text, area = phonetic
@@ -758,6 +794,8 @@ class WordTable(QTableView):
         self.reorder_enabled = True
         self.search_active = False
         self.study_mode = False
+        self.study_input = StudyInput()
+        self.hide_word_while_spelling = False
         self.empty_text = None
         self._drag_candidate = None
         self._related_drag = None
@@ -772,6 +810,8 @@ class WordTable(QTableView):
         self.action_column = model.action_column
         self.setModel(model)
         self.delegate = WordDelegate(self, before_edit)
+        model.modelAboutToBeReset.connect(self.reset_study_input)
+        self.delegate.editingChanged.connect(self.reset_study_input)
         self.setItemDelegate(self.delegate)
         self.setShowGrid(False)
         self.setWordWrap(True)
@@ -789,6 +829,7 @@ class WordTable(QTableView):
         self.verticalHeader().setMinimumSectionSize(18)
         self.setHorizontalHeader(WordTableHeader(self))
         header = self.horizontalHeader()
+        header.setTextElideMode(Qt.TextElideMode.ElideRight)
         header.setDefaultAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
         header.setMinimumSectionSize(self.MIN_WORD_WIDTH)
         self.pos_badge_width = max(self.fontMetrics().horizontalAdvance(pos) for pos, _ in POS_OPTIONS) + 12
@@ -948,6 +989,10 @@ class WordTable(QTableView):
 
     def currentChanged(self, current, previous):
         super().currentChanged(current, previous)
+        row = current.data(Qt.ItemDataRole.UserRole)
+        if self.study_input.entry_id is not None and (
+                row is None or row.entry.id != self.study_input.entry_id):
+            self.reset_study_input()
         self.viewport().update()
 
     def cancel_pending_copy(self):
@@ -962,6 +1007,7 @@ class WordTable(QTableView):
             self.copyRequested.emit(index.data())
 
     def hideEvent(self, event):
+        self.reset_study_input()
         self.cancel_pending_copy()
         self.cancel_drag()
         super().hideEvent(event)
@@ -988,6 +1034,7 @@ class WordTable(QTableView):
             return
         indexes = self.selectionModel().selectedIndexes()
         if not indexes:
+            self.reset_study_input()
             return
         row = indexes[0].data(Qt.ItemDataRole.UserRole)
         if row is None:
@@ -1340,6 +1387,7 @@ class WordTable(QTableView):
         return QRect(rect.left() + 6, rect.top() + row.top_padding, 20, 20).contains(point)
 
     def _begin_drag(self, point):
+        self.reset_study_input()
         entry_id, origin = self._drag_candidate
         self._drag_groups = []
         self._drag_static = []
@@ -1485,13 +1533,21 @@ class WordTable(QTableView):
                 self.verticalScrollBar().triggerAction(action)
                 event.accept()
                 return
+            if self.study_mode and self._study_key(event):
+                event.accept()
+                return
             if modifiers != Qt.KeyboardModifier.NoModifier:
                 super().keyPressEvent(event)
+                return
+            # Suppress Qt's cell navigation and incremental letter search here.
+            if key in (Qt.Key.Key_Left, Qt.Key.Key_Right, Qt.Key.Key_W,
+                       Qt.Key.Key_A, Qt.Key.Key_S, Qt.Key.Key_D):
+                event.accept()
                 return
             if key == Qt.Key.Key_F2:
                 current = self.currentIndex()
                 row = current.data(Qt.ItemDataRole.UserRole)
-                if (not event.isAutoRepeat() and row is not None
+                if (not event.isAutoRepeat() and row is not None and not row.hidden
                         and self.selectionModel().isSelected(current)):
                     self.edit_field((row.entry.id, row.owner, row.sense, 3))
                 event.accept()
@@ -1501,24 +1557,75 @@ class WordTable(QTableView):
                 self.navigate_entries(step)
                 event.accept()
                 return
-            study_enter = self.study_mode and key in (Qt.Key.Key_Return, Qt.Key.Key_Enter)
-            if key == Qt.Key.Key_Space or study_enter:
+            if key == Qt.Key.Key_Space:
                 current = self.currentIndex()
                 row = current.data(Qt.ItemDataRole.UserRole)
                 if (not event.isAutoRepeat() and row is not None
                         and self.selectionModel().isSelected(current)):
-                    if study_enter and row.entry.id in self.model().study_completed_ids:
-                        event.accept()
-                        return
-                    if study_enter and not row.hidden:
-                        self.actionRequested.emit(row.entry.id, "study")
-                    else:
-                        self.set_entry_revealed(row.entry.id, row.hidden)
+                    self.set_entry_revealed(row.entry.id, row.hidden)
                 event.accept()
                 return
         super().keyPressEvent(event)
 
+    def reset_study_input(self):
+        self.study_input.reset()
+        self.viewport().update()
+
+    def set_hide_word_while_spelling(self, enabled):
+        if self.hide_word_while_spelling != enabled:
+            self.hide_word_while_spelling = enabled
+            self.reset_study_input()
+
+    def _study_key(self, event):
+        allowed = Qt.KeyboardModifier.ShiftModifier | Qt.KeyboardModifier.KeypadModifier
+        if event.modifiers() & ~allowed:
+            return False
+        key = event.key()
+        text = event.text()
+        controls = (Qt.Key.Key_Return, Qt.Key.Key_Enter, Qt.Key.Key_Space,
+                    Qt.Key.Key_Backspace, Qt.Key.Key_Escape, Qt.Key.Key_Left, Qt.Key.Key_Right)
+        if key not in controls and not text:
+            return False
+        # Function/navigation keys retain their existing handlers.
+        if key not in controls and not all(character.isprintable() for character in text):
+            return False
+        if event.isAutoRepeat():
+            return True
+        current = self.currentIndex()
+        row = current.data(Qt.ItemDataRole.UserRole)
+        if (row is None or not self.selectionModel().isSelected(current)
+                or not self.can_navigate_entries()):
+            return True
+        if key in (Qt.Key.Key_Return, Qt.Key.Key_Enter, Qt.Key.Key_Left, Qt.Key.Key_Right):
+            return True
+        if key in (Qt.Key.Key_Backspace, Qt.Key.Key_Escape):
+            self.reset_study_input()
+            return True
+        completed = row.entry.id in self.model().study_completed_ids
+        if row.hidden:
+            if not completed and 0 <= key < 128 and matches_pos(chr(key), row.entry.senses):
+                self.set_entry_revealed(row.entry.id, True)
+        elif len(text) == 1:
+            if completed:
+                if text == " ":
+                    self.set_entry_revealed(row.entry.id, False)
+                return True
+            result = self.study_input.feed(row.entry.id, row.entry.text, text)
+            self.viewport().update()
+            if result == "hide":
+                self.set_entry_revealed(row.entry.id, False)
+            elif result == "complete":
+                self.actionRequested.emit(row.entry.id, "study")
+        return True
+
+    def inputMethodEvent(self, event):
+        if self.study_mode and self.hasFocus() and self.delegate.editor is None:
+            event.accept()
+            return
+        super().inputMethodEvent(event)
+
     def focusOutEvent(self, event):
+        self.reset_study_input()
         self.cancel_drag()
         super().focusOutEvent(event)
 
@@ -1625,7 +1732,7 @@ class WordTable(QTableView):
                 elif index.column() == self.action_column and row.first:
                     labels = {"copy": copy_word_tooltip(),
                               "learned": learned_action_label(row.entry.learned),
-                              "study": study_mark_tooltip(),
+                              "study": study_mark_tooltip(row.hidden),
                               "edit": EDIT_WORD_LABEL, "trash": "删除单词",
                               "drag": "按住拖动整个词条" if self.reorder_enabled else "搜索时不可调整排序"}
                     for name, rect in self.action_rects(self.visualRect(index), row):

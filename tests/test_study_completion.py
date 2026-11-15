@@ -19,6 +19,7 @@ def finish(window, repo, monkeypatch):
     window.set_filter('study17')
     page = window.study_page
     assert not page.completion_notice.isVisible()
+    page.set_global_hidden(False)
     page.complete(entry.id, 'study')
     assert page.completion_notice.isVisible()
     return page, entry, now

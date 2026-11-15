@@ -279,6 +279,7 @@ def test_study_ui_masks_groups_reveal_inline_edit_without_master_actions(window,
     window.set_global_hidden(True)
     assert all(row.hidden for row in page.model.rows)
     index = page.model.index(0, page.model.action_column)
+    page.set_global_hidden(False)
     rect = dict(page.table.action_rects(page.table.visualRect(index)))['study']
     qtbot.mouseClick(page.table.viewport(), Qt.MouseButton.LeftButton, pos=rect.center())
     assert len(page.tasks) == 1
@@ -299,6 +300,7 @@ def test_page_clock_only_changes_on_refresh_and_reentry(window, qtbot, monkeypat
     assert page.context == AM
     qtbot.mouseClick(page.refresh_button, Qt.MouseButton.LeftButton)
     assert page.context == PM and len(page.tasks) == 1
+    page.set_global_hidden(False)
     page.complete(entry.id, 'study')
     assert progress(window.repository, entry.id)['last_completed_on'] == DAY.isoformat()
     assert page.tasks == []
@@ -317,6 +319,7 @@ def test_ui_completion_and_refresh_failures_keep_projection(window, monkeypatch)
     def fail(*args):
         raise sqlite3.OperationalError('test write failure')
     monkeypatch.setattr(window.repository, 'complete_study', fail)
+    page.set_global_hidden(False)
     page.complete(entry.id, 'study')
     assert len(page.tasks) == 1 and not progress(window.repository, entry.id)['morning_done']
     monkeypatch.setattr(StudyContext, 'now', classmethod(lambda cls: PM))

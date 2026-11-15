@@ -1086,6 +1086,7 @@ class MainWindow(QMainWindow):
         try:
             dialog = SettingsDialog(self.shortcuts, self, clear_content=self.clear_content,
                                     set_study_new_words=self.set_study_new_words)
+            dialog.spellingVisibilityChanged.connect(self.study_page.table.set_hide_word_while_spelling)
             dialog.exec()
             dialog.deleteLater()
         finally:
