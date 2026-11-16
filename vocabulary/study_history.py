@@ -274,13 +274,14 @@ class StudyHistoryPanel(QFrame):
         self.timer = timer
         self.collapsed = True
         self.setObjectName('panel')
+        self.setProperty('section', 'bottom')
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(16, 10, 16, 12)
+        layout.setContentsMargins(0, 10, 0, 12)
         layout.setSpacing(8)
         header = QWidget()
         header.setFixedHeight(32)
         header_layout = QGridLayout(header)
-        header_layout.setContentsMargins(0, 0, 0, 0)
+        header_layout.setContentsMargins(12, 0, 12, 0)
         self.title = QLabel('背单词记录')
         self.title.setObjectName('section')
         header_layout.addWidget(self.title, 0, 0, Qt.AlignmentFlag.AlignLeft)

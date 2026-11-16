@@ -16,7 +16,9 @@ GOLD = "#efc578"
 STYLESHEET = """
 QWidget { color: #e8edf4; font-family: 'Microsoft YaHei UI', 'PingFang SC', 'Noto Sans CJK SC', sans-serif; font-size: 13px; }
 QMainWindow, QDialog { background: #171b22; }
-QFrame#panel { background: #1e242d; border: 1px solid #303945; border-radius: 12px; }
+QWidget#workspace { background: #171b22; }
+QFrame#panel { background: #1e242d; border: none; border-radius: 0; }
+QFrame#panel[section="bottom"] { border-top: 1px solid #36404e; }
 QFrame#conflictCard { background: #1e242d; border: 1px solid #384352; border-radius: 12px; }
 QFrame#conflictCard:hover, QFrame#conflictCard:focus { background: #25342f; border-color: #a4ddc5; }
 QLabel#title { font-size: 24px; font-weight: 600; }

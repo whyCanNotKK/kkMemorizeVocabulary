@@ -33,6 +33,7 @@ class StudyPage(QWidget):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         toolbar = QHBoxLayout()
+        toolbar.setContentsMargins(12, 0, 12, 0)
         self.refresh_button = button("", quiet=True)
         self.refresh_button.setIcon(icon("refresh"))
         self.refresh_button.setFixedSize(36, 36)
