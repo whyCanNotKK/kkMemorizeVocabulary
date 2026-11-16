@@ -125,6 +125,7 @@ class MainWindow(QMainWindow):
         self.study_page.table.delegate.contentRemoved.connect(self.inline_content_removed)
         self.study_page.table.editPreparationRequested.connect(self.prepare_list_edit)
         self.study_page.table.copyRequested.connect(self.copy_text)
+        self.study_page.table.studyCycleRestartRequested.connect(lambda: self.set_global_hidden(True))
         for table in (self.table, self.study_page.table):
             table.wholeWordCopyRequested.connect(self.copy_whole_word)
             table.pasteRejected.connect(self.toast_paste_error)

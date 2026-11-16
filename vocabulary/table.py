@@ -782,6 +782,7 @@ class WordTable(QTableView):
     relatedMoveRequested = Signal(int, int, int)
     senseMoveRequested = Signal(int, int, int, int)
     shuffleRequested = Signal()
+    studyCycleRestartRequested = Signal()
 
     def __init__(self, model, before_edit, parent=None):
         super().__init__(parent)
@@ -1592,19 +1593,19 @@ class WordTable(QTableView):
         source = next((row for row in rows if row.first and row.entry.id == entry_id), None)
         if source is None or entry_id not in pending:
             return
+        last = entry_id == pending[-1]
         if source.hidden:
             self.set_entry_revealed(entry_id, True)
             source = next((row for row in self.model().rows if row.first and row.entry.id == entry_id), None)
             if source is None or source.hidden:
                 return
-        current = self.currentIndex()
-        current_row = current.data(Qt.ItemDataRole.UserRole)
-        if (len(pending) == 1 and current_row is not None and current_row.entry.id == entry_id
-                and self.selectionModel().isSelected(current)):
-            self.setFocus()
-            return
+            if last:
+                self.setFocus()
+                return
         self.cancel_pending_copy()
         self.reset_study_input()
+        if last:
+            self.studyCycleRestartRequested.emit()
         self.select_entry(pending[(pending.index(entry_id) + 1) % len(pending)], scroll=True)
         self.setFocus()
 
