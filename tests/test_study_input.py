@@ -53,7 +53,7 @@ def test_pos_keys_reveal_only_matching_main_senses(practice, window, repo, qtbot
 def test_hidden_keys_and_mouse_mark_cannot_complete(practice, window, repo, qtbot):
     table, entry = practice
     before = repo.study_backup()
-    for key in (Qt.Key.Key_Space, Qt.Key.Key_Return, Qt.Key.Key_Enter, Qt.Key.Key_V,
+    for key in (Qt.Key.Key_Space, Qt.Key.Key_V,
                 Qt.Key.Key_2, Qt.Key.Key_Left, Qt.Key.Key_Right):
         qtbot.keyClick(table, key)
     index = table.currentIndex().siblingAtColumn(table.action_column)
@@ -100,13 +100,10 @@ def test_space_error_is_consumed_and_next_space_hides(practice, qtbot):
 
 
 @pytest.mark.parametrize("reset_key", [Qt.Key.Key_Backspace, Qt.Key.Key_Escape])
-def test_reset_keys_and_enter_preserves_progress(practice, qtbot, reset_key):
+def test_reset_keys_clear_progress(practice, qtbot, reset_key):
     table, entry = practice
     qtbot.keyClicks(table, "nAb")
-    for key, modifier in ((Qt.Key.Key_Return, Qt.KeyboardModifier.NoModifier),
-                          (Qt.Key.Key_Enter, Qt.KeyboardModifier.KeypadModifier)):
-        qtbot.keyClick(table, key, modifier)
-        assert table.study_input.position == 2
+    assert table.study_input.position == 2
     qtbot.keyClick(table, reset_key)
     assert table.study_input.position == 0
     assert not row_for(table, entry).hidden

@@ -135,12 +135,12 @@ def draw_symbol(p: QPainter, name: str, rect: QRectF, color: str):
         p.drawRoundedRect(QRectF(-3, -4, 11, 13), 1.5, 1.5)
         p.drawPolyline(QPolygonF([QPointF(-6, 5), QPointF(-8, 5), QPointF(-8, -9),
                                   QPointF(4, -9), QPointF(4, -7)]))
-    elif name == "mouse_right":
+    elif name in {"mouse_left", "mouse_right"}:
         body = QPainterPath()
         body.addRoundedRect(QRectF(-8, -11, 16, 22), 6, 6)
         p.save()
         p.setClipPath(body, Qt.ClipOperation.IntersectClip)
-        p.fillRect(QRectF(0, -11, 8, 9), QColor(ACCENT))
+        p.fillRect(QRectF(-8 if name == "mouse_left" else 0, -11, 8, 9), QColor(ACCENT))
         p.restore()
         p.drawPath(body)
         p.drawLine(QPointF(-8, -2), QPointF(8, -2))
@@ -267,7 +267,7 @@ def icon(name: str, color: str = MUTED, disabled_color: str | None = None) -> QI
     return result
 
 
-@lru_cache(maxsize=2)
+@lru_cache(maxsize=8)
 def _tooltip_icon_url(name: str) -> str:
     image = QByteArray()
     buffer = QBuffer(image)
@@ -278,12 +278,16 @@ def _tooltip_icon_url(name: str) -> str:
     return f"data:image/png;base64,{encoded}"
 
 
-def _tooltip_with_icon(text: str, icon_name: str, *, alt: str, suffix: str = "") -> str:
+def _tooltip_icon(icon_name: str, alt: str) -> str:
     # In Qt rich text, middle places these padded icons below the text's visible center.
     # Align the image box to the line top so the drawn icon centers on the glyphs.
+    return (f'<img width="18" height="18" style="vertical-align:top" alt="{alt}" '
+            f'src="{_tooltip_icon_url(icon_name)}"/>')
+
+
+def _tooltip_with_icon(text: str, icon_name: str, *, alt: str, suffix: str = "") -> str:
     return (f'<p style="white-space:nowrap; margin:0">{text}'
-            f'<img width="18" height="18" style="vertical-align:top" alt="{alt}" '
-            f'src="{_tooltip_icon_url(icon_name)}"/>{suffix}</p>')
+            f'{_tooltip_icon(icon_name, alt)}{suffix}</p>')
 
 
 def copy_word_tooltip() -> str:
@@ -294,5 +298,9 @@ def copy_word_tooltip() -> str:
 
 
 def study_mark_tooltip(hidden=False) -> str:
-    return "记下（需先展示释义）" if hidden else "记下 · (输入单词拼写)"
+    first = ('记下（需先展示释义）' if hidden else
+             f'记下 · {_tooltip_icon("mouse_left", "鼠标左键")} · [单词拼写]')
+    return (f'<p style="white-space:nowrap; margin:0">{first}</p>'
+            f'<p style="white-space:nowrap; margin:0">跳过 · '
+            f'{_tooltip_icon("mouse_right", "鼠标右键")} · {_tooltip_icon("enter_key", "回车")}</p>')
 

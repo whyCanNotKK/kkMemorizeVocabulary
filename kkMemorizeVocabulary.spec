@@ -1,8 +1,14 @@
 from pathlib import Path
+import sys
 
 root = Path(SPECPATH)
+runtime_bin = Path(sys.base_prefix) / 'Library' / 'bin'
+runtime_binaries = [(str(runtime_bin / name), '.') for name in (
+    'sqlite3.dll', 'ffi.dll', 'LIBBZ2.dll', 'liblzma.dll',
+    'libssl-3-x64.dll', 'libcrypto-3-x64.dll',
+) if (runtime_bin / name).is_file()]
 a = Analysis(
-    [str(root / 'main.py')], pathex=[str(root)], binaries=[],
+    [str(root / 'main.py')], pathex=[str(root)], binaries=runtime_binaries,
     datas=[(str(root / 'docs' / '项目设计说明.md'), 'docs'),
            (str(root / 'vocabulary' / 'migrations' / '*.sql'), 'vocabulary/migrations')],
     hiddenimports=['vocabulary.smoke'], hookspath=[], hooksconfig={}, runtime_hooks=[],

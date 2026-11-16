@@ -1277,6 +1277,13 @@ class WordTable(QTableView):
         if event.button() == Qt.MouseButton.RightButton:
             if index.isValid():
                 row = index.data(Qt.ItemDataRole.UserRole)
+                if self.study_mode and index.column() == self.action_column and row.first:
+                    actions = self.action_rects(self.visualRect(index), row)
+                    if any(name == 'study' and rect.contains(event.position().toPoint())
+                           for name, rect in actions):
+                        self.skip_study_entry(row.entry.id)
+                        event.accept()
+                        return
                 if self._right_copy_hit(index, row, event.position().toPoint()):
                     self._copy_word_by_mouse(row)
                 else:
@@ -1576,6 +1583,31 @@ class WordTable(QTableView):
             self.hide_word_while_spelling = enabled
             self.reset_study_input()
 
+    def skip_study_entry(self, entry_id):
+        if not self.study_mode or not self.delegate.submit() or not self.can_navigate_entries():
+            return
+        rows = self.model().rows
+        pending = [row.entry.id for row in rows
+                   if row.first and row.entry.id not in self.model().study_completed_ids]
+        source = next((row for row in rows if row.first and row.entry.id == entry_id), None)
+        if source is None or entry_id not in pending:
+            return
+        if source.hidden:
+            self.set_entry_revealed(entry_id, True)
+            source = next((row for row in self.model().rows if row.first and row.entry.id == entry_id), None)
+            if source is None or source.hidden:
+                return
+        current = self.currentIndex()
+        current_row = current.data(Qt.ItemDataRole.UserRole)
+        if (len(pending) == 1 and current_row is not None and current_row.entry.id == entry_id
+                and self.selectionModel().isSelected(current)):
+            self.setFocus()
+            return
+        self.cancel_pending_copy()
+        self.reset_study_input()
+        self.select_entry(pending[(pending.index(entry_id) + 1) % len(pending)], scroll=True)
+        self.setFocus()
+
     def _study_key(self, event):
         allowed = Qt.KeyboardModifier.ShiftModifier | Qt.KeyboardModifier.KeypadModifier
         if event.modifiers() & ~allowed:
@@ -1596,7 +1628,11 @@ class WordTable(QTableView):
         if (row is None or not self.selectionModel().isSelected(current)
                 or not self.can_navigate_entries()):
             return True
-        if key in (Qt.Key.Key_Return, Qt.Key.Key_Enter, Qt.Key.Key_Left, Qt.Key.Key_Right):
+        if key in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
+            if not event.modifiers() & ~Qt.KeyboardModifier.KeypadModifier:
+                self.skip_study_entry(row.entry.id)
+            return True
+        if key in (Qt.Key.Key_Left, Qt.Key.Key_Right):
             return True
         if key in (Qt.Key.Key_Backspace, Qt.Key.Key_Escape):
             self.reset_study_input()

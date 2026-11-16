@@ -27,9 +27,13 @@ def progress(repo, word_id):
 
 
 def test_beijing_period_and_date():
-    assert StudyContext.at(datetime(2026, 10, 30, 6, 59, tzinfo=timezone.utc)) == AM
+    assert StudyContext.at(datetime(2026, 10, 30, 6, 59, 59, tzinfo=timezone.utc)) == AM
     assert StudyContext.at(datetime(2026, 10, 30, 7, tzinfo=timezone.utc)) == PM
-    assert StudyContext.at(datetime(2026, 10, 30, 16, tzinfo=timezone.utc)) == StudyContext(
+    assert StudyContext.at(datetime(2026, 10, 30, 15, 59, 59, tzinfo=timezone.utc)) == PM
+    # Midnight and 04:59:59 Beijing time still belong to the previous afternoon.
+    assert StudyContext.at(datetime(2026, 10, 30, 16, tzinfo=timezone.utc)) == PM
+    assert StudyContext.at(datetime(2026, 10, 30, 20, 59, 59, tzinfo=timezone.utc)) == PM
+    assert StudyContext.at(datetime(2026, 10, 30, 21, tzinfo=timezone.utc)) == StudyContext(
         date(2026, 10, 31), False)
     with pytest.raises(ValueError):
         StudyContext.at(datetime(2026, 10, 30))

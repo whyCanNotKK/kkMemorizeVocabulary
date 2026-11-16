@@ -79,6 +79,24 @@ try {
 
     Write-Host '[5/6] Verifying the bundle and creating the portable ZIP...'
     Invoke-BuildCommand $python @('scripts/verify_release.py')
+    $smokeDirectory = Join-Path $PSScriptRoot ('artifacts/build-smoke/' + [Guid]::NewGuid().ToString('N'))
+    $packagedExecutable = Join-Path $PSScriptRoot 'dist/kkMemorizeVocabulary/kkMemorizeVocabulary.exe'
+    for ($smokeRun = 1; $smokeRun -le 2; $smokeRun++) {
+        Write-Host "Checking packaged startup and persistence ($smokeRun/2)..."
+        $smokeResult = Join-Path $smokeDirectory 'smoke-result.json'
+        if (Test-Path -LiteralPath $smokeResult) { Remove-Item -LiteralPath $smokeResult }
+        $smokeProcess = Start-Process -FilePath $packagedExecutable -WindowStyle Hidden -PassThru `
+            -ArgumentList @('--smoke-test', '--data-dir', ('"{0}"' -f $smokeDirectory))
+        if (-not $smokeProcess.WaitForExit(60000)) {
+            Stop-Process -Id $smokeProcess.Id -ErrorAction SilentlyContinue
+            throw "Packaged smoke check timed out. See $smokeDirectory"
+        }
+        if ($smokeProcess.ExitCode -ne 0 -or -not (Test-Path -LiteralPath $smokeResult)) {
+            throw "Packaged smoke check failed ($($smokeProcess.ExitCode)). See $smokeDirectory"
+        }
+        $smokeCheck = Get-Content -LiteralPath $smokeResult -Raw -Encoding UTF8 | ConvertFrom-Json
+        if ($smokeCheck.ok -ne $true) { throw "Packaged smoke check did not pass. See $smokeResult" }
+    }
     Copy-Item -LiteralPath README.md -Destination dist/kkMemorizeVocabulary/README.md
     Copy-Item -LiteralPath README.zh-CN.md -Destination dist/kkMemorizeVocabulary/README.zh-CN.md
     New-Item -ItemType Directory -Path dist/kkMemorizeVocabulary/docs -Force | Out-Null

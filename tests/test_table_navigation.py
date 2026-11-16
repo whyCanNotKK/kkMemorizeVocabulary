@@ -3,7 +3,7 @@ from datetime import date
 
 import pytest
 from PySide6.QtCore import QEvent, QModelIndex, QPoint, Qt
-from PySide6.QtGui import QHelpEvent, QKeyEvent
+from PySide6.QtGui import QHelpEvent, QKeyEvent, QTextDocument
 from PySide6.QtWidgets import QApplication
 
 from vocabulary.domain import RelatedWord, Sense, WordEntry
@@ -360,19 +360,20 @@ def test_single_reveal_prioritizes_complete_entry(review_list, window, repo, qtb
     (Qt.Key.Key_Enter, Qt.KeyboardModifier.NoModifier),
     (Qt.Key.Key_Enter, Qt.KeyboardModifier.KeypadModifier),
 ])
-def test_study_enter_never_reveals_or_completes_parent_word(review_list, window, repo, qtbot, key, modifier):
+def test_study_enter_reveals_hidden_source_then_skips_without_completing(review_list, window, repo, qtbot, key, modifier):
     table, entries = review_list
     entry = entries[1]
     table.setCurrentIndex(index_for(table, entry))
     table.setFocus()
     qtbot.keyClick(table, key, modifier)
-    assert_selected(table, entry)
+    assert_selected(table, entries[2])
     assert table.currentIndex().data(Qt.ItemDataRole.UserRole).hidden
+    assert all(not row.hidden for row in table.model().rows if row.entry.id == entry.id)
     assert entry.id in {task.entry.id for task in repo.study_tasks(window.study_page.context)}
     for _ in range(3):
         repeat = QKeyEvent(QEvent.Type.KeyPress, key, modifier, "\r", True, 1)
         QApplication.sendEvent(table, repeat)
-    assert_selected(table, entry)  # Holding Enter cannot complete the newly revealed word.
+    assert_selected(table, entries[2])  # Holding Enter cannot skip the next word.
     table.revealRequested.emit(entry.id, True)
     table.setCurrentIndex(index_for(table, entry, owner=0, sense=1, column=3))
     with qtbot.assertNotEmitted(table.actionRequested):
@@ -380,6 +381,8 @@ def test_study_enter_never_reveals_or_completes_parent_word(review_list, window,
     assert entry.id in {row.entry.id for row in table.model().rows}
     assert entry.id in {task.entry.id for task in repo.study_tasks(window.study_page.context)}
     assert not repo.get(entry.id).learned
+    assert_selected(table, entries[2])
+    assert table.currentIndex().data(Qt.ItemDataRole.UserRole).hidden
     assert table.hasFocus()
 
 
@@ -441,10 +444,14 @@ def test_study_button_tooltip_reflects_visibility(review_list, monkeypatch):
     event = QHelpEvent(QEvent.Type.ToolTip, point, table.viewport().mapToGlobal(point))
     QApplication.sendEvent(table.viewport(), event)
     assert len(tips) == 1
-    assert tips[0] == "记下（需先展示释义）"
+    document = QTextDocument()
+    document.setHtml(tips[0])
+    assert document.toPlainText() == "记下（需先展示释义）\n跳过 · \ufffc · \ufffc"
     table.revealRequested.emit(entries[0].id, True)
     QApplication.sendEvent(table.viewport(), event)
-    assert tips[-1] == "记下 · (输入单词拼写)"
+    document.setHtml(tips[-1])
+    assert document.toPlainText() == "记下 · \ufffc · [单词拼写]\n跳过 · \ufffc · \ufffc"
+    assert all(f'alt="{name}"' in tips[-1] for name in ('鼠标左键', '鼠标右键', '回车'))
 
 
 def test_ctrl_arrows_scroll_without_changing_current_cell_or_group(review_list, window, repo, qtbot):
