@@ -44,6 +44,8 @@ def test_return_skip_clears_stationary_mouse_target_for_f2(skip_list, qtbot):
     page, words = skip_list
     table = page.table
     target = table._entry_index(words[0].id, owner=0, column=3)
+    # A previous test can leave the global cursor at the target's exact position.
+    qtbot.mouseMove(table.viewport(), table.viewport().rect().topLeft())
     qtbot.mouseMove(table.viewport(), table.visualRect(target).center())
     assert table._mouse_moved
     qtbot.keyClick(table, Qt.Key.Key_Return)
