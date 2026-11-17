@@ -109,6 +109,18 @@ def test_reset_keys_clear_progress(practice, qtbot, reset_key):
     assert not row_for(table, entry).hidden
 
 
+def test_definition_hover_within_group_keeps_spelling_progress(practice, qtbot):
+    table, entry = practice
+    qtbot.keyClicks(table, 'nAb')
+    assert table.study_input.position == 2
+    target = table._entry_index(entry.id, owner=0, column=3)
+    qtbot.mouseMove(table.viewport(), table.viewport().rect().topLeft())
+    qtbot.mouseMove(table.viewport(), table.visualRect(target).center())
+    assert table.currentIndex() == target
+    assert table.study_input.entry_id == entry.id and table.study_input.position == 2
+    assert table.hasFocus()
+
+
 @pytest.mark.parametrize("transition", ["word", "selection", "focus", "page", "refresh",
                                         "visibility", "edit", "drag"])
 def test_progress_resets_on_context_change(practice, window, qtbot, transition):

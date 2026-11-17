@@ -40,6 +40,21 @@ def trigger_skip(qtbot, table, entry, trigger):
         qtbot.keyClick(table, key, modifier)
 
 
+def test_return_skip_clears_stationary_mouse_target_for_f2(skip_list, qtbot):
+    page, words = skip_list
+    table = page.table
+    target = table._entry_index(words[0].id, owner=0, column=3)
+    qtbot.mouseMove(table.viewport(), table.visualRect(target).center())
+    assert table._mouse_moved
+    qtbot.keyClick(table, Qt.Key.Key_Return)
+    assert not table._mouse_moved
+    assert table.currentIndex().data(Qt.ItemDataRole.UserRole).entry.id == words[1].id
+    qtbot.keyClick(table, Qt.Key.Key_F2)
+    index = table.delegate.edit_index
+    row = index.data(Qt.ItemDataRole.UserRole)
+    assert (row.entry.id, row.owner, row.sense, index.column()) == (words[1].id, -1, 0, 3)
+
+
 @pytest.mark.parametrize('trigger', ['mouse', 'return', 'keypad'])
 def test_skip_cycles_only_pending_words_without_changing_progress(skip_list, window, repo, qtbot, trigger):
     page, words = skip_list

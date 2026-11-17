@@ -1,4 +1,5 @@
 from functools import lru_cache
+from html import escape
 import math
 import sys
 
@@ -14,7 +15,7 @@ ACCENT = "#a4ddc5"
 GOLD = "#efc578"
 
 STYLESHEET = """
-QWidget { color: #e8edf4; font-family: 'Microsoft YaHei UI', 'PingFang SC', 'Noto Sans CJK SC', sans-serif; font-size: 13px; }
+QWidget { color: #e8edf4; font-family: 'Microsoft YaHei UI', 'PingFang SC', 'Noto Sans CJK SC', sans-serif; font-size: 13px; qproperty-toolTipDuration: 5000; }
 QMainWindow, QDialog { background: #171b22; }
 QWidget#workspace { background: #171b22; }
 QFrame#panel { background: #1e242d; border: none; border-radius: 0; }
@@ -290,6 +291,26 @@ def _tooltip_icon(icon_name: str, alt: str) -> str:
 def _tooltip_with_icon(text: str, icon_name: str, *, alt: str, suffix: str = "") -> str:
     return (f'<p style="white-space:nowrap; margin:0">{text}'
             f'{_tooltip_icon(icon_name, alt)}{suffix}</p>')
+
+
+def tooltip_lines(*lines: str) -> str:
+    return ''.join(f'<p style="white-space:nowrap; margin:0">{line}</p>' for line in lines)
+
+
+def mouse_action_hint(label: str, button: str, shortcut: str = "", *, modifier: str = "") -> str:
+    prefix = f'{escape(modifier)} + ' if modifier else ''
+    hint = f'{escape(label)} · {prefix}{_tooltip_icon("mouse_" + button, "鼠标左键" if button == "left" else "鼠标右键")}'
+    return hint + (f' · {escape(shortcut)}' if shortcut else '')
+
+
+def related_drag_tooltip() -> str:
+    return tooltip_lines("按住拖动改变关联词排序", mouse_action_hint("整词复制", "right"))
+
+
+def reveal_tooltip(study: bool = False) -> str:
+    return tooltip_lines(f'查看释义和关联词 · {_tooltip_icon("mouse_left", "鼠标左键")} · '
+                         f'{_tooltip_icon("mouse_right", "鼠标右键")} · '
+                         f'{"输入词性" if study else "空格"}')
 
 
 def copy_word_tooltip() -> str:

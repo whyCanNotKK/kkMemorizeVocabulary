@@ -47,6 +47,40 @@ def action_point(table, index, action):
     return dict(table.action_rects(table.visualRect(index), index.data(Qt.ItemDataRole.UserRole)))[action].center()
 
 
+@pytest.mark.parametrize('page', ['pending', 'all', 'learned', 'study17', 'form', 'form_new'])
+def test_related_arrow_right_click_copies_that_words_complete_content(window, repo, qtbot, monkeypatch, page):
+    entry = entry_with_children(repo, learned=page == 'learned')
+    monkeypatch.setattr(StudyContext, 'now', classmethod(lambda cls: StudyContext(date(2026, 11, 6), False)))
+    clip('sentinel')
+    if page.startswith('form'):
+        window.reset_form(WordEntry('draft', entry.senses, entry.related) if page == 'form_new' else entry)
+        child = window.blocks[2]
+        child.word.setText('draft second')
+        child.phonetic.setText('/draft/')
+        expected = child.value()
+        document = QTextDocument()
+        document.setHtml(child.indicator.toolTip())
+        assert document.toPlainText().splitlines() == ['按住拖动改变关联词排序', '整词复制 · \ufffc']
+        assert child.rows[0].drag_handle.toolTip() == '按住拖动改变释义排序'
+        qtbot.wait(20)
+        qtbot.mouseClick(child.indicator, RIGHT)
+        assert not window.form_drag.active and window.form_drag.candidate is None
+        assert repo.get(entry.id) == entry
+    else:
+        window.set_filter(page)
+        table = window.current_table()
+        table.set_entry_revealed(entry.id, True)
+        table.select_entry(entry.id)
+        index = table._entry_index(entry.id, owner=1)
+        table.scrollTo(index)
+        point = table.visualRect(index).topLeft() + QPoint(10, 15)
+        qtbot.mouseClick(table.viewport(), RIGHT, pos=point)
+        expected = entry.related[1]
+        assert table.delegate.editor is None
+        assert not table.dragging
+    assert decode(clip()) == expected
+
+
 def test_word_clipboard_protocol():
     payload = encode(RelatedWord(" 新词 ", [Sense("v.", "第一行\n第二行"), Sense("n.", ""),
                                        Sense("其他", "其他"), Sense()], " /ʌ/ "))
@@ -83,7 +117,7 @@ def test_list_copy_hidden_then_related_right_click(window, repo, qtbot, monkeypa
     assert list(dict(table.action_rects(table.visualRect(action_index)))) == expected_actions[page]
     if page != "study17":
         mark = '标记为"待记"' if page == "learned" else '标记为"已记下"'
-        for action, tooltip in [("edit", "编辑单词"), ("learned", mark)]:
+        for action, tooltip in [("edit", "编辑单词 · " + window.shortcuts.labels()['edit_selected']), ("learned", mark)]:
             point = action_point(table, action_index, action)
             event = QHelpEvent(QEvent.Type.ToolTip, point, table.viewport().mapToGlobal(point))
             QApplication.sendEvent(table.viewport(), event)

@@ -4,6 +4,7 @@ from PySide6.QtGui import QInputMethodEvent
 from PySide6.QtWidgets import QApplication, QPlainTextEdit, QMessageBox
 
 from vocabulary.domain import RelatedWord, Sense, ValidationError, WordEntry
+from vocabulary.draft_reset_dialog import DraftResetDialog
 from vocabulary.shortcuts import SettingsDialog, normalize_shortcut
 from vocabulary.widgets import PosCombo
 
@@ -618,10 +619,11 @@ def test_setting_recorder_persists_and_escape_cancels(window, repo, qtbot):
 def answer_confirmation(qtbot, accept):
     def answer():
         dialog = QApplication.activeModalWidget()
-        assert isinstance(dialog, QMessageBox)
+        assert isinstance(dialog, DraftResetDialog)
+        assert dialog.cancel_button.isDefault()
         if accept:
-            assert dialog.defaultButton().text() == "确认移除"
-            qtbot.keyClick(dialog.defaultButton(), Qt.Key.Key_Space)
+            dialog.confirm_button.setFocus()
+            qtbot.keyClick(dialog.confirm_button, Qt.Key.Key_Space)
         else:
             qtbot.keyClick(dialog, Qt.Key.Key_Escape)
     QTimer.singleShot(30, answer)
@@ -717,7 +719,7 @@ def test_full_edit_adds_and_removes_aggregate_items(window, repo, qtbot):
 def test_delete_icon_flow_cascades(window, repo, qtbot):
     saved = seed(repo)
     window.refresh()
-    answer_confirmation(qtbot, True)
+    QTimer.singleShot(30, lambda: QApplication.activeModalWidget().accept())
     window.list_action(saved.id, "trash")
     assert not repo.list_entries()
     assert repo.connection.execute("SELECT count(*) FROM senses").fetchone()[0] == 0

@@ -2,11 +2,17 @@ import pytest
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QFont, QImage, QPainter, QTextDocument
 
-from vocabulary.theme import copy_word_tooltip, study_mark_tooltip
+from vocabulary.theme import copy_word_tooltip, mouse_action_hint, study_mark_tooltip, tooltip_lines
 
 
 @pytest.mark.parametrize("tooltip", [copy_word_tooltip, study_mark_tooltip,
-                                    lambda: study_mark_tooltip(hidden=True)])
+                                    lambda: study_mark_tooltip(hidden=True),
+                                    lambda: tooltip_lines(mouse_action_hint('复制单词拼写', 'left'),
+                                                          mouse_action_hint('编辑拼写和音标', 'right')),
+                                    lambda: tooltip_lines('按住拖动改变释义排序',
+                                                          mouse_action_hint('编辑', 'right')),
+                                    lambda: tooltip_lines(mouse_action_hint('编辑', 'right', 'F2'),
+                                                          mouse_action_hint('隐藏释义', 'left', '空格', modifier='Ctrl'))])
 def test_tooltip_icon_and_text_have_the_same_visible_center(themed_app, tooltip):
     document = QTextDocument()
     font = QFont("Microsoft YaHei UI")

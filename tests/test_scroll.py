@@ -36,7 +36,7 @@ def test_list_action_keeps_scroll(window, repo, qtbot, monkeypatch, action):
     window.table.setCurrentIndex(window.model.index(40, 1))
     bar.setValue(310)
     entry_id = window.model.rows[12].entry.id
-    monkeypatch.setattr("vocabulary.window.confirm_remove", lambda *args: True)
+    monkeypatch.setattr(window, "confirm_word_removal", lambda *args: True)
     window.list_action(entry_id, action)
     qtbot.wait(30)
     assert bar.value() == 310

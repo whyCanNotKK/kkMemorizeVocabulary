@@ -3,7 +3,7 @@ import logging
 from pathlib import Path
 
 import shiboken6
-from PySide6.QtCore import QPoint, QSize, QStandardPaths, Qt, QTimer
+from PySide6.QtCore import QPoint, QRect, QSize, QStandardPaths, Qt, QTimer
 from PySide6.QtWidgets import (
     QApplication, QDialog, QDialogButtonBox, QFileDialog, QFrame, QGridLayout, QHBoxLayout, QLabel, QMainWindow, QMessageBox,
     QPlainTextEdit, QScrollArea, QVBoxLayout, QWidget,
@@ -42,6 +42,7 @@ class MainWindow(QMainWindow):
         self.filter_name = "pending"
         self._view_filter = "pending"
         self._filter_scroll = {"pending": 0, "all": 0, "learned": 0}
+        self._filter_view = {key: (None, False, 0) for key in self._filter_scroll}
         self.edit_id = None
         self.active_block = None
         self._last_form_focus = None
@@ -76,7 +77,7 @@ class MainWindow(QMainWindow):
         for key, label in (("pending", "待记"), ("all", "全部"), ("learned", "已记下"),
                            ("study17", "十七天背单词")):
             control = button(label)
-            control.clicked.connect(lambda checked=False, key=key: self.set_filter(key))
+            control.clicked.connect(lambda checked=False, key=key: self.activate_filter(key))
             self.filter_buttons[key] = control
             filters.addWidget(control)
         self.settings_button = button("设置", quiet=True)
@@ -237,7 +238,7 @@ class MainWindow(QMainWindow):
         for number, key in enumerate(self.filter_buttons, 1):
             action = f"tab_{key}"
             fixed[action] = (f"Alt+{number}",)
-            callbacks[action] = lambda key=key: self.set_filter(key)
+            callbacks[action] = lambda key=key: self.activate_filter(key)
             self.filter_buttons[key].setToolTip(fixed[action][0])
         scoped = {}
         for number in range(1, 10):
@@ -404,6 +405,9 @@ class MainWindow(QMainWindow):
             return
         bar = self.table.verticalScrollBar()
         self._filter_scroll[self._view_filter] = bar.value()
+        switching = self._view_filter != self.filter_name
+        if switching:
+            self._filter_view[self._view_filter] = self.table.view_state()
         position = self._filter_scroll[self.filter_name]
         if entries is None:
             entries = self.repository.list_entries()
@@ -424,7 +428,9 @@ class MainWindow(QMainWindow):
         searching = bool(self.search_box.text().strip())
         self.search_box.set_result_count(len(visible) if searching else None)
         self.table.set_page_state(self.filter_name, searching, len(visible))
-        with self.table.preserve_view(scroll_position=position):
+        with self.table.preserve_view(
+                scroll_position=position,
+                view_state=self._filter_view[self.filter_name] if switching else None):
             # Search expands only the projection, leaving the review state intact.
             revealed = ({entry.id for entry in visible} - self._search_hidden[self.filter_name]
                         if searching else self.revealed)
@@ -537,14 +543,28 @@ class MainWindow(QMainWindow):
 
     def set_filter(self, key):
         if not self.current_table().delegate.submit():
-            return
+            return False
         if key == "study17" and not self.study_page.reload():
-            return
+            return False
         self.toast.dismiss()
         self.filter_name = key
         if key == "study17":
             self.history_panel.set_collapsed(bool(self.study_page.tasks))
         self.refresh()
+        return True
+
+    def activate_filter(self, key):
+        if not self.set_filter(key):
+            return
+        table = self.current_table()
+        current = table.currentIndex()
+        row = current.data(Qt.ItemDataRole.UserRole)
+        if row is not None and table.selectionModel().isSelected(current):
+            with table.preserve_view():
+                table.setFocus(Qt.FocusReason.ShortcutFocusReason)
+            table.ensure_entry_visible(row.entry.id)
+        else:
+            table.navigate_entries(1)
 
     def reveal(self, entry_id, expanded):
         if self.search_box.text().strip():
@@ -768,6 +788,7 @@ class MainWindow(QMainWindow):
 
     def refresh_shortcut_labels(self):
         keys = self.shortcuts.labels()
+        self.table.edit_word_shortcut = keys['edit_selected']
         self.update_visibility_button()
         self.update_related_actions()
         self.save_button.setText(f"{'保存修改' if self.edit_id else '保存'}  {keys['save']}")
@@ -817,7 +838,7 @@ class MainWindow(QMainWindow):
     def remove_related(self, block):
         if block not in self.blocks[1:]:
             return
-        if block.has_content() and not confirm_remove(self, "删除当前关联词及其全部释义？"):
+        if block.has_content() and not confirm_remove(self.remove_related_button, "确认删除关联词"):
             self.restore_input_focus(block.word)
             return
         position = self.blocks.index(block)
@@ -966,8 +987,10 @@ class MainWindow(QMainWindow):
         else:
             self.refresh()
 
-    def prepare_list_edit(self, entry_id):
+    def prepare_list_edit(self, entry_id, column):
         self.refresh_after_inline()
+        if column == 1:
+            return
         row = next((row for row in self.current_table().model().rows if row.entry.id == entry_id), None)
         if row is None or not row.hidden:
             return
@@ -1030,6 +1053,26 @@ class MainWindow(QMainWindow):
         if row is not None and self.table.selectionModel().isSelected(index):
             self.list_action(row.entry.id, 'edit')
 
+    def confirm_word_removal(self, entry_id):
+        table = self.current_table()
+        index = table._entry_index(entry_id, column=table.action_column)
+        row = index.data(Qt.ItemDataRole.UserRole)
+        if row is None:
+            return False
+        rect = dict(table.action_rects(table.visualRect(index), row)).get('trash')
+        if rect is None:
+            return False
+        viewport = table.viewport()
+        rect.moveTop(max(0, min(rect.top(), viewport.height() - rect.height())))
+        anchor = QRect(viewport.mapToGlobal(rect.topLeft()), rect.size())
+        dialog = DraftResetDialog(anchor, '同时还会从十七天背单词记录中删除(若存在)，确认移除吗？', self)
+        for control in (dialog.confirm_button, dialog.cancel_button):
+            control.setAutoDefault(True)
+        try:
+            return dialog.exec() == QDialog.DialogCode.Accepted
+        finally:
+            dialog.deleteLater()
+
     def list_action(self, entry_id, action):
         delegate = self.current_table().delegate
         if not delegate.submit() or delegate.target_after_removal((entry_id, -1, 0, 1)) is None:
@@ -1056,7 +1099,7 @@ class MainWindow(QMainWindow):
                 self.repository.set_flag(entry_id, "learned", not entry.learned)
                 self.show_notice(f"{entry.text} 已{'恢复待记' if entry.learned else '标记为已记下'}")
             elif action == "trash":
-                if not confirm_remove(self, f"删除 {entry.text} 及其全部释义和关联词？"):
+                if not self.confirm_word_removal(entry_id):
                     return
                 self.repository.delete(entry_id, self.study_page.context or StudyContext.now())
                 if self.study_page.context is not None:

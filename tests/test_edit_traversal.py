@@ -2,7 +2,8 @@ from datetime import date
 import sqlite3
 
 import pytest
-from PySide6.QtCore import QModelIndex, Qt
+from PySide6.QtCore import QEvent, QModelIndex, Qt
+from PySide6.QtGui import QCursor, QHelpEvent, QKeyEvent
 from PySide6.QtWidgets import QApplication
 
 from vocabulary.domain import RelatedWord, Sense, WordEntry
@@ -19,6 +20,10 @@ def edit_list(request, window, repo, qtbot, monkeypatch):
     window.set_filter(request.param)
     table = window.current_table()
     table.revealRequested.emit(entries[0].id, True)
+    # Start outside the list so each mouse-driven test performs a real movement.
+    control = window.filter_buttons['pending']
+    qtbot.mouseMove(control, control.rect().center())
+    table.reset_mouse_target()
     yield table, entries
     table.delegate.cancel()
 
@@ -30,14 +35,15 @@ def field(table):
 
 
 @pytest.mark.parametrize('owner,sense,column', [(-1, 0, 1), (-1, 1, 2), (0, 1, 3)])
-def test_f2_edits_current_rows_translation(edit_list, qtbot, owner, sense, column):
+def test_f2_edits_mouse_target_field(edit_list, qtbot, owner, sense, column):
     table, entries = edit_list
     number = next(i for i, row in enumerate(table.model().rows)
                   if (row.entry.id, row.owner, row.sense) == (entries[0].id, owner, sense))
     table.setCurrentIndex(table.model().index(number, column))
     table.setFocus()
+    qtbot.mouseMove(table.viewport(), table.visualRect(table.currentIndex()).center())
     qtbot.keyClick(table, Qt.Key.Key_F2)
-    assert field(table) == (entries[0].id, owner, sense, 3)
+    assert field(table) == (entries[0].id, owner, sense, column)
 
 
 def test_f2_keeps_hidden_entry_unedited(edit_list, repo, qtbot):
@@ -50,6 +56,281 @@ def test_f2_keeps_hidden_entry_unedited(edit_list, repo, qtbot):
     assert table.delegate.editor is None
     assert table.model().rows[0].hidden
     assert repo.study_backup() == before
+
+
+def test_hover_within_selected_group_aims_f2_at_main_or_related_definition(edit_list, qtbot):
+    table, entries = edit_list
+    table.select_entry(entries[0].id)
+    table.setFocus()
+    for owner, sense in [(-1, 1), (0, 0), (0, 1), (-1, 0)]:
+        target = table._entry_index(entries[0].id, owner, sense, 3)
+        point = table.visualRect(target).center()
+        position = table.verticalScrollBar().value()
+        qtbot.mouseMove(table.viewport(), point)
+        assert table.currentIndex() == target
+        assert table.hasFocus() and table.verticalScrollBar().value() == position
+        assert {index.data(Qt.ItemDataRole.UserRole).entry.id
+                for index in table.selectionModel().selectedRows()} == {entries[0].id}
+        qtbot.keyClick(table, Qt.Key.Key_F2)
+        assert field(table) == (entries[0].id, owner, sense, 3)
+        table.delegate.cancel()
+        table.setFocus()
+        qtbot.wait(10)  # Let the closed editor finish returning keyboard focus.
+
+
+def test_tooltip_aims_f2_without_crossing_groups_or_stealing_input_focus(edit_list, window, qtbot):
+    table, entries = edit_list
+    table.set_entry_revealed(entries[1].id, True)
+    table.select_entry(entries[0].id)
+    table.setFocus()
+    original = table.currentIndex()
+
+    def tooltip(index):
+        point = table.visualRect(index).center()
+        QApplication.sendEvent(table.viewport(), QHelpEvent(
+            QEvent.Type.ToolTip, point, table.viewport().mapToGlobal(point)))
+
+    other = table._entry_index(entries[1].id, 0, 1, 3)
+    tooltip(other)
+    assert table.currentIndex() == original
+    target = table._entry_index(entries[0].id, 0, 1, 3)
+    control = window.study_page.refresh_button if table.study_mode else window.search_box
+    control.setFocus()
+    tooltip(target)
+    assert control.hasFocus() and table.currentIndex() == original
+    table.setFocus()
+    table.clearSelection()
+    tooltip(target)
+    assert table.currentIndex() == original and not table.selectionModel().hasSelection()
+    table.select_entry(entries[0].id)
+    tooltip(target)
+    assert table.currentIndex() == original  # A tooltip cannot re-enable mouse targeting.
+    qtbot.mouseMove(table.viewport(), table.visualRect(target).center())
+    qtbot.keyClick(table, Qt.Key.Key_F2)
+    assert field(table) == (entries[0].id, 0, 1, 3)
+    # Hovering another row never submits or moves an open editor.
+    editor = table.delegate.editor
+    tooltip(table._entry_index(entries[0].id, -1, 0, 3))
+    assert table.delegate.editor is editor and field(table) == (entries[0].id, 0, 1, 3)
+
+
+@pytest.mark.parametrize('location', ['other-group', 'empty-list-area', 'toolbar'])
+def test_f2_uses_other_groups_editable_mouse_target_or_selected_main_fallback(edit_list, window, qtbot, location):
+    table, entries = edit_list
+    table.set_entry_revealed(entries[1].id, True)
+    table.select_entry(entries[0].id)
+    table.setFocus()
+    previous = table._entry_index(entries[0].id, owner=0, sense=1, column=3)
+    qtbot.mouseMove(table.viewport(), table.visualRect(previous).center())
+    assert table.currentIndex() == previous
+    if location == 'other-group':
+        other = table._entry_index(entries[1].id, owner=0, sense=1, column=3)
+        qtbot.mouseMove(table.viewport(), table.visualRect(other).center())
+    elif location == 'empty-list-area':
+        qtbot.mouseMove(table.viewport(), table.viewport().rect().bottomRight())
+    else:
+        control = window.filter_buttons['all']
+        qtbot.mouseMove(control, control.rect().center())
+    assert table.hasFocus() and table.currentIndex() == previous
+    qtbot.keyClick(table, Qt.Key.Key_F2)
+    assert field(table) == ((entries[1].id, 0, 1, 3) if location == 'other-group'
+                            else (entries[0].id, -1, 0, 3))
+
+
+@pytest.mark.parametrize('operation', ['down', 'up', 'tab', 'switch'])
+def test_keyboard_location_change_disables_stationary_mouse_target(edit_list, window, qtbot, operation):
+    table, entries = edit_list
+    table.set_entry_revealed(entries[1].id, True)
+    table.select_entry(entries[0].id)
+    table.setFocus()
+    target = table._entry_index(entries[0].id, owner=0, sense=1, column=3)
+    qtbot.mouseMove(table.viewport(), table.visualRect(target).center())
+    assert table._mouse_moved
+    if operation == 'switch':
+        number = 1 if window.filter_name == 'all' else 2
+        qtbot.keyClick(table, getattr(Qt.Key, f'Key_{number}'), Qt.KeyboardModifier.AltModifier)
+        table = window.current_table()
+    elif operation == 'tab':
+        qtbot.keyClick(table, Qt.Key.Key_Tab)
+        assert not table.hasFocus()
+        table.setFocus()
+    else:
+        qtbot.keyClick(table, Qt.Key.Key_Down if operation == 'down' else Qt.Key.Key_Up)
+    assert not table._mouse_moved
+    selected = table.currentIndex().data(Qt.ItemDataRole.UserRole)
+    assert selected is not None
+    # A tooltip at the old mouse location must not take keyboard control back.
+    point = table.viewport().mapFromGlobal(QCursor.pos())
+    QApplication.sendEvent(table.viewport(), QHelpEvent(
+        QEvent.Type.ToolTip, point, table.viewport().mapToGlobal(point)))
+    assert not table._mouse_moved
+    qtbot.keyClick(table, Qt.Key.Key_F2)
+    if selected.hidden:
+        assert table.delegate.editor is None
+    else:
+        assert field(table) == (selected.entry.id, -1, 0, 3)
+
+
+def test_mouse_target_allows_hidden_spelling_but_not_hidden_definition(edit_list, qtbot):
+    table, entries = edit_list
+    table.set_entry_revealed(entries[0].id, False)
+    table.select_entry(entries[0].id)
+    table.setFocus()
+    index = table._entry_index(entries[0].id)
+    qtbot.mouseMove(table.viewport(), table.visualRect(index).center())
+    assert table._mouse_moved
+    qtbot.keyClick(table, Qt.Key.Key_F2)
+    assert field(table) == (entries[0].id, -1, 0, 1)
+    assert table.model().rows[0].hidden
+    table.delegate.cancel()
+    table.setFocus()
+    qtbot.wait(10)
+    table.set_entry_revealed(entries[0].id, False)
+    index = table._entry_index(entries[0].id, column=2)
+    qtbot.mouseMove(table.viewport(), table.visualRect(index).center())
+    qtbot.keyClick(table, Qt.Key.Key_F2)
+    assert table.delegate.editor is None and table.model().rows[0].hidden
+
+
+@pytest.mark.parametrize('revealed', [False, True])
+def test_f2_spelling_and_phonetic_edit_preserves_answer_visibility(edit_list, repo, qtbot, revealed):
+    table, entries = edit_list
+    table.set_entry_revealed(entries[0].id, revealed)
+    table.select_entry(entries[0].id)
+    table.setFocus()
+    before = repo.study_backup()
+    index = table._entry_index(entries[0].id)
+    qtbot.mouseMove(table.viewport(), table.visualRect(index).center())
+    qtbot.keyClick(table, Qt.Key.Key_F2)
+    assert field(table) == (entries[0].id, -1, 0, 1)
+
+    def assert_visibility():
+        rows = [row for row in table.model().rows if row.entry.id == entries[0].id]
+        assert rows and all(row.hidden == (not revealed) for row in rows)
+        assert len(rows) == (4 if revealed else 1)
+
+    assert_visibility()
+    editor = table.delegate.editor
+    editor.setText('renamed')
+    editor.phonetic.setText('/new/')
+    qtbot.keyClick(editor, Qt.Key.Key_Return)
+    qtbot.wait(10)
+    assert_visibility()
+    saved = repo.get(entries[0].id)
+    assert saved.text == 'renamed' and saved.phonetic == '/new/'
+    assert list(repo.study_backup().records.values()) == list(before.records.values())
+
+
+@pytest.mark.parametrize('source,target_column', [('word', 3), ('phonetic', 1), ('translation', 2), ('pos', 3)])
+def test_f2_saves_active_editor_then_edits_mouse_target(edit_list, repo, qtbot, source, target_column):
+    table, entries = edit_list
+    table.set_entry_revealed(entries[1].id, True)
+    before = repo.study_backup()
+    column = {'word': 1, 'phonetic': 1, 'translation': 3, 'pos': 2}[source]
+    index = table._entry_index(entries[0].id, column=column)
+    table.setCurrentIndex(index)
+    table.edit(index)
+    editor = table.delegate.editor
+    if source == 'word':
+        editor.setText('renamed')
+    elif source == 'phonetic':
+        editor.phonetic.setText('/new/')
+        editor.phonetic.setFocus()
+    elif source == 'translation':
+        editor.setPlainText('new meaning')
+    else:
+        editor.set_pos('adj.')
+    qtbot.wait(10)
+    target = table._entry_index(entries[1].id, owner=0, column=target_column)
+    qtbot.mouseMove(table.viewport(), table.visualRect(target).center())
+    assert table._mouse_moved and table.delegate.editor is editor
+    qtbot.keyClick(QApplication.focusWidget(), Qt.Key.Key_F2)
+    qtbot.wait(10)
+    saved = repo.get(entries[0].id)
+    assert {'word': saved.text, 'phonetic': saved.phonetic,
+            'translation': saved.senses[0].translation, 'pos': saved.senses[0].pos}[source] == {
+                'word': 'renamed', 'phonetic': '/new/', 'translation': 'new meaning', 'pos': 'adj.'}[source]
+    assert field(table) == (entries[1].id, 0, 0, target_column)
+    assert table.delegate.editor is not editor
+    assert list(repo.study_backup().records.values()) == list(before.records.values())
+
+
+def test_f2_failed_save_keeps_original_editor_and_repeated_f2_does_not_submit(edit_list, repo, qtbot):
+    table, entries = edit_list
+    table.setCurrentIndex(table._entry_index(entries[0].id))
+    table.edit(table.currentIndex())
+    editor = table.delegate.editor
+    editor.setText('')  # A main word with a related word cannot have an empty spelling.
+    target = table._entry_index(entries[0].id, owner=0, column=3)
+    qtbot.mouseMove(table.viewport(), table.visualRect(target).center())
+    qtbot.keyClick(editor, Qt.Key.Key_F2)
+    qtbot.wait(10)
+    assert table.delegate.editor is editor and editor.text() == '' and editor.hasFocus()
+    assert repo.get(entries[0].id) == entries[0]
+    editor.setText('renamed')
+    QApplication.sendEvent(editor, QKeyEvent(QEvent.Type.KeyPress, Qt.Key.Key_F2,
+                                           Qt.KeyboardModifier.NoModifier, '', True))
+    assert table.delegate.editor is editor and repo.get(entries[0].id) == entries[0]
+
+
+def test_f2_maps_mouse_target_when_saving_removes_an_earlier_sense(edit_list, repo, qtbot):
+    table, entries = edit_list
+    table.setCurrentIndex(table._entry_index(entries[0].id, column=3))
+    table.edit(table.currentIndex())
+    editor = table.delegate.editor
+    editor.clear()
+    target = table._entry_index(entries[0].id, sense=1, column=3)
+    qtbot.mouseMove(table.viewport(), table.visualRect(target).center())
+    qtbot.keyClick(editor, Qt.Key.Key_F2)
+    assert repo.get(entries[0].id).senses == [Sense('v.', 'second')]
+    assert field(table) == (entries[0].id, -1, 0, 3)
+    assert table.delegate.editor.toPlainText() == 'second'
+
+
+def test_f2_saves_without_editing_a_different_field_when_mouse_target_is_removed(edit_list, repo, qtbot):
+    table, entries = edit_list
+    table.setCurrentIndex(table._entry_index(entries[0].id, column=3))
+    table.edit(table.currentIndex())
+    editor = table.delegate.editor
+    editor.clear()
+    qtbot.mouseMove(editor.viewport(), editor.viewport().rect().center())
+    assert table._mouse_moved
+    qtbot.keyClick(editor, Qt.Key.Key_F2)
+    assert repo.get(entries[0].id).senses == [Sense('v.', 'second')]
+    assert table.delegate.editor is None
+
+
+def test_f2_during_edit_without_mouse_movement_saves_then_uses_main_translation(edit_list, repo, qtbot):
+    table, entries = edit_list
+    table.setCurrentIndex(table._entry_index(entries[0].id, owner=0))
+    table.edit(table.currentIndex())
+    editor = table.delegate.editor
+    editor.setText('renamed child')
+    editor.phonetic.setText('/child/')
+    assert not table._mouse_moved
+    qtbot.keyClick(editor, Qt.Key.Key_F2)
+    saved = repo.get(entries[0].id).related[0]
+    assert saved.text == 'renamed child' and saved.phonetic == '/child/'
+    assert field(table) == (entries[0].id, -1, 0, 3)
+
+
+def test_f2_storage_failure_keeps_editor_and_unsaved_text(edit_list, repo, qtbot, monkeypatch):
+    table, entries = edit_list
+    table.setCurrentIndex(table._entry_index(entries[0].id, column=3))
+    table.edit(table.currentIndex())
+    editor = table.delegate.editor
+    editor.setPlainText('unsaved meaning')
+    target = table._entry_index(entries[0].id, owner=0, column=1)
+    qtbot.mouseMove(table.viewport(), table.visualRect(target).center())
+
+    def fail(*args):
+        raise OSError('disk unavailable')
+
+    monkeypatch.setattr(repo, 'save', fail)
+    qtbot.keyClick(editor, Qt.Key.Key_F2)
+    qtbot.wait(10)
+    assert table.delegate.editor is editor and editor.hasFocus()
+    assert editor.toPlainText() == 'unsaved meaning' and repo.get(entries[0].id) == entries[0]
 
 
 def test_tab_traverses_all_fields_in_both_directions_and_stops_at_edges(edit_list, repo, qtbot, monkeypatch):
@@ -193,7 +474,8 @@ def test_tab_does_not_edit_wrong_entry_when_saved_name_stops_matching_search(win
 
 def test_tab_skips_search_result_removed_by_clearing_translation(window, repo, qtbot):
     entry = repo.save(WordEntry('alpha', [Sense('n.', 'match'), Sense('v.', 'another')]))
-    next_entry = repo.save(WordEntry('match', [Sense('n.', 'next')]))
+    # Both results must match by translation so search ranking keeps alpha first.
+    next_entry = repo.save(WordEntry('next', [Sense('n.', 'match')]))
     window.search_box.setText('match')
     table = window.table
     table.edit(table._entry_index(entry.id, -1, 0, 3))

@@ -20,7 +20,9 @@ from .study_input import STUDY_TRANSLATION_HEADER, StudyInput, matches_pos
 from .table_style import WordGroupStyle
 from .table_header import WordTableHeader
 from .word_name_editor import WordNameEditor
-from .theme import ACCENT, GOLD, MUTED, TEXT, copy_word_tooltip, draw_related_arrow, draw_symbol, study_mark_tooltip
+from .theme import (ACCENT, GOLD, MUTED, TEXT, copy_word_tooltip, draw_related_arrow,
+                    draw_symbol, mouse_action_hint, related_drag_tooltip, reveal_tooltip,
+                    study_mark_tooltip, tooltip_lines)
 from .widgets import ExpandingTextEdit
 from .pos_picker import PosPicker
 from .word_paste import handle_word_paste, set_word_field
@@ -483,8 +485,23 @@ class WordDelegate(QStyledItemDelegate):
         self.last_editor_field = editor
         self.edit_index = QPersistentModelIndex(index)
         self.editingChanged.emit(True)
+        for field in self.editor_widgets():
+            field.setMouseTracking(True)
+            field.installEventFilter(self)
         editor.destroyed.connect(lambda: self._destroyed(editor))
         return editor
+
+    def editor_widgets(self):
+        editor = self.editor
+        if editor is None:
+            return ()
+        if isinstance(editor, WordNameEditor):
+            return editor, editor.phonetic, editor.panel
+        if isinstance(editor, PosPicker):
+            return editor, editor.view(), editor.view().viewport(), editor.popup
+        if isinstance(editor, QPlainTextEdit):
+            return editor, editor.viewport()
+        return (editor,)
 
     def _destroyed(self, editor):
         if self.editor is editor:
@@ -717,6 +734,15 @@ class WordDelegate(QStyledItemDelegate):
         self.submit()
 
     def eventFilter(self, editor, event):
+        if editor in self.editor_widgets():
+            if event.type() == QEvent.Type.MouseMove:
+                self.view.note_mouse_position(event.globalPosition().toPoint())
+            if (event.type() == QEvent.Type.KeyPress and event.key() == Qt.Key.Key_F2
+                    and event.modifiers() == Qt.KeyboardModifier.NoModifier):
+                if not event.isAutoRepeat():
+                    self.view.edit_from_f2()
+                event.accept()
+                return True
         if (isinstance(self.editor, PosPicker) and editor is self.editor.view()
                 and event.type() == QEvent.Type.KeyPress
                 and event.key() in (Qt.Key.Key_Tab, Qt.Key.Key_Backtab)):
@@ -772,7 +798,7 @@ class WordTable(QTableView):
     MIN_TRANSLATION_WIDTH = 80
     DEFAULT_ACTION_WIDTHS = {(False, True): 188, (False, False): 154, (True, False): 88}
 
-    editPreparationRequested = Signal(int)
+    editPreparationRequested = Signal(int, int)
     copyRequested = Signal(str)
     wholeWordCopyRequested = Signal(object)
     pasteRejected = Signal(str)
@@ -787,6 +813,8 @@ class WordTable(QTableView):
     def __init__(self, model, before_edit, parent=None):
         super().__init__(parent)
         self._selecting_group = False
+        self._mouse_moved = False
+        self._last_mouse_position = QCursor.pos()
         self._hovered_index = QPersistentModelIndex()
         self._action_widths = {}
         self._width_mode = None
@@ -812,7 +840,9 @@ class WordTable(QTableView):
         self.setModel(model)
         self.delegate = WordDelegate(self, before_edit)
         model.modelAboutToBeReset.connect(self.reset_study_input)
+        model.modelAboutToBeReset.connect(self.reset_mouse_target)
         self.delegate.editingChanged.connect(self.reset_study_input)
+        self.delegate.editingChanged.connect(self.reset_mouse_target)
         self.setItemDelegate(self.delegate)
         self.setShowGrid(False)
         self.setWordWrap(True)
@@ -861,6 +891,7 @@ class WordTable(QTableView):
         self.shuffle_button.setObjectName("quiet")
         self.shuffle_button.setToolTip("随机排列当前待记单词")
         self.shuffle_button.setAccessibleName("随机排列待记单词")
+        self.edit_word_shortcut = ""
         self.shuffle_button.clicked.connect(self.shuffleRequested)
         self._layout_shuffle_button()
         header.geometriesChanged.connect(self._layout_shuffle_button)
@@ -875,6 +906,7 @@ class WordTable(QTableView):
         self._drag_scroll.timeout.connect(self._auto_scroll_drag)
         self.model().modelAboutToBeReset.connect(self.cancel_drag)
         self.model().modelAboutToBeReset.connect(self.cancel_pending_copy)
+        self.model().modelAboutToBeReset.connect(QToolTip.hideText)
         self.verticalScrollBar().valueChanged.connect(self._update_hover)
         self.horizontalScrollBar().valueChanged.connect(self._update_hover)
 
@@ -988,8 +1020,35 @@ class WordTable(QTableView):
         self._hovered_index = QPersistentModelIndex(index)
         self.viewport().update()
 
+    def _follow_definition_hover(self, point):
+        if (not self._mouse_moved or not self.hasFocus() or not self.can_navigate_entries()
+                or QApplication.activeWindow() is not self.window()
+                or QApplication.activeModalWidget() or QApplication.activePopupWidget()
+                or QApplication.mouseButtons() != Qt.MouseButton.NoButton):
+            return
+        current = self.currentIndex()
+        selected = current.data(Qt.ItemDataRole.UserRole)
+        index = self.indexAt(point)
+        row = index.data(Qt.ItemDataRole.UserRole)
+        if (index == current or index.column() != 3 or row is None or row.hidden
+                or selected is None or selected.entry.id != row.entry.id
+                or not self.selectionModel().isSelected(current)):
+            return
+        position = self.verticalScrollBar().value()
+        auto_scroll = self.hasAutoScroll()
+        self.setAutoScroll(False)
+        try:
+            self.setCurrentIndex(index)
+            self.verticalScrollBar().setValue(position)
+            # This location change was caused by mouse movement itself.
+            self._mouse_moved = True
+        finally:
+            self.setAutoScroll(auto_scroll)
+
     def currentChanged(self, current, previous):
         super().currentChanged(current, previous)
+        if current != previous:
+            self.reset_mouse_target()
         row = current.data(Qt.ItemDataRole.UserRole)
         if self.study_input.entry_id is not None and (
                 row is None or row.entry.id != self.study_input.entry_id):
@@ -1008,6 +1067,7 @@ class WordTable(QTableView):
             self.copyRequested.emit(index.data())
 
     def hideEvent(self, event):
+        self.reset_mouse_target()
         self.reset_study_input()
         self.cancel_pending_copy()
         self.cancel_drag()
@@ -1035,6 +1095,7 @@ class WordTable(QTableView):
             return
         indexes = self.selectionModel().selectedIndexes()
         if not indexes:
+            self.reset_mouse_target()
             self.reset_study_input()
             return
         row = indexes[0].data(Qt.ItemDataRole.UserRole)
@@ -1071,14 +1132,20 @@ class WordTable(QTableView):
         number = owned[min(sense, len(owned) - 1)] if owned else matching[0]
         return self.model().index(number, column)
 
-    @contextmanager
-    def preserve_view(self, *, scroll_position=None):
-        """Rebuild rows while retaining logical selection and pixel scroll position."""
+    def view_state(self):
+        """Capture logical location without retaining indexes across model resets."""
         current = self.currentIndex()
         row = current.data(Qt.ItemDataRole.UserRole)
         part = (row.entry.id, row.owner, row.sense, current.column()) if row else None
         selected = self.selectionModel().isSelected(current)
-        position = self.verticalScrollBar().value() if scroll_position is None else scroll_position
+        return part, selected, self.verticalScrollBar().value()
+
+    @contextmanager
+    def preserve_view(self, *, scroll_position=None, view_state=None):
+        """Rebuild rows while retaining logical selection and pixel scroll position."""
+        part, selected, position = self.view_state() if view_state is None else view_state
+        if scroll_position is not None:
+            position = scroll_position
         auto_scroll, updates = self.hasAutoScroll(), self.updatesEnabled()
         self.setAutoScroll(False)
         self.setUpdatesEnabled(False)
@@ -1135,7 +1202,7 @@ class WordTable(QTableView):
         """Resolve a logical field again after draft handling or a saved-data refresh."""
         if not self.delegate.before_edit():
             return
-        self.editPreparationRequested.emit(target[0])
+        self.editPreparationRequested.emit(target[0], target[3])
         entry_id, owner, sense, column = target
         number = next((i for i, row in enumerate(self.model().rows)
                        if (row.entry.id, row.owner, row.sense) == target[:3]), None)
@@ -1147,6 +1214,37 @@ class WordTable(QTableView):
             self.setCurrentIndex(index)
             self.scrollTo(index, QAbstractItemView.ScrollHint.EnsureVisible)
             self.edit(index)
+
+    def edit_from_f2(self):
+        """Commit the active editor before opening the logical F2 target."""
+        popup = QApplication.activePopupWidget()
+        own_popup = self.delegate.editor.popup if isinstance(self.delegate.editor, PosPicker) else None
+        if (not self.isVisible() or not self.isEnabled() or self.dragging
+                or QApplication.activeModalWidget() or popup is not None and popup is not own_popup):
+            return
+        current = self.currentIndex()
+        row = current.data(Qt.ItemDataRole.UserRole)
+        target = None
+        if self._mouse_moved:
+            position = QCursor.pos()
+            point = self.viewport().mapFromGlobal(position)
+            index = self.indexAt(point) if self.viewport().rect().contains(point) else QModelIndex()
+            if any(field.isVisible() and QRect(field.mapToGlobal(QPoint()), field.size()).contains(position)
+                   for field in self.delegate.editor_widgets()):
+                index = QModelIndex(self.delegate.edit_index)
+            hovered = index.data(Qt.ItemDataRole.UserRole)
+            if hovered is not None and self.model().flags(index) & Qt.ItemFlag.ItemIsEditable:
+                target = hovered.entry.id, hovered.owner, hovered.sense, index.column()
+        if target is None and row is not None and not row.hidden and self.selectionModel().isSelected(current):
+            target = row.entry.id, -1, 0, 3
+        if not self.delegate.submit():
+            return
+        target = self.delegate.target_after_removal(target) if target is not None else None
+        if target is not None:
+            self.cancel_pending_copy()
+            self.edit_field(target)
+        else:
+            self.setFocus()
 
     def move_editor(self, step):
         index = QModelIndex(self.delegate.edit_index)
@@ -1188,6 +1286,7 @@ class WordTable(QTableView):
         """One navigation entry point for table keys and surrounding controls."""
         if not self.can_navigate_entries():
             return False
+        self.reset_mouse_target()
         # Choose before focusing: Qt's default focus handling may create a current cell.
         if first:
             if not self.model().rows:
@@ -1255,6 +1354,8 @@ class WordTable(QTableView):
         self._copy_word(row)
 
     def _right_copy_hit(self, index, row, point):
+        if self.related_handle_hit(index, point):
+            return True
         column = index.column()
         if column == self.action_column:
             return not row.first or not any(rect.contains(point) for _, rect in
@@ -1314,7 +1415,7 @@ class WordTable(QTableView):
                         event.accept()
                         return
                     if not removed:
-                        self.editPreparationRequested.emit(row.entry.id)
+                        self.editPreparationRequested.emit(row.entry.id, column)
                     matching = next((i for i, item in enumerate(self.model().rows)
                                      if (item.entry.id, item.owner, item.sense) == target[:3]), None)
                     if matching is None:
@@ -1532,7 +1633,7 @@ class WordTable(QTableView):
                 and self.state() != QAbstractItemView.State.EditingState):
             key = event.key()
             modifiers = event.modifiers()
-            if key == Qt.Key.Key_Enter:
+            if key in (Qt.Key.Key_Enter, Qt.Key.Key_Delete):
                 modifiers &= ~Qt.KeyboardModifier.KeypadModifier
             if (event.modifiers() == Qt.KeyboardModifier.ControlModifier
                     and key in (Qt.Key.Key_Up, Qt.Key.Key_Down)):
@@ -1552,12 +1653,18 @@ class WordTable(QTableView):
                        Qt.Key.Key_A, Qt.Key.Key_S, Qt.Key.Key_D):
                 event.accept()
                 return
-            if key == Qt.Key.Key_F2:
+            if key == Qt.Key.Key_Delete:
                 current = self.currentIndex()
                 row = current.data(Qt.ItemDataRole.UserRole)
-                if (not event.isAutoRepeat() and row is not None and not row.hidden
-                        and self.selectionModel().isSelected(current)):
-                    self.edit_field((row.entry.id, row.owner, row.sense, 3))
+                if (not self.study_mode and not self.dragging and not event.isAutoRepeat()
+                        and row is not None and self.selectionModel().isSelected(current)):
+                    self.cancel_pending_copy()
+                    self.actionRequested.emit(row.entry.id, "trash")
+                event.accept()
+                return
+            if key == Qt.Key.Key_F2:
+                if not event.isAutoRepeat() and self.can_navigate_entries():
+                    self.edit_from_f2()
                 event.accept()
                 return
             step = navigation_step(event)
@@ -1579,6 +1686,15 @@ class WordTable(QTableView):
         self.study_input.reset()
         self.viewport().update()
 
+    def reset_mouse_target(self):
+        self._mouse_moved = False
+        self._last_mouse_position = QCursor.pos()
+
+    def note_mouse_position(self, position):
+        if position != self._last_mouse_position:
+            self._last_mouse_position = position
+            self._mouse_moved = True
+
     def set_hide_word_while_spelling(self, enabled):
         if self.hide_word_while_spelling != enabled:
             self.hide_word_while_spelling = enabled
@@ -1587,6 +1703,7 @@ class WordTable(QTableView):
     def skip_study_entry(self, entry_id):
         if not self.study_mode or not self.delegate.submit() or not self.can_navigate_entries():
             return
+        self.reset_mouse_target()
         rows = self.model().rows
         pending = [row.entry.id for row in rows
                    if row.first and row.entry.id not in self.model().study_completed_ids]
@@ -1661,7 +1778,12 @@ class WordTable(QTableView):
             return
         super().inputMethodEvent(event)
 
+    def focusInEvent(self, event):
+        self.reset_mouse_target()
+        super().focusInEvent(event)
+
     def focusOutEvent(self, event):
+        self.reset_mouse_target()
         self.reset_study_input()
         self.cancel_drag()
         super().focusOutEvent(event)
@@ -1755,42 +1877,58 @@ class WordTable(QTableView):
 
     def viewportEvent(self, event):
         if event.type() == QEvent.Type.MouseMove:
+            self.note_mouse_position(event.globalPosition().toPoint())
             self._update_hover(point=event.position().toPoint())
+            if event.buttons() == Qt.MouseButton.NoButton:
+                self._follow_definition_hover(event.position().toPoint())
         elif event.type() == QEvent.Type.Leave:
             self._hovered_index = QPersistentModelIndex()
             self.viewport().update()
         if event.type() == QEvent.Type.ToolTip:
+            self._follow_definition_hover(event.pos())
             index = self.indexAt(event.pos())
             if index.isValid():
                 row = index.data(Qt.ItemDataRole.UserRole)
                 text = ""
                 if self.related_handle_hit(index, event.pos()):
-                    text = "按住拖动调整顺序"
+                    text = related_drag_tooltip()
                 elif index.column() == self.action_column and row.first:
                     labels = {"copy": copy_word_tooltip(),
                               "learned": learned_action_label(row.entry.learned),
                               "study": study_mark_tooltip(row.hidden),
-                              "edit": EDIT_WORD_LABEL, "trash": "删除单词",
-                              "drag": "按住拖动整个词条" if self.reorder_enabled else "搜索时不可调整排序"}
+                              "edit": EDIT_WORD_LABEL + (f" · {self.edit_word_shortcut}" if self.edit_word_shortcut else ""),
+                              "trash": "删除单词 · Del",
+                              "drag": "按住拖动改变单词排序" if self.reorder_enabled else "搜索时不可调整排序"}
                     for name, rect in self.action_rects(self.visualRect(index), row):
                         if rect.contains(event.pos()):
                             text = labels[name]
                 elif index.column() == 0 and row.first:
                     text = ('' if self.study_mode else
-                            ("取消重点" if row.entry.important else "设为重点"))
+                            tooltip_lines("取消重点" if row.entry.important else "设为重点",
+                                          mouse_action_hint("整词复制", "right")))
                 elif row.hidden and index.column() in (2, 3):
                     if self.delegate.mask_hit(index, event.pos()):
-                        text = "点击查看词性、翻译和关联词"
+                        text = reveal_tooltip(self.study_mode)
                 elif index.column() == 1:
                     text = self.delegate.word_tooltip(index)
                     if text:
                         screen = QApplication.screenAt(event.globalPos()) or self.screen()
                         text = word_tooltip_markup(text, self.font(),
                                                    max(1, screen.availableGeometry().width() - 48))
+                    if row.sense == 0:
+                        text += tooltip_lines(mouse_action_hint("复制单词拼写", "left"),
+                                              mouse_action_hint("编辑拼写和音标", "right"))
+                elif self.delegate.pos_hit(index, event.pos()):
+                    text = tooltip_lines("按住拖动改变释义排序", mouse_action_hint("编辑", "right"))
+                elif index.column() == 3 and not row.hidden:
+                    lines = ([mouse_action_hint("复制", "left")]
+                             if self.delegate.copy_hit(index, event.pos()) else [])
+                    text = tooltip_lines(*lines, mouse_action_hint("编辑", "right", "F2"),
+                                          mouse_action_hint("隐藏释义", "left", "空格", modifier="Ctrl"))
                 else:
                     text = index.data(Qt.ItemDataRole.ToolTipRole) or ""
                 if text:
-                    QToolTip.showText(event.globalPos(), text, self)
+                    QToolTip.showText(event.globalPos(), text, self, QRect(), self.toolTipDuration())
                 else:
                     QToolTip.hideText()
                 return True

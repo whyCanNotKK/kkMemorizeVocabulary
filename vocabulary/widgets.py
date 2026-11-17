@@ -2,17 +2,17 @@ import math
 
 from PySide6.QtCore import (
     QEasingCurve, QEvent, QParallelAnimationGroup, QPauseAnimation, QPoint,
-    QPropertyAnimation, QSequentialAnimationGroup, QRectF, QSignalBlocker, QSize, Qt, Signal, QTimer,
+    QPropertyAnimation, QSequentialAnimationGroup, QRect, QRectF, QSignalBlocker, QSize, Qt, Signal, QTimer,
 )
 from PySide6.QtGui import QColor, QKeyEvent, QPainter, QPalette, QPen
 from PySide6.QtWidgets import (
-    QApplication, QComboBox, QFrame, QGraphicsOpacityEffect, QHBoxLayout, QLabel, QLineEdit, QMessageBox,
+    QApplication, QComboBox, QDialog, QFrame, QGraphicsOpacityEffect, QHBoxLayout, QLabel, QLineEdit,
     QPlainTextEdit, QPushButton, QSizePolicy, QStyle, QStyledItemDelegate, QStyleOptionComboBox, QStyleOptionViewItem,
     QToolButton, QVBoxLayout, QWidget,
 )
 
 from .domain import POS_OPTIONS, SHORTCUT_LABELS, RelatedWord, Sense, normalize_pos
-from .theme import MUTED, copy_word_tooltip, draw_related_arrow, draw_symbol, icon
+from .theme import MUTED, copy_word_tooltip, draw_related_arrow, draw_symbol, icon, related_drag_tooltip
 from .pos_picker import pos_shortcut
 from .word_paste import handle_word_paste, set_word_field
 
@@ -78,16 +78,17 @@ def button(text, parent=None, quiet=False):
 
 
 def confirm_remove(parent, message: str) -> bool:
-    dialog = QMessageBox(parent)
-    dialog.setWindowTitle("确认移除")
-    dialog.setText(message)
-    dialog.setInformativeText("此操作会移除已填写的内容。")
-    yes = dialog.addButton("确认移除", QMessageBox.ButtonRole.AcceptRole)
-    no = dialog.addButton("取消", QMessageBox.ButtonRole.RejectRole)
-    dialog.setDefaultButton(yes)
-    dialog.setEscapeButton(no)
-    dialog.exec()
-    return dialog.clickedButton() is yes
+    # Import here because the shared dialog uses the button factory in this module.
+    from .draft_reset_dialog import DraftResetDialog
+
+    anchor = QRect(parent.mapToGlobal(QPoint()), parent.size())
+    dialog = DraftResetDialog(anchor, message, parent.window())
+    for control in (dialog.confirm_button, dialog.cancel_button):
+        control.setAutoDefault(True)
+    try:
+        return dialog.exec() == QDialog.DialogCode.Accepted
+    finally:
+        dialog.deleteLater()
 
 
 class FloatingNotice(QFrame):
@@ -336,7 +337,7 @@ class SenseDragHandle(QWidget):
         super().__init__(parent)
         self.setFixedSize(24, INPUT_HEIGHT)
         self.setCursor(Qt.CursorShape.OpenHandCursor)
-        self.setToolTip("按住拖动排序")
+        self.setToolTip("按住拖动改变释义排序")
         self.setAccessibleName("拖动调整释义顺序")
 
     def paintEvent(self, event):
@@ -419,12 +420,21 @@ class SenseRow(QWidget):
 
 
 class RelatedIndicator(QWidget):
+    copyRequested = Signal()
+
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setFixedSize(16, INPUT_HEIGHT)
         self.setCursor(Qt.CursorShape.OpenHandCursor)
-        self.setToolTip("按住拖动调整顺序")
+        self.setToolTip(related_drag_tooltip())
         self.setAccessibleName("拖动调整关联词顺序")
+
+    def mousePressEvent(self, event):
+        if event.button() == Qt.MouseButton.RightButton:
+            self.copyRequested.emit()
+            event.accept()
+            return
+        super().mousePressEvent(event)
 
     def paintEvent(self, event):
         painter = QPainter(self)
@@ -472,6 +482,7 @@ class WordBlock(QFrame):
         word_layout.setSpacing(6)
         if related:
             self.indicator = RelatedIndicator()
+            self.indicator.copyRequested.connect(self.copyRequested)
             word_layout.addWidget(self.indicator)
             self.word.setFixedWidth(WORD_WIDTH - 22)
             word_layout.addWidget(self.word)
@@ -532,7 +543,7 @@ class WordBlock(QFrame):
     def remove_sense(self, row):
         if len(self.rows) <= 1:
             return
-        if row.has_content() and not confirm_remove(self, "移除这条释义？"):
+        if row.has_content() and not confirm_remove(row.remove_button, "确认删除释义"):
             return
         index = self.rows.index(row)
         self._remove_row(row)

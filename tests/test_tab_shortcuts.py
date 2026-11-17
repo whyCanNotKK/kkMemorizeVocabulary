@@ -24,6 +24,7 @@ def test_tabs_switch_from_any_main_window_input(window, qtbot, focus, modifier):
     for number, page in [(2, "all"), (3, "learned"), (4, "study17"), (1, "pending")]:
         press_tab(window, qtbot, number, modifier)
         assert window.filter_name == page
+        assert QApplication.focusWidget() is window.current_table()
 
 
 @pytest.mark.parametrize("editing", [False, True])
@@ -64,17 +65,106 @@ def test_tab_switch_submits_inline_edit_and_blocks_invalid_input(window, repo, q
     editor.setText("")
     press_tab(window, qtbot, 2, modifier)
     assert window.filter_name == "pending" and window.table.delegate.editor is editor
+    assert QApplication.focusWidget() is editor
     editor.setText("new name")
     press_tab(window, qtbot, 2, modifier)
     assert window.filter_name == "all" and window.table.delegate.editor is None
     assert repo.get(saved.id).text == "new name"
 
 
-def test_mouse_tab_switch_preserves_draft(window, qtbot, monkeypatch):
+@pytest.mark.parametrize('page', ['pending', 'all', 'learned', 'study17'])
+def test_mouse_tab_switch_preserves_draft_and_focuses_list(window, qtbot, monkeypatch, page):
     window.blocks[0].word.setText("draft")
     monkeypatch.setattr(window, "resolve_dirty", lambda: not window.is_dirty() or pytest.fail("tab switch must not process draft"))
-    qtbot.mouseClick(window.filter_buttons["all"], Qt.MouseButton.LeftButton)
-    assert window.filter_name == "all" and window.blocks[0].word.text() == "draft"
+    qtbot.mouseClick(window.filter_buttons[page], Qt.MouseButton.LeftButton)
+    assert window.filter_name == page and window.blocks[0].word.text() == "draft"
+    assert QApplication.focusWidget() is window.current_table()
+    assert not window.filter_buttons[page].hasFocus()
+    assert not window.current_table()._mouse_moved
+
+
+def test_alt_tab_then_space_does_not_activate_previous_tab_button(window, qtbot, modifier):
+    qtbot.mouseClick(window.filter_buttons["study17"], Qt.MouseButton.LeftButton)
+    press_tab(window, qtbot, 1, modifier)
+    assert window.filter_name == "pending"
+    qtbot.keyClick(QApplication.focusWidget(), Qt.Key.Key_Space)
+    assert window.filter_name == "pending"
+    assert QApplication.focusWidget() is window.table
+
+
+@pytest.mark.parametrize('trigger', ['keyboard', 'mouse'])
+def test_tabs_restore_each_pages_own_word_and_cell(window, repo, qtbot, modifier, monkeypatch, trigger):
+    from datetime import date
+    from vocabulary.learning import StudyContext
+
+    monkeypatch.setattr(StudyContext, 'now', classmethod(lambda cls: StudyContext(date(2026, 11, 1), False)))
+    for i in range(36):
+        repo.save(WordEntry(f'word-{i}', [Sense('n.', '释义'), Sense('v.', '补充')],
+                            [RelatedWord('child', [Sense('n.', '关联')])], learned=i % 3 == 0))
+    expected = {}
+
+    def switch(number, page):
+        if trigger == 'mouse':
+            qtbot.mouseClick(window.filter_buttons[page], Qt.MouseButton.LeftButton)
+        else:
+            press_tab(window, qtbot, number, modifier)
+
+    for number, page in [(1, 'pending'), (2, 'all'), (3, 'learned'), (4, 'study17')]:
+        switch(number, page)
+        assert QApplication.focusWidget() is window.current_table()
+        table = window.current_table()
+        assert table.selectionModel().isSelected(table.currentIndex())
+        window.set_global_hidden(False)
+        table.setCurrentIndex(table.model().index(number * 4 + 2, 3))
+        expected[page] = table.view_state()[:2]
+    for number, page in [(3, 'learned'), (2, 'all'), (1, 'pending'), (4, 'study17')]:
+        switch(number, page)
+        table = window.current_table()
+        assert table.view_state()[:2] == expected[page]
+        assert QApplication.focusWidget() is table
+        assert table.visualRect(table.currentIndex()).intersects(table.viewport().rect())
+        assert not any(button.hasFocus() for button in window.filter_buttons.values())
+        if page != 'study17':
+            qtbot.keyClick(table, Qt.Key.Key_Space)
+            assert window.filter_name == page
+
+
+def test_alt_current_page_focuses_remembered_word_with_minimal_scroll(window, repo, qtbot, modifier):
+    entries = [repo.save(WordEntry(f'word-{i}', [Sense('n.', '释义')])) for i in range(50)]
+    window.refresh()
+    window.table.select_entry(entries[-1].id)
+    window.table.scrollToTop()
+    window.search_box.setFocus()
+    press_tab(window, qtbot, 1, modifier)
+    assert QApplication.focusWidget() is window.table
+    assert window.table.currentIndex().data(Qt.ItemDataRole.UserRole).entry.id == entries[-1].id
+    assert window.table.visualRect(window.table.currentIndex()).intersects(window.table.viewport().rect())
+
+
+def test_failed_alt_reload_keeps_original_focus(window, repo, qtbot, modifier, monkeypatch):
+    def fail(*args):
+        raise OSError('载入失败')
+
+    window.set_filter('study17')
+    button = window.filter_buttons['study17']
+    button.setFocus()
+    monkeypatch.setattr(repo, 'prepare_study', fail)
+    press_tab(window, qtbot, 4, modifier)
+    assert window.filter_name == 'study17'
+    assert QApplication.focusWidget() is button
+
+
+def test_alt_tab_falls_back_when_remembered_word_was_deleted(window, repo, qtbot, modifier):
+    removed = repo.save(WordEntry('removed', [Sense('n.', '删除')]))
+    remaining = repo.save(WordEntry('remaining', [Sense('n.', '保留')]))
+    window.refresh()
+    window.table.select_entry(removed.id)
+    press_tab(window, qtbot, 2, modifier)
+    repo.delete(removed.id)
+    press_tab(window, qtbot, 1, modifier)
+    assert window.table.hasFocus()
+    assert window.table.currentIndex().data(Qt.ItemDataRole.UserRole).entry.id == remaining.id
+    assert window.table.selectionModel().isSelected(window.table.currentIndex())
 
 
 def test_tab_shortcuts_suspend_and_do_not_repeat(window, qtbot, modifier):

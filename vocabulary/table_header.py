@@ -21,7 +21,7 @@ class WordTableHeader(QHeaderView):
             label = self.style().subElementRect(QStyle.SubElement.SE_HeaderLabel, option, self)
             visible = option.fontMetrics.elidedText(option.text, self.textElideMode(), label.width())
             if visible != option.text:
-                QToolTip.showText(event.globalPos(), option.text, self)
+                QToolTip.showText(event.globalPos(), option.text, self, QRect(), self.toolTipDuration())
             else:
                 QToolTip.hideText()
             event.accept()

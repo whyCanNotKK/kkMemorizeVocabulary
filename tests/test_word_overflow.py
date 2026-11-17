@@ -74,11 +74,13 @@ def test_tooltip_actual_event_preserves_full_content_and_four_spaces(overflow, m
     QApplication.sendEvent(table.viewport(), QHelpEvent(QEvent.Type.ToolTip, point, table.viewport().mapToGlobal(point)))
     document = QTextDocument()
     document.setHtml(shown[-1])
-    assert document.toPlainText().replace('\u00a0', ' ') == entry.text + '    ' + entry.phonetic
+    assert document.toPlainText().replace('\u00a0', ' ').splitlines() == [
+        entry.text + '    ' + entry.phonetic, '复制单词拼写 · \ufffc', '编辑拼写和音标 · \ufffc']
     table.setColumnWidth(1, 500)
     shown.clear()
     QApplication.sendEvent(table.viewport(), QHelpEvent(QEvent.Type.ToolTip, point, table.viewport().mapToGlobal(point)))
-    assert not shown
+    document.setHtml(shown[-1])
+    assert document.toPlainText().splitlines() == ['复制单词拼写 · \ufffc', '编辑拼写和音标 · \ufffc']
 
 
 def test_word_without_phonetic_and_repeated_sense_cells(overflow):
@@ -95,7 +97,7 @@ def test_word_without_phonetic_and_repeated_sense_cells(overflow):
     assert not table.delegate.word_tooltip(repeated)
 
 
-def test_actual_tooltip_uses_one_line_at_natural_content_width(overflow, qtbot):
+def test_actual_tooltip_keeps_full_content_on_one_line_before_action_hints(overflow, qtbot):
     table, entry = overflow
     table.setColumnWidth(1, 60)
     index = table._entry_index(entry.id)
@@ -106,11 +108,13 @@ def test_actual_tooltip_uses_one_line_at_natural_content_width(overflow, qtbot):
                if widget.metaObject().className() == 'QTipLabel' and widget.isVisible())
     text = entry.text + '    ' + entry.phonetic
     content_width = QFontMetricsF(tip.font()).horizontalAdvance(text)
-    assert content_width <= tip.width() <= math.ceil(content_width) + 40
-    assert tip.height() <= QFontMetricsF(tip.font()).height() + 40
+    hint_width = QFontMetricsF(tip.font()).horizontalAdvance('编辑拼写和音标 · ') + 18
+    assert content_width <= tip.width() <= math.ceil(max(content_width, hint_width)) + 40
+    assert tip.height() <= 3 * (QFontMetricsF(tip.font()).height() + 5) + 40
     document = QTextDocument()
     document.setHtml(QToolTip.text())
-    assert document.toPlainText().replace('\u00a0', ' ') == text
+    assert document.toPlainText().replace('\u00a0', ' ').splitlines() == [
+        text, '复制单词拼写 · \ufffc', '编辑拼写和音标 · \ufffc']
     QToolTip.hideText()
 
 
