@@ -147,8 +147,10 @@ class StudyPage(QWidget):
             self.table.setColumnWidth(0, max(38, width))
             self.model.populate([task.entry for task in visible], self.revealed)
             self.table.update_spans()
-        completed = self.timer.history is not None and bool(self.timer.history.status)
-        show_notice = completed and self.model.rowCount() == 0
+        history = self.timer.history
+        show_notice = history is not None and bool(history.status) and self.model.rowCount() == 0
+        if show_notice:
+            self.completion_notice.set_history(history)
         self.table.empty_text = ('' if show_notice else
                                  "当前时段没有待完成的单词\n切换日期或时段后，请点击刷新")
         self.completion_notice.setVisible(show_notice)

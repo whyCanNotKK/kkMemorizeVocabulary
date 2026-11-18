@@ -560,8 +560,8 @@ def test_hidden_form_preserves_draft_and_blocks_all_form_shortcuts(window, qtbot
     assert not window.editor_panel.isVisible()
     value = window.form_value()
     for action in window.shortcuts.values:
-        if action == 'toggle_visibility':
-            continue  # This is a window action, not a form action.
+        if action in ('toggle_visibility', 'focus_search'):
+            continue  # Window actions have separate shortcut tests.
         window.shortcuts.callbacks[action]()
     qtbot.keyClick(window.study_page.table, Qt.Key.Key_N, Qt.KeyboardModifier.ControlModifier)
     qtbot.keyClick(window.study_page.table, Qt.Key.Key_Return, Qt.KeyboardModifier.ControlModifier)

@@ -2,7 +2,7 @@ import sqlite3
 
 import pytest
 
-from vocabulary.domain import DuplicateWord, RelatedWord, Sense, ValidationError, WordEntry
+from vocabulary.domain import DEFAULT_SHORTCUTS, DuplicateWord, RelatedWord, Sense, ValidationError, WordEntry
 from vocabulary.storage import Repository
 
 
@@ -92,7 +92,7 @@ def test_shortcuts_restart_does_not_overwrite_user_settings(repo):
     second = Repository(repo.path)
     try:
         assert second.shortcuts()["add_related"] == "Alt+N"
-        assert len(second.shortcuts()) == 8
+        assert set(second.shortcuts()) == set(DEFAULT_SHORTCUTS)
     finally:
         second.close()
 

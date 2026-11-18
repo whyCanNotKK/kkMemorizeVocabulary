@@ -234,13 +234,14 @@ class MainWindow(QMainWindow):
             name: lambda action=action: self.run_form_action(action) for name, action in form_actions.items()
         }
         callbacks["toggle_visibility"] = self.set_global_hidden
+        callbacks["focus_search"] = self.focus_search
         fixed = {}
         for number, key in enumerate(self.filter_buttons, 1):
             action = f"tab_{key}"
             fixed[action] = (f"Alt+{number}",)
             callbacks[action] = lambda key=key: self.activate_filter(key)
             self.filter_buttons[key].setToolTip(fixed[action][0])
-        scoped = {}
+        scoped = {"focus_search": self.can_focus_search}
         for number in range(1, 10):
             action = f"copy_word_{number}"
             fixed[action] = (f"Ctrl+{number}", f"Ctrl+Num+{number}")
@@ -565,6 +566,22 @@ class MainWindow(QMainWindow):
             table.ensure_entry_visible(row.entry.id)
         else:
             table.navigate_entries(1)
+
+    def can_focus_search(self, _focus):
+        popup = QApplication.activePopupWidget()
+        return (not self.current_table().dragging
+                and (popup is None or isinstance(popup.parentWidget(), (PosCombo, PosPicker))))
+
+    def focus_search(self):
+        if self.search_box.isHidden():
+            if not self.set_filter("all"):
+                return
+        elif not self.current_table().delegate.submit():
+            return
+        popup = QApplication.activePopupWidget()
+        if popup is not None and isinstance(combo := popup.parentWidget(), PosCombo):
+            combo.hidePopup()
+        self.search_box.setFocus(Qt.FocusReason.ShortcutFocusReason)
 
     def reveal(self, entry_id, expanded):
         if self.search_box.text().strip():

@@ -1,4 +1,4 @@
-from datetime import date
+from datetime import date, datetime
 
 import pytest
 from PySide6.QtCore import QPoint, Qt
@@ -6,6 +6,7 @@ from PySide6.QtGui import QColor, QPalette
 
 from vocabulary.domain import Sense, WordEntry
 from vocabulary.learning import StudyContext
+from vocabulary.study_history import EFFICIENCY_COLUMN, TOTAL_COLUMN
 
 
 AM = StudyContext(date(2026, 11, 5), False)
@@ -19,6 +20,14 @@ def finish(window, repo, monkeypatch):
     window.set_filter('study17')
     page = window.study_page
     assert not page.completion_notice.isVisible()
+    start = datetime.fromisoformat(f'{AM.day}T08:00:00+08:00')
+    end = datetime.fromisoformat(f'{AM.day}T09:02:30+08:00')
+    repo.start_study_task(AM, instant=start)
+    repo.save_study_duration(AM, 2851)
+    assert page.load(AM)
+    monkeypatch.setattr(page.timer, 'clock', lambda: 0)
+    complete = repo.complete_study
+    monkeypatch.setattr(repo, 'complete_study', lambda *args, **kwargs: complete(*args, instant=end, **kwargs))
     page.set_global_hidden(False)
     page.complete(entry.id, 'study')
     assert page.completion_notice.isVisible()
@@ -44,7 +53,7 @@ def test_all_refresh_controls_use_same_entry_and_capture_next_period(window, rep
 def test_notice_has_exact_two_lines_clickable_styled_controls_and_tracks_viewport(window, repo, monkeypatch, qtbot, tmp_path):
     page, _, _ = finish(window, repo, monkeypatch)
     notice = page.completion_notice
-    assert notice.title.text() == '当前时段任务已完成！'
+    assert notice.title.text() == '当前时段任务完成，总时长 63 m，有效用时 47 m，效率 76%'
     assert notice.instruction.text() == '在新时段点击'
     assert notice.suffix.text() == '，开启新任务'
     assert notice.refresh_link.text() == '刷新' and notice.refresh_link.font().underline()
@@ -77,6 +86,10 @@ def test_completed_notice_survives_refresh_and_tab_switch_but_yields_to_complete
     assert not page.completion_notice.isVisible()
     window.set_filter('study17')
     assert page.completion_notice.isVisible()
+    model = window.history_panel.model
+    assert model.index(0, TOTAL_COLUMN).data() == '63 m'
+    assert model.index(0, EFFICIENCY_COLUMN).data() == '76%'
+    assert model.index(0, TOTAL_COLUMN + 1).data() == '47 m'
     page.toggle_completed(True)
     assert page.model.rowCount() and not page.completion_notice.isVisible()
     page.toggle_completed(False)

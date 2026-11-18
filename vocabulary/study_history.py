@@ -2,18 +2,20 @@
 from datetime import date, datetime, timedelta
 from math import ceil
 
-from PySide6.QtCore import QAbstractTableModel, QModelIndex, QRect, QSize, Qt, QTimer
+from PySide6.QtCore import QAbstractTableModel, QEvent, QModelIndex, QRect, QSize, Qt, QTimer
 from PySide6.QtGui import QColor, QFont, QFontMetricsF, QPen
 from PySide6.QtWidgets import (QAbstractItemView, QFrame, QGridLayout, QHeaderView,
                               QLabel, QStyledItemDelegate, QTableView, QVBoxLayout, QWidget)
 
-from .learning import StudyContext, format_study_duration, study_duration_parts
+from .learning import StudyContext, format_study_duration_parts
 from .theme import ACCENT, GOLD, MUTED, icon
 from .widgets import button
 
 
-DURATION_PARTS_ROLE = Qt.ItemDataRole.UserRole
-INTERVAL_COLUMN, DURATION_COLUMN, REVIEW_COLUMN, NEW_COLUMN, STATUS_COLUMN = range(4, 9)
+TIMING_PARTS_ROLE = Qt.ItemDataRole.UserRole
+TIMING_DIGITS_ROLE = Qt.ItemDataRole.UserRole + 1
+INTERVAL_COLUMN, TOTAL_COLUMN, DURATION_COLUMN, EFFICIENCY_COLUMN, REVIEW_COLUMN, NEW_COLUMN, STATUS_COLUMN = range(4, 11)
+TIMING_COLUMNS = (TOTAL_COLUMN, DURATION_COLUMN, EFFICIENCY_COLUMN)
 
 
 def _memory_intervals(records):
@@ -30,7 +32,8 @@ def _memory_intervals(records):
 
 
 class HistoryModel(QAbstractTableModel):
-    HEADERS = ('日期', '时段', '开始时间', '结束时间', '记忆间隔', '有效用时', '复习词', '新词', '状态')
+    HEADERS = ('日期', '时段', '开始时间', '结束时间', '记忆间隔',
+               '总时长', '有效用时', '效率', '复习词', '新词', '状态')
     PERIODS = (('sun', GOLD, '上午'), ('moon', '#a5baf3', '下午'))
     STATUS = {
         'missing': ('task_cross', MUTED, '未完成', '完全没背单词'),
@@ -43,17 +46,30 @@ class HistoryModel(QAbstractTableModel):
         super().__init__(parent)
         self.records = {}
         self.intervals = {}
+        self.timing_digits = {column: 3 for column in TIMING_COLUMNS}
         self.today = StudyContext.now()
         self.current_context = self.today
         self.first = self.last = self.today.day
 
     def load(self, records, today, current_context=None):
-        by_period = {(record.task_date, record.afternoon): record for record in records}
+        by_period = {}
+        for record in records:
+            period = (record.task_date, record.afternoon)
+            previous = self.records.get(period)
+            # Reuse unchanged records and their cached time calculations.
+            by_period[period] = previous if previous == record else record
         intervals = _memory_intervals(by_period) if by_period != self.records else self.intervals
+        timing_digits = {column: 3 for column in TIMING_COLUMNS}
+        for record in by_period.values():
+            total, _ = record.timing
+            timing_digits[TOTAL_COLUMN] = max(timing_digits[TOTAL_COLUMN], len(str(total or 0)))
+            timing_digits[DURATION_COLUMN] = max(timing_digits[DURATION_COLUMN],
+                                                len(str(record.duration_seconds // 60)))
         dates = [date.fromisoformat(day) for day, _ in by_period]
         self.beginResetModel()
         self.records = by_period
         self.intervals = intervals
+        self.timing_digits = timing_digits
         self.today = today
         self.current_context = current_context or today
         self.first = min([today.day, *dates])
@@ -121,8 +137,11 @@ class HistoryModel(QAbstractTableModel):
                         return icon('sparkle', '#e8edf4')
                     if role == Qt.ItemDataRole.ToolTipRole:
                         return '次日凌晨'
-        if role == DURATION_PARTS_ROLE and index.column() == DURATION_COLUMN and record:
-            return study_duration_parts(record.duration_seconds)
+        if role == TIMING_DIGITS_ROLE and index.column() in TIMING_COLUMNS:
+            return self.timing_digits[index.column()]
+        if (record is not None and index.column() in TIMING_COLUMNS
+                and role in (TIMING_PARTS_ROLE, Qt.ItemDataRole.DisplayRole, Qt.ItemDataRole.ToolTipRole)):
+            return self.timing_data(record, index.column(), role)
         if role != Qt.ItemDataRole.DisplayRole:
             return None
         if index.column() == 0:
@@ -140,33 +159,57 @@ class HistoryModel(QAbstractTableModel):
         if index.column() == INTERVAL_COLUMN:
             hours = self.intervals.get(period)
             return f'{hours} h' if hours is not None else '—'
-        if index.column() == DURATION_COLUMN:
-            return format_study_duration(record.duration_seconds)
         if index.column() == REVIEW_COLUMN:
             return f'{record.review_done} / {record.review_total}'
         return f'{record.new_done} / {record.new_total}'
 
+    @staticmethod
+    def timing_data(record, column, role):
+        if column == DURATION_COLUMN:
+            parts = (('m', record.duration_seconds // 60),)
+        else:
+            total, efficiency = record.timing
+            if column == TOTAL_COLUMN:
+                parts = (('m', total),) if total is not None else ()
+            else:
+                parts = (('%', efficiency),) if efficiency is not None else ()
+        if role == Qt.ItemDataRole.ToolTipRole:
+            if column == EFFICIENCY_COLUMN or not parts or parts[0][1] < 60:
+                return None
+            hours, minutes = divmod(parts[0][1], 60)
+            return f'{hours} h {minutes} m'
+        if role == TIMING_PARTS_ROLE:
+            return parts or None
+        if not parts:
+            return '—'
+        if column == EFFICIENCY_COLUMN:
+            return f'{efficiency}%'
+        return format_study_duration_parts(parts)
+
 
 class HistoryDelegate(QStyledItemDelegate):
-    def _paint_duration(self, painter, option, index, parts):
+    def _paint_timing(self, painter, option, index, parts):
         metrics = QFontMetricsF(option.font, painter.device())
         number_font = QFont(option.font)
         number_font.setLetterSpacing(QFont.SpacingType.AbsoluteSpacing, -0.5)
         number_metrics = QFontMetricsF(number_font, painter.device())
-        two_digits = ceil(max(number_metrics.horizontalAdvance(char * 2) for char in '0123456789'))
-        gap = ceil(metrics.horizontalAdvance(' '))
-        unit_width = ceil(max(metrics.horizontalAdvance(unit) for unit in ('h', 'm', 's')))
-        fixed_width = len(parts) * (unit_width + gap) + (len(parts) - 1) * (two_digits + gap)
+        percent = index.column() == EFFICIENCY_COLUMN
+        digits = index.data(TIMING_DIGITS_ROLE)
+        minimum = ceil(max(number_metrics.horizontalAdvance(char * digits) for char in '0123456789'))
+        gap = 0 if percent else ceil(metrics.horizontalAdvance(' '))
+        units = ('%',) if percent else ('m',)
+        unit_width = ceil(max(metrics.horizontalAdvance(unit) for unit in units))
+        fixed_width = len(parts) * (unit_width + gap) + (len(parts) - 1) * (minimum + gap)
         area = option.rect.adjusted(4, 0, -4, 0)
-        first_width = max(two_digits, ceil(number_metrics.horizontalAdvance(str(parts[0][1]))))
+        first_width = max(minimum, ceil(number_metrics.horizontalAdvance(str(parts[0][1]))))
         first_width = min(first_width, area.width() - fixed_width)
-        if first_width < two_digits:
+        if first_width < minimum:
             super().paint(painter, option, index)
             return
 
         x = area.x() + (area.width() - fixed_width - first_width) // 2
         for i, (unit, number) in enumerate(parts):
-            number_width = first_width if i == 0 else two_digits
+            number_width = first_width if i == 0 else minimum
             unit_x = x + number_width + gap
             value = str(number)
             if number_metrics.horizontalAdvance(value) > number_width:
@@ -232,7 +275,7 @@ class HistoryDelegate(QStyledItemDelegate):
 
     def paint(self, painter, option, index):
         column = index.column()
-        parts = index.data(DURATION_PARTS_ROLE) if column == DURATION_COLUMN else None
+        parts = index.data(TIMING_PARTS_ROLE) if column in TIMING_COLUMNS else None
         pair = index.data() if column in (2, 3, REVIEW_COLUMN, NEW_COLUMN) else None
         if column in (1, STATUS_COLUMN):
             painter.fillRect(option.rect, index.data(Qt.ItemDataRole.BackgroundRole))
@@ -246,7 +289,7 @@ class HistoryDelegate(QStyledItemDelegate):
             painter.setFont(option.font)
             painter.setPen(index.data(Qt.ItemDataRole.ForegroundRole))
             if parts:
-                self._paint_duration(painter, option, index, parts)
+                self._paint_timing(painter, option, index, parts)
             else:
                 self._paint_number_pair(painter, option, index, pair)
                 if column in (2, 3) and index.data(Qt.ItemDataRole.DecorationRole):
@@ -315,22 +358,63 @@ class StudyHistoryPanel(QFrame):
         self.table.verticalHeader().setDefaultSectionSize(34)
         self.table.verticalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Fixed)
         self.table.horizontalHeader().setSectionsClickable(False)
-        self.table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
+        self.table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Fixed)
         self.table.ensurePolished()
         metrics = QFontMetricsF(self.table.font(), self.table)
+        timing_width = ceil(max(metrics.horizontalAdvance(char * 3 + ' m')
+                                for char in '0123456789')) + 8
+        timing_width = max(timing_width, ceil(metrics.horizontalAdvance('有效用时')) + 16)
         # Include room for the larger colon and the cell's side padding.
-        time_width = ceil(metrics.horizontalAdvance('88-88 88：88')) + 14
-        interval_width = ceil(metrics.horizontalAdvance(HistoryModel.HEADERS[INTERVAL_COLUMN])) + 20
-        for column, width in ((0, 100), (1, 48), (2, time_width), (3, time_width),
-                              (INTERVAL_COLUMN, interval_width), (STATUS_COLUMN, 60)):
-            self.table.horizontalHeader().setSectionResizeMode(column, QHeaderView.ResizeMode.Fixed)
+        time_width = ceil(metrics.horizontalAdvance('88-88 88：88')) + 20
+        interval_width = ceil(metrics.horizontalAdvance(HistoryModel.HEADERS[INTERVAL_COLUMN])) + 25
+        efficiency_width = ceil(max(metrics.horizontalAdvance(label) for label in ('效率', '100%'))) + 55
+        count_width = ceil(max(metrics.horizontalAdvance(char * 3 + ' / ' + char * 3)
+                               for char in '0123456789')) + 40
+        self._fixed_column_widths = {
+            column: max(timing_width, width) for column, width in ((0, 105), (1, 53), (STATUS_COLUMN, 60))
+        }
+        self._column_weights = {
+            2: max(timing_width, time_width), 3: max(timing_width, time_width),
+            INTERVAL_COLUMN: max(timing_width, interval_width),
+            EFFICIENCY_COLUMN: max(timing_width, efficiency_width),
+            REVIEW_COLUMN: max(timing_width, count_width), NEW_COLUMN: max(timing_width, count_width),
+        }
+        # Capture the current default-window layout before making every data column proportional.
+        baseline_width = self.window().width() - 2 * self.table.frameWidth()
+        duration_width = max(timing_width, (baseline_width - sum(self._fixed_column_widths.values())
+                                           - sum(self._column_weights.values())) / 2)
+        self._column_weights[TOTAL_COLUMN] = duration_width
+        self._column_weights[DURATION_COLUMN] = duration_width
+        self.table.horizontalHeader().setMinimumSectionSize(1)
+        for column, width in self._fixed_column_widths.items():
             self.table.setColumnWidth(column, width)
+        self._column_resize_timer = QTimer(self)
+        self._column_resize_timer.setSingleShot(True)
+        self._column_resize_timer.timeout.connect(self.resize_columns)
+        self.table.viewport().installEventFilter(self)
         layout.addWidget(self.table)
         self.timer.changed.connect(self.refresh)
         self._live = QTimer(self)
         self._live.setInterval(1000)
         self._live.timeout.connect(self.update_live)
         self.set_collapsed(True)
+
+    def eventFilter(self, source, event):
+        if source is self.table.viewport() and event.type() in (QEvent.Type.Resize, QEvent.Type.Show):
+            self._column_resize_timer.start(0)
+        return super().eventFilter(source, event)
+
+    def resize_columns(self):
+        available = max(len(self._column_weights),
+                        self.table.viewport().width() - sum(self._fixed_column_widths.values()))
+        total_weight = sum(self._column_weights.values())
+        cumulative = 0
+        previous_edge = 0
+        for column, weight in sorted(self._column_weights.items()):
+            cumulative += weight
+            edge = round(available * cumulative / total_weight)
+            self.table.setColumnWidth(column, max(1, edge - previous_edge))
+            previous_edge = edge
 
     def update_date_spans(self):
         self.table.clearSpans()

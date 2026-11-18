@@ -9,8 +9,8 @@ from PySide6.QtWidgets import QHeaderView, QStyleOptionViewItem
 from vocabulary.domain import RelatedWord, Sense, WordEntry
 from vocabulary.learning import StudyContext, StudyTaskHistory
 from vocabulary.storage import Repository
-from vocabulary.study_history import (DURATION_COLUMN, INTERVAL_COLUMN, NEW_COLUMN,
-                                      REVIEW_COLUMN, STATUS_COLUMN, HistoryModel)
+from vocabulary.study_history import (DURATION_COLUMN, EFFICIENCY_COLUMN, INTERVAL_COLUMN, NEW_COLUMN,
+                                      REVIEW_COLUMN, STATUS_COLUMN, TOTAL_COLUMN, HistoryModel)
 
 
 DAY = date(2026, 11, 5)
@@ -63,10 +63,10 @@ def test_gaps_are_virtual_dates_descending_and_periods_paired(qapp):
     assert status(model, 1) == '当前任务未完成'
     assert text(model, 1, 0) == ''  # Date is shared visually by the pair.
     assert status(model, 2) == status(model, 3) == '完全没背单词'
-    assert text(model, 4, DURATION_COLUMN) == '1 s'
+    assert text(model, 4, DURATION_COLUMN) == '0 m'
     assert text(model, 4, REVIEW_COLUMN) == '3 / 7' and text(model, 4, NEW_COLUMN) == '2 / 5'
     assert model.HEADERS == ('日期', '时段', '开始时间', '结束时间', '记忆间隔',
-                             '有效用时', '复习词', '新词', '状态')
+                             '总时长', '有效用时', '效率', '复习词', '新词', '状态')
     assert model.data(model.index(0, 0), Qt.ItemDataRole.BackgroundRole) == model.data(
         model.index(1, 0), Qt.ItemDataRole.BackgroundRole)
     model.load([record(earliest)], AM)
@@ -122,7 +122,41 @@ def test_period_icons_are_colored_with_tooltips_and_keep_their_own_records(qapp)
         images.append(image)
     assert images[0] != images[1]
     assert text(model, 0, DURATION_COLUMN) == '1 m'
-    assert text(model, 1, DURATION_COLUMN) == '1 h'
+    assert text(model, 1, DURATION_COLUMN) == '60 m'
+
+
+@pytest.mark.parametrize('end,active,total,efficiency', [
+    ('23:00:29', 15, '0 m', '52%'),
+    ('23:00:30', 15, '1 m', '50%'),
+    ('23:01:40', 27, '2 m', '27%'),
+    ('23:03:20', 5, '3 m', '3%'),
+    ('23:03:20', 197, '3 m', '99%'),
+    ('23:00:00', 1, '0 m', '—'),
+    ('22:59:59', 1, '—', '—'),
+    (None, 1, '—', '—'),
+])
+def test_total_and_efficiency_use_exact_elapsed_seconds(qapp, end, active, total, efficiency):
+    model = HistoryModel()
+    model.load([record(started_at=f'{DAY}T23:00:00+08:00', ended_at=f'{DAY}T{end}+08:00' if end else None,
+                       status=int(end is not None), duration_seconds=active)], PM)
+    assert text(model, 0, TOTAL_COLUMN) == total
+    assert text(model, 0, EFFICIENCY_COLUMN) == efficiency
+    assert text(model, 1, TOTAL_COLUMN) == text(model, 1, EFFICIENCY_COLUMN) == '—'
+
+
+def test_history_reuses_timing_cache_until_record_changes(qapp):
+    model = HistoryModel()
+    saved = record(afternoon=1, started_at=f'{DAY}T23:00:30+08:00',
+                   ended_at=f'{DAY + timedelta(days=1)}T00:00:00+08:00', status=1, duration_seconds=1785)
+    period = (DAY.isoformat(), 1)
+    model.load([saved], PM)
+    assert text(model, 1, TOTAL_COLUMN) == '60 m'
+    assert text(model, 1, EFFICIENCY_COLUMN) == '50%'
+    model.load([replace(saved)], PM)
+    assert model.records[period] is saved
+    model.load([replace(saved, duration_seconds=3570)], PM)
+    assert text(model, 1, TOTAL_COLUMN) == '60 m'
+    assert text(model, 1, EFFICIENCY_COLUMN) == '100%'
 
 
 def test_participant_count_includes_finished_future_and_learned_words_but_not_related(repo):
@@ -260,7 +294,7 @@ def test_history_live_timer_and_completion_refresh(window, repo, monkeypatch, qt
     assert status(panel.model, 0) == '当前任务未完成'
     ticks[0] = 1234_000_000
     panel.update_live()
-    assert text(panel.model, 0, DURATION_COLUMN) == '0 s'
+    assert text(panel.model, 0, DURATION_COLUMN) == '0 m'
     page.update_elapsed()
     assert page.elapsed_label.text() == '1 s'
     assert repo.study_task_history(AM).duration_seconds == 0  # Displaying history does not write time.
@@ -268,7 +302,7 @@ def test_history_live_timer_and_completion_refresh(window, repo, monkeypatch, qt
     page.complete(word.id, 'study')
     assert status(panel.model, 0) == '已完成'
     assert text(panel.model, 0, NEW_COLUMN) == '1 / 1'
-    assert text(panel.model, 0, DURATION_COLUMN) == '1 s'
+    assert text(panel.model, 0, DURATION_COLUMN) == '0 m'
     qtbot.wait(20)
     window.grab().save(str(tmp_path / 'study-history.png'))
 
@@ -361,8 +395,47 @@ def test_date_tooltip_shows_weekday_for_both_periods(qapp):
             assert model.index(row * 2 + period, 0).data(Qt.ItemDataRole.ToolTipRole) == weekday
 
 
-def test_history_duration_centers_groups_and_reserves_two_digits(window, qtbot):
-    durations = (1, 10, 60, 600, 3600, 36000, 61, 601, 3660, 36600)
+def test_history_columns_scale_from_default_proportions_and_keep_three_fixed_columns(window, qtbot):
+    window.set_filter('study17')
+    panel = window.history_panel
+    panel.set_collapsed(False)
+    table = panel.table
+    qtbot.wait(20)
+    baseline = [table.columnWidth(column) for column in range(panel.model.columnCount())]
+
+    for width in (1400, 860, 1200, 1040):
+        window.resize(width, 820)
+        qtbot.wait(20)
+        viewport_width = table.viewport().width()
+        actual = [table.columnWidth(column) for column in range(panel.model.columnCount())]
+        assert sum(actual) == viewport_width
+        assert table.horizontalScrollBar().maximum() == 0
+        for column in (0, 1, STATUS_COLUMN):
+            assert actual[column] == baseline[column]
+        columns = [column for column in range(panel.model.columnCount()) if column not in (0, 1, STATUS_COLUMN)]
+        available = sum(actual[column] for column in columns)
+        original = sum(baseline[column] for column in columns)
+        for column in columns:
+            assert actual[column] == pytest.approx(baseline[column] * available / original, abs=2)
+
+    panel.set_collapsed(True)
+    window.resize(860, 640)
+    panel.set_collapsed(False)
+    panel.model.load([record(DAY - timedelta(days=i)) for i in range(20)], PM)
+    panel.update_height()
+    qtbot.wait(20)
+    assert table.verticalScrollBar().isVisible()
+    assert sum(table.columnWidth(column) for column in range(panel.model.columnCount())) == table.viewport().width()
+    assert table.horizontalScrollBar().maximum() == 0
+    panel.model.load([], PM)
+    panel.update_height()
+    qtbot.wait(20)
+    assert not table.verticalScrollBar().isVisible()
+    assert sum(table.columnWidth(column) for column in range(panel.model.columnCount())) == table.viewport().width()
+
+
+def test_history_duration_centers_groups_and_aligns_minute_units(window, qtbot):
+    durations = (1, 10, 60, 600, 3600, 6000, 61, 601, 3660, 36600)
     window.resize(window.minimumSize())
     window.set_filter('study17')
     panel = window.history_panel
@@ -387,11 +460,10 @@ def test_history_duration_centers_groups_and_reserves_two_digits(window, qtbot):
     bounds = [ink_bounds(2 * i) for i in range(len(durations))]
     for first, second in zip(bounds[::2], bounds[1::2]):
         assert first[1] == second[1]  # Adding a digit keeps the unit in place.
-    for left, right in bounds:
-        assert (left + right) / 2 == pytest.approx(option.rect.center().x(), abs=8)
-    assert bounds[6][1] > bounds[0][1]  # Only displayed pairs take up space.
-    assert bounds[8][1] > bounds[2][1]
-    assert table.horizontalScrollBar().maximum() == 0
+    assert len({right for _, right in bounds}) == 1  # Minute units stay aligned, including blank hours.
+    assert bounds[0][0] > bounds[5][0]  # The number grows into its reserved slot.
+    assert text(model, 10, DURATION_COLUMN) == '100 m'
+    assert table.columnWidth(DURATION_COLUMN) >= table.horizontalHeader().minimumSectionSize()
 
 
 def test_history_duration_paints_all_digits_at_minimum_window_width(window, qtbot, monkeypatch):
@@ -400,7 +472,8 @@ def test_history_duration_paints_all_digits_at_minimum_window_width(window, qtbo
     panel = window.history_panel
     panel.set_collapsed(False)
     model, table = panel.model, panel.table
-    model.load([record(duration_seconds=7140), record(afternoon=1, duration_seconds=1368)], PM)
+    model.load([record(duration_seconds=7140, status=1, ended_at=f'{DAY}T19:42:00+08:00'),
+                record(afternoon=1, duration_seconds=1368)], PM)
     qtbot.wait(20)
     option = QStyleOptionViewItem()
     table.initViewItemOption(option)
@@ -417,12 +490,15 @@ def test_history_duration_paints_all_digits_at_minimum_window_width(window, qtbo
     image = QImage(option.rect.size(), QImage.Format.Format_RGB32)
     painter = QPainter(image)
     try:
-        for row in range(2):
-            table.itemDelegate().paint(painter, option, model.index(row, DURATION_COLUMN))
+        for row, column in ((0, DURATION_COLUMN), (1, DURATION_COLUMN),
+                            (0, TOTAL_COLUMN), (0, EFFICIENCY_COLUMN)):
+            option.rect.setWidth(table.columnWidth(column))
+            table.itemDelegate().paint(painter, option, model.index(row, column))
     finally:
         painter.end()
-    assert drawn == ['1', 'h', '59', 'm', '22', 'm', '48', 's']
-    assert table.columnWidth(2) == table.columnWidth(3)
+    assert drawn == ['119', 'm', '22', 'm', '702', 'm', '17', '%']
+    assert table.columnWidth(TOTAL_COLUMN) == pytest.approx(table.columnWidth(DURATION_COLUMN), abs=1)
+    assert table.columnWidth(2) == pytest.approx(table.columnWidth(3), abs=1)
     assert table.horizontalHeader().sectionResizeMode(2) == QHeaderView.ResizeMode.Fixed
 
 
@@ -432,6 +508,8 @@ def test_history_count_slash_stays_centered_for_different_digit_counts(window, q
     panel = window.history_panel
     panel.set_collapsed(False)
     model, table = panel.model, panel.table
+    assert table.columnWidth(REVIEW_COLUMN) == pytest.approx(table.columnWidth(NEW_COLUMN), abs=1)
+    assert table.horizontalHeader().sectionResizeMode(REVIEW_COLUMN) == QHeaderView.ResizeMode.Fixed
     counts = ((2, 7), (22, 230), (230, 230), (1234, 12000))
     model.load([record(DAY - timedelta(days=i), review_done=done, review_total=total,
                        new_done=done, new_total=total)
@@ -458,7 +536,7 @@ def test_history_count_slash_stays_centered_for_different_digit_counts(window, q
             assert slash_pixels(2 * i, column) == reference
 
 
-def test_times_hide_seconds_and_value_cells_have_no_tooltips(qapp):
+def test_times_hide_seconds_and_long_durations_have_hour_minute_tooltips(qapp):
     model = HistoryModel()
     start = f'{DAY.isoformat()}T08:12:59+08:00'
     end = f'{(DAY + timedelta(days=1)).isoformat()}T00:03:41+08:00'
@@ -466,11 +544,21 @@ def test_times_hide_seconds_and_value_cells_have_no_tooltips(qapp):
     assert text(model, 0, 2) == '08：12'
     assert text(model, 0, 3) == '00：03'
     assert model.index(0, 3).data(Qt.ItemDataRole.ToolTipRole) == '次日凌晨'
+    assert model.index(0, TOTAL_COLUMN).data(Qt.ItemDataRole.ToolTipRole) == '15 h 51 m'
     for column in range(2, STATUS_COLUMN):
-        if column != 3:
+        if column not in (3, TOTAL_COLUMN):
             assert model.index(0, column).data(Qt.ItemDataRole.ToolTipRole) is None
     model.load([record()], AM)
     assert text(model, 0, 3) == '—'
+    for column in (TOTAL_COLUMN, DURATION_COLUMN):
+        assert model.index(0, column).data(Qt.ItemDataRole.ToolTipRole) is None
+    for minutes, expected in ((59, None), (60, '1 h 0 m'), (100, '1 h 40 m'), (120, '2 h 0 m')):
+        model.load([record(ended_at=f'{DAY}T{8 + minutes // 60:02d}:{minutes % 60:02d}:00+08:00',
+                           duration_seconds=minutes * 60, status=1)], PM)
+        for column in (TOTAL_COLUMN, DURATION_COLUMN):
+            assert model.index(0, column).data(Qt.ItemDataRole.ToolTipRole) == expected
+            assert model.index(1, column).data(Qt.ItemDataRole.ToolTipRole) is None
+        assert model.index(0, EFFICIENCY_COLUMN).data(Qt.ItemDataRole.ToolTipRole) is None
 
 
 def test_current_status_follows_frozen_task_even_when_paused_or_clock_passes_1500(window, repo, monkeypatch):

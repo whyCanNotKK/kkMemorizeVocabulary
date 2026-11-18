@@ -13,6 +13,7 @@ DEFAULT_SHORTCUTS = {
     "add_sense": f"{_SHORTCUT_MODIFIER}+J", "remove_sense": f"{_SHORTCUT_MODIFIER}+K",
     "save": f"{_SHORTCUT_MODIFIER}+Return", "important": f"{_SHORTCUT_MODIFIER}+I",
     "toggle_visibility": f"{_SHORTCUT_MODIFIER}+S", "edit_selected": f"{_SHORTCUT_MODIFIER}+E",
+    "focus_search": f"{_SHORTCUT_MODIFIER}+F",
 }
 SHORTCUT_LABELS = {
     "add_related": "新增关联词", "remove_related": "删除关联词",
@@ -20,6 +21,7 @@ SHORTCUT_LABELS = {
     "save": "保存单词", "important": "单词 重点/非重点",
     "toggle_visibility": "显示/隐藏 所有释义",
     "edit_selected": "编辑选定的单词",
+    "focus_search": "搜索单词",
 }
 
 

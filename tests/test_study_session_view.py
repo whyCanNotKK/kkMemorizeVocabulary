@@ -135,10 +135,10 @@ def test_marks_do_not_write_duration_and_history_reads_only_saved_time(window, r
     assert page.elapsed_label.text() == '5 s'
     assert repo.study_task_history(AM).duration_seconds == 0
     panel.update_live()
-    assert panel.model.index(0, DURATION_COLUMN).data() == '0 s'
+    assert panel.model.index(0, DURATION_COLUMN).data() == '0 m'
     repo.connection.execute('DROP TRIGGER no_duration_on_mark')
     page.toggle_timer()
-    assert panel.model.index(0, DURATION_COLUMN).data() == '5 s'
+    assert panel.model.index(0, DURATION_COLUMN).data() == '0 m'
     page.toggle_timer()
     ticks[0] += 1_600_000_000
     page.set_global_hidden(False)
@@ -148,7 +148,7 @@ def test_marks_do_not_write_duration_and_history_reads_only_saved_time(window, r
     page.set_global_hidden(False)
     page.complete(words[2].id, 'study')
     assert repo.study_task_history(AM).duration_seconds == 7
-    assert panel.model.index(0, DURATION_COLUMN).data() == '7 s'
+    assert panel.model.index(0, DURATION_COLUMN).data() == '0 m'
     assert page.elapsed_label.text() == '7 s' and not page.timer.running
 
 

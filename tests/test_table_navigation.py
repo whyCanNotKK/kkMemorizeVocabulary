@@ -591,7 +591,7 @@ def test_completing_final_study_word_leaves_clean_empty_list(review_list, window
     assert page.new_count.accessibleName() == f"新词：剩余0/{len(entries)}"
     assert table.empty_text == ""
     assert page.completion_notice.isVisible()
-    assert page.completion_notice.title.text() == "当前时段任务已完成！"
+    assert page.completion_notice.title.text().startswith("当前时段任务完成，总时长 ")
     for key in (Qt.Key.Key_Return, Qt.Key.Key_Enter, Qt.Key.Key_Space, Qt.Key.Key_S):
         qtbot.keyClick(table, key)
     assert not table.currentIndex().isValid()

@@ -1,6 +1,7 @@
 """Local study dates and immutable page-operation context, independent of Qt."""
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
+from functools import cached_property
 
 from .domain import ValidationError, WordEntry
 
@@ -72,6 +73,19 @@ class StudyTaskHistory:
     new_done: int
     review_done: int
 
+    @cached_property
+    def timing(self) -> tuple[int | None, int | None]:
+        """Rounded total minutes and efficiency percentage for a finished task."""
+        if self.ended_at is None:
+            return None, None
+        elapsed = datetime.fromisoformat(self.ended_at) - datetime.fromisoformat(self.started_at)
+        seconds = elapsed // timedelta(seconds=1)
+        if seconds < 0:
+            return None, None
+        # Round the exact seconds ratio once, without floating-point or display-minute rounding.
+        efficiency = (self.duration_seconds * 100 + seconds // 2) // seconds if seconds else None
+        return (seconds + 30) // 60, efficiency
+
 
 def study_timestamp(instant: datetime | None = None) -> str:
     instant = instant or datetime.now(BEIJING)
@@ -92,8 +106,12 @@ def study_duration_parts(seconds: int) -> tuple[tuple[str, int], ...]:
     return parts + (('m', minutes),) if minutes else parts
 
 
+def format_study_duration_parts(parts: tuple[tuple[str, int], ...]) -> str:
+    return ' '.join(f'{value} {unit}' for unit, value in parts)
+
+
 def format_study_duration(seconds: int) -> str:
-    return ' '.join(f'{value} {unit}' for unit, value in study_duration_parts(seconds))
+    return format_study_duration_parts(study_duration_parts(seconds))
 
 
 def next_stage(stage: int) -> int:

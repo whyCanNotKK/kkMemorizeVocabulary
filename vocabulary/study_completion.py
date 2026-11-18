@@ -11,13 +11,14 @@ class StudyCompletionNotice(QWidget):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(4)
-        self.title = QLabel('当前时段任务已完成！')
+        self.title = QLabel()
         self.title.setObjectName('muted')
         self.title.setAlignment(Qt.AlignmentFlag.AlignCenter)
         layout.addWidget(self.title)
         line = QHBoxLayout()
         line.setContentsMargins(0, 0, 0, 0)
         line.setSpacing(0)
+        line.addStretch()
         self.instruction = QLabel('在新时段点击')
         self.instruction.setObjectName('muted')
         line.addWidget(self.instruction)
@@ -44,9 +45,21 @@ class StudyCompletionNotice(QWidget):
         self.suffix = QLabel('，开启新任务')
         self.suffix.setObjectName('muted')
         line.addWidget(self.suffix)
+        line.addStretch()
         layout.addLayout(line)
         parent.installEventFilter(self)
         self.hide()
+
+    def set_history(self, history):
+        total, efficiency = history.timing
+        total_text = f'{total} m' if total is not None else '—'
+        effective_text = f'{history.duration_seconds // 60} m'
+        efficiency_text = f'{efficiency}%' if efficiency is not None else '—'
+        title = f'当前时段任务完成，总时长 {total_text}，有效用时 {effective_text}，效率 {efficiency_text}'
+        if self.title.text() != title:
+            self.title.setText(title)
+            if self.isVisible():
+                self.reposition()
 
     def reposition(self):
         self.adjustSize()

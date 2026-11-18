@@ -177,6 +177,22 @@ def test_native_edit_shortcut_loads_selected_word_once(window, repo, qtbot, nati
     assert window.edit_id == entry.id and window.blocks[0].word.hasFocus()
 
 
+@pytest.mark.parametrize("page", ["pending", "study17"])
+def test_native_search_shortcut_focuses_search(window, qtbot, native, page):
+    assert window.set_filter(page)
+    source = window.blocks[0].word if page == "pending" else window.current_table()
+    source.setFocus()
+    bridge, _ = native
+    bridge.refresh()
+    bridge.dispatch_key(0xA2, True)
+    assert bridge.dispatch_key(ord("F"), True)
+    assert bridge.dispatch_key(ord("F"), False)
+    bridge.dispatch_key(0xA2, False)
+
+    qtbot.waitUntil(window.search_box.hasFocus)
+    assert window.filter_name == ("all" if page == "study17" else page)
+
+
 def test_native_delete_shortcut_targets_focused_definition(window, qtbot, native, monkeypatch):
     block = window.blocks[0]
     block.add_sense()
