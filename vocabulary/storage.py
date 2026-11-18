@@ -318,13 +318,22 @@ class Repository:
             updates[item.id] = rank
         self.batch_update_sort_orders(updates)
 
-    def shuffle_pending(self):
-        entries = [entry for entry in self.list_entries() if not entry.learned]
-        if len(entries) < 2:
-            return
-        random.shuffle(entries)
-        self.batch_update_sort_orders({entry.id: number for number, entry in enumerate(entries, 1)
-                                       if entry.sort_order != number})
+    def shuffle_entries(self, page: str):
+        if page not in {"pending", "learned", "all"}:
+            raise ValueError("无效的随机排列分类。")
+        groups = {False: [], True: []}
+        for entry in self.list_entries():
+            groups[entry.learned].append(entry)
+        states = (False, True) if page == "all" else (page == "learned",)
+        updates = {}
+        for learned in states:
+            entries = groups[learned]
+            if len(entries) < 2:
+                continue
+            random.shuffle(entries)
+            updates.update({entry.id: number for number, entry in enumerate(entries, 1)
+                            if entry.sort_order != number})
+        self.batch_update_sort_orders(updates)
 
     def delete(self, entry_id: int, context: StudyContext | None = None):
         with self.connection:

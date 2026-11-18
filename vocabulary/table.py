@@ -1078,7 +1078,7 @@ class WordTable(QTableView):
     def _layout_shuffle_button(self):
         self.shuffle_button.move(4, max(0, (self.horizontalHeader().height() - 30) // 2))
 
-    def set_page_state(self, page, searching, count):
+    def set_page_state(self, page, searching, shuffle_count):
         self.study_mode = page == "study17"
         self.show_drag_handle = page not in {"all", "study17"}
         self.reorder_enabled = self.show_drag_handle and not searching
@@ -1087,8 +1087,11 @@ class WordTable(QTableView):
         self._width_mode = mode
         self.setColumnWidth(self.action_column, self._action_widths.get(mode, self.minimum_action_width()))
         self._column_layout_timer.start(0)
-        self.shuffle_button.setVisible(page == "pending" and not searching)
-        self.shuffle_button.setEnabled(not searching and count >= 2)
+        label = {"pending": "待记", "all": "全部", "learned": "已记"}.get(page, "")
+        self.shuffle_button.setToolTip(f"随机排列当前{label}单词")
+        self.shuffle_button.setAccessibleName(f"随机排列{label}单词")
+        self.shuffle_button.setVisible(not self.study_mode and not searching)
+        self.shuffle_button.setEnabled(not self.study_mode and not searching and shuffle_count >= 2)
         self.viewport().update()
 
     def selectionChanged(self, selected, deselected):

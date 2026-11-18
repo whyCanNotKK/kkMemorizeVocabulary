@@ -144,10 +144,12 @@ def test_failed_import_and_transition_keep_counters(repo):
     assert (repo.max_pending_sort_order, repo.max_learned_sort_order) == (1, 0)
 
 
-def test_shuffle_uses_common_batch_entry_and_keeps_other_state(repo, monkeypatch):
+@pytest.mark.parametrize("page", ["pending", "learned", "all"])
+def test_shuffle_uses_common_batch_entry_and_keeps_other_state(repo, monkeypatch, page):
     entries = [repo.save(word(text)) for text in "abcd"]
-    learned = repo.save(word("learned", learned=True))
-    repo.batch_update_sort_orders({entries[-1].id: 50})
+    learned = [repo.save(word(text, learned=True)) for text in "efgh"]
+    repo.batch_update_sort_orders({entries[-1].id: 50, learned[-1].id: 60})
+    before = repo.list_entries()
     monkeypatch.setattr("vocabulary.storage.random.shuffle", lambda items: items.reverse())
     calls = []
     original = repo.batch_update_sort_orders
@@ -155,12 +157,47 @@ def test_shuffle_uses_common_batch_entry_and_keeps_other_state(repo, monkeypatch
         calls.append(updates)
         original(updates)
     monkeypatch.setattr(repo, "batch_update_sort_orders", tracked)
-    repo.shuffle_pending()
-    assert [(e.text, e.sort_order) for e in repo.list_entries()] == [
-        ("d", 1), ("c", 2), ("b", 3), ("a", 4), ("learned", 1)]
-    assert len(calls) == 1 and repo.get(learned.id) == learned
-    assert repo.max_pending_sort_order == 50
+    repo.shuffle_entries(page)
+    expected = []
+    for state in (False, True):
+        group = [entry for entry in before if entry.learned == state]
+        if page == "all" or state == (page == "learned"):
+            group = [replace(entry, sort_order=rank) for rank, entry in enumerate(reversed(group), 1)]
+        expected.extend(group)
+    assert repo.list_entries() == expected
+    assert len(calls) == 1
+    assert (repo.max_pending_sort_order, repo.max_learned_sort_order) == (50, 60)
+    reopened = Repository(repo.path)
+    try:
+        assert reopened.list_entries() == expected
+    finally:
+        reopened.close()
     assert repo.save(word("new")).sort_order == 51
+    assert repo.save(word("new learned", learned=True)).sort_order == 61
+
+
+def test_all_shuffle_rolls_back_both_categories_on_write_failure(repo, monkeypatch):
+    entries = [repo.save(word(text, learned=state))
+               for state, texts in ((False, "ab"), (True, "cd")) for text in texts]
+    repo.connection.executescript("""CREATE TRIGGER fail_learned_shuffle
+        BEFORE UPDATE OF sort_order ON words WHEN NEW.learned=1
+        BEGIN SELECT RAISE(ABORT,'FAIL'); END;""")
+    monkeypatch.setattr("vocabulary.storage.random.shuffle", lambda items: items.reverse())
+    with pytest.raises(sqlite3.IntegrityError):
+        repo.shuffle_entries("all")
+    assert repo.list_entries() == entries
+    assert (repo.max_pending_sort_order, repo.max_learned_sort_order) == (2, 2)
+
+
+def test_shuffle_keeps_singleton_category_order(repo, monkeypatch):
+    single = repo.save(word("single"))
+    repo.batch_update_sort_orders({single.id: 50})
+    repo.save(word("first", learned=True))
+    repo.save(word("second", learned=True))
+    monkeypatch.setattr("vocabulary.storage.random.shuffle", lambda items: items.reverse())
+    repo.shuffle_entries("all")
+    assert [(entry.text, entry.sort_order) for entry in repo.list_entries()] == [
+        ("single", 50), ("second", 1), ("first", 2)]
 
 
 @pytest.mark.parametrize("order", [0, -1, True, 1.5, "1", None])
@@ -522,14 +559,15 @@ def test_drag_edge_autoscroll_and_failure_restores_order(window, repo, qtbot, mo
     assert window.toast.label.text() == "locked"
 
 
-def test_search_blocks_programmatic_reorder_and_shuffle(window, repo, monkeypatch):
-    entries = [repo.save(word(text)) for text in ("aaa", "aab")]
-    window.refresh()
+@pytest.mark.parametrize("page", ["pending", "learned", "all"])
+def test_search_blocks_programmatic_reorder_and_shuffle(window, repo, monkeypatch, page):
+    entries = [repo.save(word(text, learned=page == "learned")) for text in ("aaa", "aab")]
+    window.set_filter(page)
     window.search_box.setText("aa")
     def unexpected(*args):
         raise AssertionError("should not reorder while searching")
     monkeypatch.setattr(repo, "move_entry", unexpected)
-    monkeypatch.setattr(repo, "shuffle_pending", unexpected)
+    monkeypatch.setattr(repo, "shuffle_entries", unexpected)
     window.move_word(entries[0].id, 1)
     window.shuffle_words()
     assert repo.list_entries() == entries

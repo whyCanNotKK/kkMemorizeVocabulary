@@ -59,35 +59,39 @@ def test_filters_remember_independent_scroll_positions(window, repo, qtbot):
         assert bar.value() == positions[key]
 
 
-def test_shuffle_button_scrolls_to_top_and_resets_only_pending_memory(window, repo, qtbot, monkeypatch):
+@pytest.mark.parametrize("page", ["pending", "learned", "all"])
+def test_shuffle_button_scrolls_to_top_and_resets_only_current_memory(window, repo, qtbot, monkeypatch, page):
     many_words(repo)
     monkeypatch.setattr("vocabulary.storage.random.shuffle", lambda entries: entries.reverse())
-    window.set_filter("all")
+    other = "all" if page != "all" else "pending"
+    window.set_filter(other)
     bar = window.table.verticalScrollBar()
     bar.setValue(600)
-    window.set_filter("pending")
-    window.table.setCurrentIndex(window.model.index(40, 1))
+    window.set_filter(page)
+    window.table.setCurrentIndex(window.model.index(window.model.rowCount() - 1, 1))
     bar.setValue(350)
-    before = [row.entry.id for row in window.model.rows]
+    before = [row.entry for row in window.model.rows]
     qtbot.mouseClick(window.table.shuffle_button, Qt.MouseButton.LeftButton)
     qtbot.wait(30)
-    assert [row.entry.id for row in window.model.rows] == before[::-1]
-    assert bar.value() == 0 and window._filter_scroll["pending"] == 0
-    window.set_filter("all")
+    expected = [entry.id for state in (False, True) for entry in reversed(before) if entry.learned == state]
+    assert [row.entry.id for row in window.model.rows] == expected
+    assert bar.value() == 0 and window._filter_scroll[page] == 0
+    window.set_filter(other)
     assert bar.value() == 600
-    window.set_filter("pending")
+    window.set_filter(page)
     assert bar.value() == 0
 
 
-def test_failed_shuffle_keeps_scroll_and_original_order(window, repo, qtbot, monkeypatch):
+@pytest.mark.parametrize("page", ["pending", "learned", "all"])
+def test_failed_shuffle_keeps_scroll_and_original_order(window, repo, qtbot, monkeypatch, page):
     many_words(repo)
-    window.refresh()
+    window.set_filter(page)
     bar = window.table.verticalScrollBar()
     bar.setValue(350)
     before = list(window.model.rows)
-    def fail():
+    def fail(_page):
         raise OSError("无法保存随机排序")
-    monkeypatch.setattr(repo, "shuffle_pending", fail)
+    monkeypatch.setattr(repo, "shuffle_entries", fail)
     qtbot.mouseClick(window.table.shuffle_button, Qt.MouseButton.LeftButton)
     qtbot.wait(30)
     assert bar.value() == 350 and window.model.rows == before

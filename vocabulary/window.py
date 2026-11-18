@@ -74,7 +74,7 @@ class MainWindow(QMainWindow):
         filters.setContentsMargins(12, 0, 12, 0)
         filters.setSpacing(6)
         self.filter_buttons = {}
-        for key, label in (("pending", "待记"), ("all", "全部"), ("learned", "已记下"),
+        for key, label in (("pending", "待记"), ("all", "全部"), ("learned", "已记"),
                            ("study17", "十七天背单词")):
             control = button(label)
             control.clicked.connect(lambda checked=False, key=key: self.activate_filter(key))
@@ -414,7 +414,7 @@ class MainWindow(QMainWindow):
             entries = self.repository.list_entries()
         counts = {"all": len(entries), "pending": sum(not e.learned for e in entries),
                   "learned": sum(e.learned for e in entries)}
-        labels = {"all": "全部", "pending": "待记", "learned": "已记下"}
+        labels = {"all": "全部", "pending": "待记", "learned": "已记"}
         for key, control in self.filter_buttons.items():
             if key == "study17":
                 control.setProperty("active", False)
@@ -428,7 +428,9 @@ class MainWindow(QMainWindow):
         visible = self._filter_entries(entries)
         searching = bool(self.search_box.text().strip())
         self.search_box.set_result_count(len(visible) if searching else None)
-        self.table.set_page_state(self.filter_name, searching, len(visible))
+        shuffle_count = (max(counts["pending"], counts["learned"])
+                         if self.filter_name == "all" else len(visible))
+        self.table.set_page_state(self.filter_name, searching, shuffle_count)
         with self.table.preserve_view(
                 scroll_position=position,
                 view_state=self._filter_view[self.filter_name] if switching else None):
@@ -529,18 +531,18 @@ class MainWindow(QMainWindow):
             self.shortcuts.set_suspended(self._shortcuts_before_form_drag)
 
     def shuffle_words(self):
-        if self.filter_name != "pending" or self.search_box.text().strip():
+        if self.filter_name not in {"pending", "all", "learned"} or self.search_box.text().strip():
             return
         if not self.current_table().delegate.submit():
             return
         try:
-            self.repository.shuffle_pending()
+            self.repository.shuffle_entries(self.filter_name)
         except Exception as error:
             self.show_notice(str(error), True)
             return
         self.refresh()
         self.table.scrollToTop()
-        self._filter_scroll["pending"] = 0
+        self._filter_scroll[self.filter_name] = 0
 
     def set_filter(self, key):
         if not self.current_table().delegate.submit():
@@ -1205,7 +1207,7 @@ class MainWindow(QMainWindow):
                                           '正在导出单词…', 'list_entries')
             entries = self._filter_entries(entries)
             self.busy_overlay.run('正在导出单词…', lambda: write_entries(path, entries))
-            page = {"pending": "待记", "learned": "已记下", "all": "全部"}[self.filter_name]
+            page = {"pending": "待记", "learned": "已记", "all": "全部"}[self.filter_name]
             QMessageBox.information(self, "导出完成", f"已导出“{page}”页面当前筛选结果的 {len(entries)} 个主词。")
         except Exception as error:
             logging.exception("Could not export words")

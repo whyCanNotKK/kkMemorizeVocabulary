@@ -14,13 +14,32 @@ def draft():
                                             Sense("adj.", "child third")])])
 
 
-def test_shuffle_hides_during_search_and_returns_when_cleared(window):
+@pytest.mark.parametrize("page,label", [("pending", "待记"), ("all", "全部"), ("learned", "已记")])
+def test_shuffle_hides_during_search_and_returns_when_cleared(window, page, label):
+    window.set_filter(page)
     assert window.table.shuffle_button.isVisible()
-    assert window.table.shuffle_button.toolTip() == "随机排列当前待记单词"
+    assert window.table.shuffle_button.toolTip() == f"随机排列当前{label}单词"
+    assert window.table.shuffle_button.accessibleName() == f"随机排列{label}单词"
     window.search_box.setText("query")
     assert not window.table.shuffle_button.isVisible()
     window.search_box.setText("   ")
     assert window.table.shuffle_button.isVisible()
+
+
+def test_all_shuffle_requires_two_words_in_one_category_and_renames_learned_tab(window, repo):
+    repo.save(WordEntry("pending", [Sense("n.", "待记词")]))
+    repo.save(WordEntry("learned", [Sense("n.", "已记词")], learned=True))
+    window.set_filter("all")
+    assert not window.table.shuffle_button.isEnabled()
+    assert window.filter_buttons["learned"].text() == "已记  1"
+    repo.save(WordEntry("another learned", [Sense("n.", "已记词")], learned=True))
+    window.refresh()
+    assert window.table.shuffle_button.isEnabled()
+    window.set_filter("pending")
+    assert not window.table.shuffle_button.isEnabled()
+    window.set_filter("learned")
+    assert window.table.shuffle_button.isEnabled()
+    assert window.filter_buttons["learned"].text() == "已记  2"
 
 
 def test_related_actions_follow_form_context_and_target(window, qtbot):
