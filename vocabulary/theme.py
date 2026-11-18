@@ -103,7 +103,10 @@ def draw_symbol(p: QPainter, name: str, rect: QRectF, color: str):
     p.scale(rect.width() / 24, rect.height() / 24)
     p.setPen(QPen(QColor(color), 1.7, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap,
                   Qt.PenJoinStyle.RoundJoin))
-    if name == "star":
+    if name == "child_setting":
+        p.drawPolyline(QPolygonF([QPointF(-7, -8), QPointF(-7, 4), QPointF(7, 4)]))
+        p.drawPolyline(QPolygonF([QPointF(3, 0), QPointF(7, 4), QPointF(3, 8)]))
+    elif name == "star":
         points = []
         for i in range(10):
             angle, radius = -math.pi / 2 + i * math.pi / 5, (9 if i % 2 == 0 else 4.1)
@@ -114,9 +117,13 @@ def draw_symbol(p: QPainter, name: str, rect: QRectF, color: str):
         p.drawEllipse(QRectF(-8, -8, 16, 16))
         if name == "circle_check":
             p.drawPolyline(QPolygonF([QPointF(-4, 0), QPointF(-1, 3), QPointF(4, -3)]))
-    elif name in {"study_new_on", "study_new_off"}:
+    elif name in {"study_new_on", "study_new_off", "study_new_partial"}:
         p.setPen(QPen(QColor(MUTED), 1.5))
         p.drawRoundedRect(QRectF(-8, -6, 14, 14), 1, 1)
+        if name == "study_new_partial":
+            p.setPen(Qt.PenStyle.NoPen)
+            p.setBrush(QColor(MUTED))
+            p.drawRect(QRectF(-4, -2, 6, 6))
         if name == "study_new_on":
             p.setPen(QPen(QColor('#63dc91'), 3, Qt.PenStyle.SolidLine,
                           Qt.PenCapStyle.RoundCap, Qt.PenJoinStyle.RoundJoin))

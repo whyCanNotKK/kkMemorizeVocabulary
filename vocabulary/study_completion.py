@@ -3,6 +3,13 @@ from PySide6.QtCore import QEvent, Qt, Signal
 from PySide6.QtWidgets import QHBoxLayout, QLabel, QPushButton, QToolButton, QVBoxLayout, QWidget
 
 
+def _format_minutes(minutes):
+    if minutes is None:
+        return '—'
+    hours, remaining = divmod(minutes, 60)
+    return f'{hours} h {remaining} m' if hours else f'{remaining} m'
+
+
 class StudyCompletionNotice(QWidget):
     refreshRequested = Signal()
 
@@ -52,8 +59,8 @@ class StudyCompletionNotice(QWidget):
 
     def set_history(self, history):
         total, efficiency = history.timing
-        total_text = f'{total} m' if total is not None else '—'
-        effective_text = f'{history.duration_seconds // 60} m'
+        total_text = _format_minutes(total)
+        effective_text = _format_minutes(history.duration_seconds // 60)
         efficiency_text = f'{efficiency}%' if efficiency is not None else '—'
         title = f'当前时段任务完成，总时长 {total_text}，有效用时 {effective_text}，效率 {efficiency_text}'
         if self.title.text() != title:

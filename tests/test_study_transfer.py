@@ -10,7 +10,7 @@ from PySide6.QtWidgets import QApplication, QFileDialog, QMessageBox
 
 from vocabulary.domain import RelatedWord, Sense, ValidationError, WordEntry
 from vocabulary.import_dialog import ImportConflictDialog
-from vocabulary.learning import StudyContext, StudyDrawSettings
+from vocabulary.learning import SpellingHideSettings, StudyContext, StudyDrawSettings
 from vocabulary.storage import Repository
 from vocabulary.theme import ACCENT
 from vocabulary.study_transfer import (parse_study_backup, read_study_backup,
@@ -151,10 +151,10 @@ def test_empty_snapshot_clears_progress_and_replaces_markers_but_keeps_words(sou
     assert source.study_backup().study_last_add_new_vocabulary is None
 
 
-@pytest.mark.parametrize('version', [1, 2, 3, 4, 5, 6, 8])
+@pytest.mark.parametrize('version', [1, 2, 3, 4, 5, 6, 7, 9])
 def test_old_study_file_is_rejected(document, version):
     document['version'] = version
-    with pytest.raises(ValidationError, match='version: 7'):
+    with pytest.raises(ValidationError, match='version: 8'):
         parse_study_backup(json.dumps(document))
 
 
@@ -164,7 +164,7 @@ def test_old_study_file_is_rejected(document, version):
     ('words_per_group', 0), ('words_per_group', 1001), ('words_per_group', True),
     ('groups_per_day', -1), ('groups_per_day', 1.5), ('groups_per_day', '3'),
 ])
-def test_v7_setting_types_and_ranges_are_strict(document, key, invalid):
+def test_v8_setting_types_and_ranges_are_strict(document, key, invalid):
     document['study_settings'][key] = invalid
     with pytest.raises(ValidationError):
         parse_study_backup(json.dumps(document))
@@ -172,7 +172,7 @@ def test_v7_setting_types_and_ranges_are_strict(document, key, invalid):
 
 @pytest.mark.parametrize('key', ['new_words_enabled', 'hide_word_while_spelling',
                                'words_per_group', 'groups_per_day'])
-def test_v7_missing_settings_are_rejected(document, key):
+def test_v8_missing_settings_are_rejected(document, key):
     del document['study_settings'][key]
     with pytest.raises(ValidationError):
         parse_study_backup(json.dumps(document))
@@ -196,12 +196,12 @@ def test_import_setting_failure_rolls_back_progress_history_and_all_settings(sou
     assert repo.study_backup() == before
 
 
-def test_v7_roundtrip_restores_all_preferences_without_drawing(source, repo):
+def test_v8_roundtrip_restores_all_preferences_without_drawing(source, repo):
     source.write_study_draw_settings(StudyDrawSettings(17, 4))
     source.set_study_hide_word_while_spelling(True)
     source.set_study_new_words_enabled(False, AM)
     content = serialize_study_backup(source.study_backup())
-    assert json.loads(content)['version'] == 7
+    assert json.loads(content)['version'] == 8
     backup = parse_study_backup(content)
     repo.import_entries(backup.words)
     repo.replace_study_progress(backup)
@@ -257,7 +257,7 @@ def test_invalid_backup_rejected_before_import(document, corruption):
 def test_duplicate_json_keys_custom_groups_and_bad_stage_dates(document):
     content = json.dumps(document)
     with pytest.raises(ValidationError):
-        parse_study_backup(content.replace('"version": 7', '"version": 7, "version": 7'))
+        parse_study_backup(content.replace('"version": 8', '"version": 8, "version": 8'))
     large_group = deepcopy(document)
     for i in range(10):
         name = f'beta{i}'
@@ -586,3 +586,55 @@ def test_study_export_button_routes_independently_and_uses_visible_error_anchor(
     monkeypatch.setattr(window.toast, 'show_message', lambda text, anchor, **kwargs: anchors.append(anchor))
     window.show_notice('test failure', True)
     assert anchors == [window.study_page.refresh_button] and anchors[0].isVisible()
+
+
+@pytest.mark.parametrize('key,invalid', [
+    ('mode', 'unknown'), ('mode', None), ('mode', []),
+    ('by_stage', 1), ('by_important', 'false'), ('by_learned', None),
+    ('minimum_stage', True), ('minimum_stage', 0), ('minimum_stage', 3), ('minimum_stage', '15'),
+])
+def test_v8_spelling_hide_invalid_fields_rejected(document, key, invalid):
+    document['study_settings']['hide_word_while_spelling'][key] = invalid
+    with pytest.raises(ValidationError):
+        parse_study_backup(json.dumps(document))
+
+
+@pytest.mark.parametrize('change', ['missing', 'unknown', 'off_with_child', 'all_without_children',
+                                  'conditional_without_children'])
+def test_v8_spelling_hide_fields_and_modes_are_consistent(document, change):
+    hiding = document['study_settings']['hide_word_while_spelling']
+    if change == 'missing':
+        del hiding['minimum_stage']
+    elif change == 'unknown':
+        hiding['unexpected'] = True
+    elif change == 'off_with_child':
+        hiding['by_stage'] = True
+    elif change == 'all_without_children':
+        hiding['mode'] = 'all'
+    else:
+        hiding['mode'] = 'conditional'
+    with pytest.raises(ValidationError):
+        parse_study_backup(json.dumps(document))
+
+
+def test_v8_conditional_settings_roundtrip_and_late_import_failure(source, repo):
+    settings = SpellingHideSettings('conditional', True, False, True, 7)
+    source.set_study_spelling_hide_settings(settings)
+    backup = parse_study_backup(serialize_study_backup(source.study_backup()))
+    assert backup.spelling_hide == settings
+    repo.import_entries(backup.words)
+    before = repo.study_backup()
+    repo.connection.execute("""CREATE TRIGGER fail_hide_import BEFORE INSERT ON settings
+        WHEN NEW.key='study17.hide_word_while_spelling.minimum_stage'
+        BEGIN SELECT RAISE(ABORT,'hide import failed'); END""")
+    with pytest.raises(sqlite3.IntegrityError, match='hide import failed'):
+        repo.replace_study_progress(backup)
+    assert repo.study_backup() == before
+    repo.connection.execute('DROP TRIGGER fail_hide_import')
+    repo.replace_study_progress(backup)
+    assert repo.study_spelling_hide_settings() == settings
+    reopened = Repository(repo.path)
+    try:
+        assert reopened.study_spelling_hide_settings() == settings
+    finally:
+        reopened.close()

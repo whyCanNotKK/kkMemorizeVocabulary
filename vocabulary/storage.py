@@ -10,7 +10,7 @@ from .domain import (CLEANUP_COMMANDS, DEFAULT_SHORTCUTS, DuplicateWord, Related
                      WordContentValidationError, WordEntry, clean_entry, clean_word_content,
                      same_entry_content, shortcut_candidates)
 from .transfer import ImportConflict, ImportResult
-from .learning import (STAGE_GAPS, StudyContext, StudyDrawSettings, StudyTask,
+from .learning import (STAGE_GAPS, SpellingHideSettings, StudyContext, StudyDrawSettings, StudyTask,
                        StudyTaskHistory, next_stage, study_due, study_timestamp)
 from .study_transfer import RECORD_FIELDS, StudyBackup
 from .migration import migrate_database
@@ -416,16 +416,35 @@ class Repository:
         return row is None or row[0] == '1'
 
     def study_hide_word_while_spelling(self) -> bool:
-        row = self.connection.execute(
-            "SELECT value FROM settings WHERE key='study17.hide_word_while_spelling'").fetchone()
-        return row is not None and row[0] == '1'
+        return self.study_spelling_hide_settings().mode == 'all'
 
     def set_study_hide_word_while_spelling(self, enabled: bool):
-        if type(enabled) is not bool:
-            raise ValidationError('拼写单词时隐藏单词：必须是布尔值。')
+        self.set_study_spelling_hide_settings(SpellingHideSettings.from_enabled(enabled))
+
+    def study_spelling_hide_settings(self) -> SpellingHideSettings:
+        prefix = 'study17.hide_word_while_spelling'
+        values = dict(self.connection.execute(
+            'SELECT key,value FROM settings WHERE key=? OR key LIKE ?', (prefix, prefix + '.%')))
+        mode = {'0': 'off', '1': 'all'}.get(values.get(prefix), values.get(prefix, 'off'))
+        default_flag = '1' if mode == 'all' else '0'
+        return SpellingHideSettings(mode,
+            *(values.get(prefix + '.' + key, default_flag) == '1'
+              for key in ('by_stage', 'by_important', 'by_learned')),
+            int(values.get(prefix + '.minimum_stage', '15')))
+
+    def _write_study_spelling_hide_settings(self, settings: SpellingHideSettings):
+        prefix = 'study17.hide_word_while_spelling'
+        self.connection.executemany('INSERT OR REPLACE INTO settings(key,value) VALUES (?,?)', [
+            (prefix, {'off': '0', 'all': '1', 'conditional': 'conditional'}[settings.mode]),
+            (prefix + '.by_stage', str(int(settings.by_stage))),
+            (prefix + '.by_important', str(int(settings.by_important))),
+            (prefix + '.by_learned', str(int(settings.by_learned))),
+            (prefix + '.minimum_stage', str(settings.minimum_stage)),
+        ])
+
+    def set_study_spelling_hide_settings(self, settings: SpellingHideSettings):
         with self.connection:
-            self.connection.execute('INSERT OR REPLACE INTO settings(key,value) VALUES (?,?)',
-                                    ('study17.hide_word_while_spelling', '1' if enabled else '0'))
+            self._write_study_spelling_hide_settings(settings)
 
     def initialize_study_new_words(self):
         """Run once at application startup, never when opening worker connections."""
@@ -508,6 +527,10 @@ class Repository:
     def study_participant_count(self) -> int:
         return self.connection.execute('SELECT COUNT(*) FROM memorize_vocabulary_17day').fetchone()[0]
 
+    def study_completed_count(self) -> int:
+        return self.connection.execute(
+            'SELECT COUNT(*) FROM memorize_vocabulary_17day WHERE stage=0').fetchone()[0]
+
     def has_study_progress(self) -> bool:
         return (self.connection.execute('SELECT 1 FROM memorize_vocabulary_17day LIMIT 1').fetchone() is not None
                 or self.connection.execute('SELECT 1 FROM study_task_history LIMIT 1').fetchone() is not None)
@@ -578,7 +601,7 @@ class Repository:
                                int(counter[0]) if counter else 0, history,
                                new_words_enabled=self.study_new_words_enabled(),
                                words_per_group=draw.words_per_group, groups_per_day=draw.groups_per_day,
-                               hide_word_while_spelling=self.study_hide_word_while_spelling())
+                               spelling_hide=self.study_spelling_hide_settings())
 
     def replace_study_progress(self, backup: StudyBackup):
         """Resolve final local word IDs, then atomically replace progress and its settings."""
@@ -609,8 +632,8 @@ class Repository:
                 ('study17.new_words_enabled', '1' if backup.new_words_enabled else '0'),
                 ('study17.words_per_group', str(backup.words_per_group)),
                 ('study17.groups_per_day', str(backup.groups_per_day)),
-                ('study17.hide_word_while_spelling', '1' if backup.hide_word_while_spelling else '0'),
             ])
+            self._write_study_spelling_hide_settings(backup.spelling_hide)
 
     def complete_study(self, word_id: int, context: StudyContext, *, duration_seconds=0,
                        instant=None) -> tuple[StudyTaskHistory, int] | bool:

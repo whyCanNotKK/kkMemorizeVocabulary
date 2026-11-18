@@ -8,13 +8,74 @@ from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QLabel, QMessageBox, QPushButton
 
 from vocabulary.domain import Sense, ValidationError, WordEntry
-from vocabulary.learning import StudyContext, StudyDrawSettings
+from vocabulary.learning import SpellingHideSettings, StudyContext, StudyDrawSettings
 from vocabulary.shortcuts import SettingsDialog
 from vocabulary.storage import Repository
 from vocabulary.study_transfer import parse_study_backup, serialize_study_backup
 
 
 AM = StudyContext(date(2026, 11, 2), False)
+
+
+@pytest.mark.parametrize('legacy', [None, '0', '1'])
+def test_spelling_hide_legacy_setting_maps_to_complete_configuration(repo, legacy):
+    if legacy is not None:
+        repo.connection.execute('INSERT INTO settings(key,value) VALUES (?,?)',
+                                ('study17.hide_word_while_spelling', legacy))
+        repo.connection.commit()
+    assert repo.study_spelling_hide_settings() == SpellingHideSettings.from_enabled(legacy == '1')
+
+
+def test_spelling_hide_child_changes_and_threshold_survive_reopen(window, repo, qtbot):
+    dialog = SettingsDialog(window.shortcuts, window)
+    qtbot.addWidget(dialog)
+    dialog.show()
+    children = dialog.hide_condition_toggles
+    assert dialog.hide_stage.currentData() == 15
+    dialog.hide_word_toggle.click()
+    assert repo.study_spelling_hide_settings().mode == 'all'
+    assert all(toggle.isChecked() for toggle in children.values())
+    children['by_important'].click()
+    assert repo.study_spelling_hide_settings() == SpellingHideSettings('conditional', True, False, True)
+    assert dialog.hide_word_toggle.property('checkState') == 1
+    children['by_important'].click()
+    assert repo.study_spelling_hide_settings() == SpellingHideSettings('conditional', True, True, True)
+    dialog.hide_stage.setCurrentIndex(dialog.hide_stage.findData(7))
+    assert repo.study_spelling_hide_settings() == SpellingHideSettings('conditional', True, True, True, 7)
+    # Clicking partial always selects all, then clicking all clears every child.
+    dialog.hide_word_toggle.click()
+    assert repo.study_spelling_hide_settings().mode == 'all'
+    dialog.hide_word_toggle.click()
+    assert repo.study_spelling_hide_settings() == SpellingHideSettings(minimum_stage=7)
+    children['by_stage'].click()
+    assert repo.study_spelling_hide_settings().mode == 'conditional'
+    children['by_stage'].click()
+    assert repo.study_spelling_hide_settings().mode == 'off'
+    children['by_learned'].click()
+    reopened = SettingsDialog(window.shortcuts, window)
+    qtbot.addWidget(reopened)
+    assert reopened.hide_condition_toggles['by_learned'].isChecked()
+    assert reopened.hide_stage.currentData() == 7
+    assert reopened.hide_word_toggle.property('checkState') == 1
+
+
+def test_spelling_hide_late_write_failure_rolls_back_entire_configuration(window, repo, qtbot):
+    saved = SpellingHideSettings('conditional', True, False, True, 7)
+    repo.set_study_spelling_hide_settings(saved)
+    dialog = SettingsDialog(window.shortcuts, window)
+    qtbot.addWidget(dialog)
+    repo.connection.execute("""CREATE TRIGGER fail_hide_threshold BEFORE INSERT ON settings
+        WHEN NEW.key='study17.hide_word_while_spelling.minimum_stage'
+        BEGIN SELECT RAISE(ABORT,'threshold failed'); END""")
+    with qtbot.assertNotEmitted(dialog.spellingVisibilityChanged):
+        dialog.hide_word_toggle.click()
+    assert repo.study_spelling_hide_settings() == saved
+    assert dialog.hide_word_toggle.property('checkState') == 1
+    assert not dialog.hide_condition_toggles['by_important'].isChecked()
+    with qtbot.assertNotEmitted(dialog.spellingVisibilityChanged):
+        dialog.hide_stage.setCurrentIndex(dialog.hide_stage.findData(15))
+    assert repo.study_spelling_hide_settings() == saved
+    assert dialog.hide_stage.currentData() == 7
 
 
 def seed(repo, count):
@@ -114,7 +175,7 @@ def test_hide_word_setting_saves_reopens_and_rolls_back_on_failure(window, repo,
     assert dialog.hide_word_toggle.x() == dialog.new_words_toggle.x()
     with qtbot.waitSignal(dialog.spellingVisibilityChanged) as changed:
         qtbot.mouseClick(dialog.hide_word_toggle, Qt.MouseButton.LeftButton)
-    assert changed.args == [True]
+    assert changed.args == [SpellingHideSettings.from_enabled(True)]
     assert repo.study_hide_word_while_spelling()
     dialog.close()
     again = SettingsDialog(window.shortcuts, window)

@@ -12,6 +12,44 @@ STAGE_GAPS = {following: following - previous for previous, following in zip(STA
 
 
 @dataclass(frozen=True)
+class SpellingHideSettings:
+    mode: str = 'off'
+    by_stage: bool = False
+    by_important: bool = False
+    by_learned: bool = False
+    minimum_stage: int = 15
+
+    def __post_init__(self):
+        flags = (self.by_stage, self.by_important, self.by_learned)
+        if any(type(flag) is not bool for flag in flags):
+            raise ValidationError('拼写隐藏子设置必须是布尔值。')
+        if type(self.minimum_stage) is not int or self.minimum_stage not in STAGES:
+            raise ValidationError('拼写隐藏阶段必须是1、2、4、7或15。')
+        if (self.mode not in ('off', 'all', 'conditional')
+                or (self.mode == 'off' and any(flags))
+                or (self.mode == 'all' and not all(flags))
+                or (self.mode == 'conditional' and not any(flags))):
+            raise ValidationError('拼写隐藏模式与子设置不一致。')
+
+    @classmethod
+    def from_enabled(cls, enabled, minimum_stage=15):
+        if type(enabled) is not bool:
+            raise ValidationError('拼写时隐藏单词：必须是布尔值。')
+        return cls('all' if enabled else 'off', enabled, enabled, enabled, minimum_stage)
+
+    def hides(self, entry: WordEntry, stage: int) -> bool:
+        if self.mode == 'all':
+            return True
+        if self.mode == 'off':
+            return False
+        if self.by_stage and stage >= self.minimum_stage:
+            return True
+        if self.by_important and entry.important:
+            return True
+        return self.by_learned and entry.learned
+
+
+@dataclass(frozen=True)
 class StudyDrawSettings:
     words_per_group: int = 10
     groups_per_day: int = 3

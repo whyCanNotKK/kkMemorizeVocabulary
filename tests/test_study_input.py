@@ -6,7 +6,7 @@ from PySide6.QtGui import QColor, QHelpEvent, QInputMethodEvent, QKeyEvent
 from PySide6.QtWidgets import QApplication
 
 from vocabulary.domain import POS_OPTIONS, RelatedWord, Sense, WordEntry
-from vocabulary.learning import StudyContext
+from vocabulary.learning import SpellingHideSettings, StudyContext
 from vocabulary.study_input import STUDY_TRANSLATION_HEADER
 from vocabulary.theme import GOLD, TEXT
 
@@ -27,6 +27,66 @@ def practice(window, repo, monkeypatch):
 
 def row_for(table, entry):
     return next(row for row in table.model().rows if row.entry.id == entry.id)
+
+
+@pytest.mark.parametrize('threshold', [1, 2, 4, 7, 15])
+@pytest.mark.parametrize('stage', [1, 2, 4, 7, 15])
+def test_spelling_hide_stage_threshold_is_inclusive(threshold, stage):
+    entry = WordEntry('word', [Sense('n.', '词')])
+    assert SpellingHideSettings('conditional', by_stage=True, minimum_stage=threshold).hides(
+        entry, stage) is (stage >= threshold)
+
+
+@pytest.mark.parametrize('important,learned', [(False, False), (True, False), (False, True), (True, True)])
+def test_spelling_hide_flags_are_or_conditions_and_only_enabled_flags_apply(important, learned):
+    entry = WordEntry('word', [Sense('n.', '词')], important=important, learned=learned)
+    assert SpellingHideSettings('conditional', by_important=True).hides(entry, 1) is important
+    assert SpellingHideSettings('conditional', by_learned=True).hides(entry, 1) is learned
+    assert SpellingHideSettings('conditional', by_important=True, by_learned=True).hides(
+        entry, 1) is (important or learned)
+    assert SpellingHideSettings.from_enabled(True).hides(entry, 1)
+    assert not SpellingHideSettings().hides(entry, 15)
+
+
+@pytest.mark.parametrize('mode', ['all', 'conditional', 'off'])
+@pytest.mark.parametrize('reset', ['error', 'escape', 'backspace', 'focus'])
+def test_spelling_hides_related_names_and_phonetics_but_preserves_definitions(
+        practice, window, qtbot, mode, reset):
+    table, entry = practice
+    settings = (SpellingHideSettings('conditional', by_stage=True, minimum_stage=1)
+                if mode == 'conditional' else SpellingHideSettings.from_enabled(mode == 'all'))
+    window.repository.set_study_spelling_hide_settings(settings)
+    window.study_page.render()
+    qtbot.keyClicks(table, 'n')
+    related_row = next(i for i, row in enumerate(table.model().rows)
+                       if row.entry.id == entry.id and row.owner == 0)
+    name = table.model().index(related_row, 1)
+    rect = table.visualRect(name)
+    row = name.data(Qt.ItemDataRole.UserRole)
+    row.word.phonetic = '/child/'
+    before = table.delegate.name_layout(name, rect, table.font())
+    assert before[0][1] == 'child'
+    original_height = table.rowHeight(related_row)
+    original_definition = table.model().index(related_row, 3).data()
+    qtbot.keyClicks(table, 'Ab')
+    assert table.spelling_hides_entry(entry.id) is (mode != 'off')
+    layout = table.delegate.name_layout(name, rect, table.font())
+    if mode != 'off':
+        assert layout[0][1] == '' and layout[1] is None and layout[2] == ''
+        assert table.delegate.word_tooltip(name) == ''
+    else:
+        assert layout[0][1] == 'child'
+    assert table.model().index(related_row, 3).data() == original_definition == '关联词'
+    assert table.rowHeight(related_row) == original_height
+    if reset == 'error':
+        qtbot.keyClicks(table, 'x')
+    elif reset == 'focus':
+        window.study_page.refresh_button.setFocus()
+        table.setFocus()
+    else:
+        qtbot.keyClick(table, Qt.Key.Key_Escape if reset == 'escape' else Qt.Key.Key_Backspace)
+    assert table.study_input.position == 0
+    assert table.delegate.name_layout(name, rect, table.font()) == before
 
 
 @pytest.mark.parametrize("code,keys", [

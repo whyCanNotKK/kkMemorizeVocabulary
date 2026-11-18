@@ -1,3 +1,5 @@
+from datetime import date
+
 import pytest
 from PySide6.QtCore import Qt, QTimer
 from PySide6.QtGui import QInputMethodEvent
@@ -5,6 +7,7 @@ from PySide6.QtWidgets import QApplication, QPlainTextEdit, QMessageBox
 
 from vocabulary.domain import RelatedWord, Sense, ValidationError, WordEntry
 from vocabulary.draft_reset_dialog import DraftResetDialog
+from vocabulary.learning import StudyContext
 from vocabulary.shortcuts import SettingsDialog, normalize_shortcut
 from vocabulary.widgets import PosCombo
 
@@ -763,19 +766,42 @@ def test_inline_switch_preserves_bottom_draft(window, repo, qtbot, monkeypatch):
     window.table.delegate.cancel()
 
 
-def test_settings_returns_focus_to_previous_form_field(window, qtbot):
+@pytest.mark.parametrize('page', ['pending', 'all', 'learned', 'study17'])
+@pytest.mark.parametrize('closing', ['accept', 'reject', 'close'])
+def test_settings_returns_focus_to_list_preserving_selected_word(window, repo, qtbot, monkeypatch, page, closing):
+    monkeypatch.setattr(StudyContext, 'now', classmethod(lambda cls: StudyContext(date(2026, 11, 2), False)))
+    repo.save(WordEntry('other', [Sense('n.', '另一个词')], learned=page == 'learned'))
+    entry = seed(repo)
+    if page == 'learned':
+        repo.set_flag(entry.id, 'learned', True)
+    window.set_filter(page)
+    table = window.current_table()
+    table.revealRequested.emit(entry.id, True)
+    table.setCurrentIndex(table._entry_index(entry.id, 0, 0, 1))
+    before = table.view_state()
     edit = window.blocks[0].rows[0].translation
-    edit.setFocus()
-    qtbot.wait(10)
-    window.settings_button.setFocus()
+    if edit.isVisible():
+        edit.setFocus()
+        qtbot.wait(10)
     def close():
         dialog = QApplication.activeModalWidget()
         assert isinstance(dialog, SettingsDialog)
-        dialog.accept()
+        getattr(dialog, closing)()
     QTimer.singleShot(30, close)
-    window.open_settings()
-    qtbot.wait(10)
-    assert edit.hasFocus()
+    qtbot.mouseClick(window.settings_button, Qt.MouseButton.LeftButton)
+    qtbot.waitUntil(table.hasFocus)
+    qtbot.wait(20)  # Include deferred dialog teardown and focus restoration.
+    assert table.hasFocus() and not window.settings_button.hasFocus()
+    assert table.view_state() == before
+
+
+def test_settings_close_focuses_empty_list(window, qtbot):
+    QTimer.singleShot(30, lambda: QApplication.activeModalWidget().reject())
+    qtbot.mouseClick(window.settings_button, Qt.MouseButton.LeftButton)
+    qtbot.waitUntil(window.table.hasFocus)
+    qtbot.wait(20)
+    assert window.table.hasFocus()
+    assert not window.table.currentIndex().isValid()
 
 
 def test_chinese_input_method_preedit_and_commit_do_not_trigger_actions(window, qtbot):

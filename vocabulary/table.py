@@ -16,6 +16,7 @@ from PySide6.QtWidgets import (
 from .domain import POS_OPTIONS, RelatedWord, WordEntry
 from .drag_reorder import ANIMATION_MS, edge_scroll_delta, group_positions, insertion_index
 from .review_navigation import navigation_step
+from .learning import SpellingHideSettings
 from .study_input import STUDY_TRANSLATION_HEADER, StudyInput, matches_pos
 from .table_style import WordGroupStyle
 from .table_header import WordTableHeader
@@ -287,6 +288,8 @@ class WordDelegate(QStyledItemDelegate):
         width = metrics.horizontalAdvance(original)
         if row.sense != 0:
             return (font, '', area), None, ''
+        if row.owner >= 0 and self.view.spelling_hides_entry(row.entry.id):
+            return (font, '', area), None, ''
         if width > area.width():
             text = metrics.elidedText(original, Qt.TextElideMode.ElideRight, max(0, area.width()))
             tip = original + ('    ' + row.word.phonetic if row.word.phonetic else '')
@@ -323,8 +326,7 @@ class WordDelegate(QStyledItemDelegate):
         if index.column() != 1 or index.data(Qt.ItemDataRole.UserRole) is None:
             return ''
         row = index.data(Qt.ItemDataRole.UserRole)
-        if (row.first and self.view.hide_word_while_spelling
-                and self.view.study_input.entry_id == row.entry.id and self.view.study_input.position):
+        if self.view.spelling_hides_entry(row.entry.id):
             return ''
         return self.name_layout(index, self.view.visualRect(index), self.view.font())[2]
 
@@ -406,7 +408,7 @@ class WordDelegate(QStyledItemDelegate):
                     self.view.study_mode and row.first and not row.hidden
                     and self.view.study_input.entry_id == row.entry.id) else 0
                 if self.view.study_mode and row.first:
-                    if matched and self.view.hide_word_while_spelling:
+                    if matched and self.view.spelling_hides_entry(row.entry.id):
                         text = QFontMetricsF(font).elidedText(
                             row.entry.text[:matched], Qt.TextElideMode.ElideRight, max(0, area.width()))
                     layout = QTextLayout(text, font)
@@ -824,7 +826,7 @@ class WordTable(QTableView):
         self.search_active = False
         self.study_mode = False
         self.study_input = StudyInput()
-        self.hide_word_while_spelling = False
+        self.spelling_hide_settings = SpellingHideSettings()
         self.empty_text = None
         self._drag_candidate = None
         self._related_drag = None
@@ -1695,10 +1697,23 @@ class WordTable(QTableView):
             self._last_mouse_position = position
             self._mouse_moved = True
 
-    def set_hide_word_while_spelling(self, enabled):
-        if self.hide_word_while_spelling != enabled:
-            self.hide_word_while_spelling = enabled
+    @property
+    def hide_word_while_spelling(self):
+        return self.spelling_hide_settings.mode == 'all'
+
+    def set_hide_word_while_spelling(self, settings):
+        if isinstance(settings, bool):
+            settings = SpellingHideSettings.from_enabled(settings)
+        if self.spelling_hide_settings != settings:
+            self.spelling_hide_settings = settings
             self.reset_study_input()
+
+    def spelling_hides_entry(self, entry_id):
+        if (not self.study_mode or self.study_input.entry_id != entry_id
+                or not self.study_input.position or entry_id in self.model().study_completed_ids):
+            return False
+        task = self.model().study_tasks.get(entry_id)
+        return task is not None and self.spelling_hide_settings.hides(task.entry, task.stage)
 
     def skip_study_entry(self, entry_id):
         if not self.study_mode or not self.delegate.submit() or not self.can_navigate_entries():
@@ -1765,6 +1780,7 @@ class WordTable(QTableView):
                     self.set_entry_revealed(row.entry.id, False)
                 return True
             result = self.study_input.feed(row.entry.id, row.entry.text, text)
+            QToolTip.hideText()
             self.viewport().update()
             if result == "hide":
                 self.set_entry_revealed(row.entry.id, False)

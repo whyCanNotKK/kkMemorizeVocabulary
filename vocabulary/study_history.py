@@ -340,9 +340,9 @@ class StudyHistoryPanel(QFrame):
         self.total_count = QLabel()
         self.total_count.setTextFormat(Qt.TextFormat.RichText)
         self.total_count.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-        self.total_count.setToolTip('包括已经背完的和正在背的')
+        self.total_count.setToolTip('合计包括已经背完的和正在背的；彻底完成指第15阶段上下午均已完成')
         header_layout.addWidget(self.total_count, 0, 2, Qt.AlignmentFlag.AlignRight)
-        self.update_total_count(0)
+        self.update_total_count(0, 0)
         layout.addWidget(header)
         self.model = HistoryModel(self)
         self.table = QTableView()
@@ -453,18 +453,21 @@ class StudyHistoryPanel(QFrame):
                 height = min(height, parent.height() // 2)
         self.setFixedHeight(height)
 
-    def update_total_count(self, count):
+    def update_total_count(self, count, completed):
         self.total_count.setText(f'<span style="color:{MUTED}">合计 </span>'
                                  f'<span style="color:{ACCENT};font-size:22px;font-weight:700">{count}</span>'
+                                 f'<span style="color:{MUTED}"> 个单词，彻底完成 </span>'
+                                 f'<span style="color:#4BEDFC;font-size:22px;font-weight:700">{completed}</span>'
                                  f'<span style="color:{MUTED}"> 个单词</span>')
-        self.total_count.setAccessibleName(f'合计 {count} 个单词')
+        self.total_count.setAccessibleName(f'合计 {count} 个单词，彻底完成 {completed} 个单词')
 
     def refresh(self):
         if not self.isVisible():
             return
         position = self.table.verticalScrollBar().value()
         try:
-            self.update_total_count(self.repository.study_participant_count())
+            self.update_total_count(self.repository.study_participant_count(),
+                                    self.repository.study_completed_count())
             if self.collapsed:
                 return
             self.model.load(self.repository.study_task_histories(), StudyContext.now(), self.timer.context)

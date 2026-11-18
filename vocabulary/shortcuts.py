@@ -1,16 +1,17 @@
 import sys
+from dataclasses import replace
 
-from PySide6.QtCore import QEvent, QObject, QSignalBlocker, QSize, Qt, Signal
-from PySide6.QtGui import QKeySequence, QShortcut
-from PySide6.QtWidgets import QAbstractButton, QApplication, QDialog, QFrame, QHBoxLayout, QLabel, QLineEdit, QMessageBox, QScrollArea, QSpinBox, QVBoxLayout, QWidget
+from PySide6.QtCore import QEvent, QObject, QRect, QSignalBlocker, QSize, Qt, Signal
+from PySide6.QtGui import QKeySequence, QPainter, QShortcut
+from PySide6.QtWidgets import QAbstractButton, QApplication, QComboBox, QDialog, QFrame, QHBoxLayout, QLabel, QLineEdit, QMessageBox, QScrollArea, QSpinBox, QVBoxLayout, QWidget
 
 from .domain import CLEANUP_COMMANDS, DEFAULT_SHORTCUTS, SHORTCUT_LABELS, ValidationError, shortcut_candidates
 from .cleanup_input import CleanupInput
 from .draft_reset_dialog import DraftResetDialog
-from .learning import StudyContext, StudyDrawSettings
+from .learning import STAGES, SpellingHideSettings, StudyContext, StudyDrawSettings
 from .native_shortcuts import WindowHotkeys
 from .widgets import FloatingNotice, button
-from .theme import icon
+from .theme import GOLD, icon
 
 
 RESERVED_DIGITS = {f"{modifier}+{keypad}{number}"
@@ -221,8 +222,16 @@ def add_settings_separator(layout):
     layout.addWidget(separator)
 
 
+class StudyStageCombo(QComboBox):
+    def paintEvent(self, event):
+        super().paintEvent(event)
+        painter = QPainter(self)
+        icon('chevron_down').paint(painter, QRect(self.width() - 19, self.height() // 2 - 4, 12, 8))
+        painter.end()
+
+
 class SettingsDialog(QDialog):
-    spellingVisibilityChanged = Signal(bool)
+    spellingVisibilityChanged = Signal(object)
 
     def __init__(self, manager, parent=None, *, clear_content=None, set_study_new_words=None):
         super().__init__(parent)
@@ -281,8 +290,11 @@ class SettingsDialog(QDialog):
         self.new_words_toggle.clicked.connect(self.toggle_new_words)
         row.addWidget(self.new_words_toggle)
         layout.addLayout(row)
+        spelling_options = QVBoxLayout()
+        spelling_options.setSpacing(4)
+        layout.addLayout(spelling_options)
         spelling_row = QHBoxLayout()
-        spelling_row.addWidget(QLabel('拼写单词时隐藏单词'))
+        spelling_row.addWidget(QLabel('拼写时隐藏单词：全部'))
         spelling_row.addStretch()
         self.hide_word_toggle = button('', quiet=True)
         self.hide_word_toggle.setAutoDefault(False)
@@ -290,10 +302,51 @@ class SettingsDialog(QDialog):
         self.hide_word_toggle.setFixedSize(28, 30)
         self.hide_word_toggle.setIconSize(QSize(24, 24))
         self.hide_word_toggle.setStyleSheet('padding: 0px;')
-        self.update_hide_word_toggle()
         self.hide_word_toggle.clicked.connect(self.toggle_hide_word)
         spelling_row.addWidget(self.hide_word_toggle)
-        layout.addLayout(spelling_row)
+        spelling_options.addLayout(spelling_row)
+        self.hide_condition_toggles = {}
+        self.hide_stage = StudyStageCombo()
+        self.hide_stage.setStyleSheet('QComboBox { padding: 3px 8px; padding-right: 20px; }')
+        for stage in STAGES:
+            self.hide_stage.addItem(str(stage), stage)
+        self.hide_stage.setAccessibleName('拼写隐藏的最低记忆周期')
+        for key, label in (('by_stage', '记忆周期为'), ('by_important', '重点单词⭐'),
+                           ('by_learned', '已记下单词')):
+            child_row = QHBoxLayout()
+            child_row.setContentsMargins(16, 0, 0, 0)
+            arrow = QLabel()
+            arrow.setPixmap(icon('child_setting').pixmap(QSize(18, 18)))
+            child_row.addWidget(arrow)
+            if key == 'by_important':
+                name = QWidget()
+                name_layout = QHBoxLayout(name)
+                name_layout.setContentsMargins(0, 0, 0, 0)
+                name_layout.setSpacing(0)
+                name_layout.addWidget(QLabel('重点单词'))
+                star = QLabel()
+                star.setPixmap(icon('star', GOLD).pixmap(QSize(16, 16)))
+                name_layout.addWidget(star)
+                child_row.addWidget(name)
+            else:
+                child_row.addWidget(QLabel(label))
+            if key == 'by_stage':
+                child_row.addWidget(self.hide_stage)
+                child_row.addWidget(QLabel('天后的单词'))
+            child_row.addStretch()
+            toggle = button('', quiet=True)
+            toggle.setAutoDefault(False)
+            toggle.setCheckable(True)
+            toggle.setFixedSize(28, 30)
+            toggle.setIconSize(QSize(24, 24))
+            toggle.setStyleSheet('padding: 0px;')
+            toggle.setAccessibleName(label)
+            toggle.clicked.connect(lambda enabled, key=key: self.toggle_hide_condition(key, enabled))
+            self.hide_condition_toggles[key] = toggle
+            child_row.addWidget(toggle)
+            spelling_options.addLayout(child_row)
+        self.update_hide_word_toggle()
+        self.hide_stage.currentIndexChanged.connect(self.change_hide_stage)
         self.words_per_group.valueChanged.connect(self.save_study_settings)
         self.groups_per_day.valueChanged.connect(self.save_study_settings)
         add_settings_separator(layout)
@@ -369,21 +422,49 @@ class SettingsDialog(QDialog):
         self.new_words_toggle.setAccessibleName(text)
 
     def update_hide_word_toggle(self):
-        enabled = self.manager.repository.study_hide_word_while_spelling()
-        self.hide_word_toggle.setChecked(enabled)
-        self.hide_word_toggle.setIcon(icon('study_new_on' if enabled else 'study_new_off'))
-        text = '点击关闭拼写单词时隐藏单词' if enabled else '点击开启拼写单词时隐藏单词'
+        settings = self.manager.repository.study_spelling_hide_settings()
+        self.hide_word_toggle.setChecked(settings.mode == 'all')
+        self.hide_word_toggle.setIcon(icon({'off': 'study_new_off', 'all': 'study_new_on',
+                                          'conditional': 'study_new_partial'}[settings.mode]))
+        text = {'off': '不隐藏', 'all': '全部隐藏', 'conditional': '按子设置条件隐藏'}[settings.mode]
+        text = '拼写时隐藏单词：' + text + ('；点击关闭' if settings.mode == 'all' else '；点击全部开启')
         self.hide_word_toggle.setToolTip(text)
         self.hide_word_toggle.setAccessibleName(text)
+        self.hide_word_toggle.setProperty('checkState', {'off': 0, 'conditional': 1, 'all': 2}[settings.mode])
+        for key, toggle in self.hide_condition_toggles.items():
+            enabled = getattr(settings, key)
+            toggle.setChecked(enabled)
+            toggle.setIcon(icon('study_new_on' if enabled else 'study_new_off'))
+        blocker = QSignalBlocker(self.hide_stage)
+        self.hide_stage.setCurrentIndex(self.hide_stage.findData(settings.minimum_stage))
+        del blocker
 
     def toggle_hide_word(self, enabled):
+        current = self.manager.repository.study_spelling_hide_settings()
+        self.save_hide_settings(SpellingHideSettings.from_enabled(current.mode != 'all', current.minimum_stage),
+                                self.hide_word_toggle)
+
+    def toggle_hide_condition(self, key, enabled):
+        current = self.manager.repository.study_spelling_hide_settings()
+        flags = {name: getattr(current, name) for name in self.hide_condition_toggles}
+        flags[key] = enabled
+        settings = SpellingHideSettings('conditional' if any(flags.values()) else 'off',
+                                        **flags, minimum_stage=current.minimum_stage)
+        self.save_hide_settings(settings, self.hide_condition_toggles[key])
+
+    def change_hide_stage(self):
+        settings = replace(self.manager.repository.study_spelling_hide_settings(),
+                           minimum_stage=self.hide_stage.currentData())
+        self.save_hide_settings(settings, self.hide_stage)
+
+    def save_hide_settings(self, settings, anchor):
         self.toast.dismiss()
         try:
-            self.manager.repository.set_study_hide_word_while_spelling(enabled)
+            self.manager.repository.set_study_spelling_hide_settings(settings)
         except Exception as error:
-            self.toast.show_message(str(error), self.hide_word_toggle)
+            self.toast.show_message(str(error), anchor)
         else:
-            self.spellingVisibilityChanged.emit(enabled)
+            self.spellingVisibilityChanged.emit(settings)
         finally:
             self.update_hide_word_toggle()
 

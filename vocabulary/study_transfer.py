@@ -1,17 +1,17 @@
 """Study interchange: words/progress by name, aggregate task history with IDs."""
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from datetime import date, datetime
 import json
 from pathlib import Path
 
 from .domain import ValidationError, WordEntry
-from .learning import STAGES, StudyTaskHistory, study_timestamp
+from .learning import STAGES, SpellingHideSettings, StudyTaskHistory, study_timestamp
 from .transfer import FORMAT as WORD_FORMAT, VERSION as WORD_VERSION
 from .transfer import parse_entries, serialize_entries, write_text_atomically
 
 
 FORMAT = 'kkMemorizeVocabulary.study17'
-VERSION = 7
+VERSION = 8
 RECORD_FIELDS = ('group_number', 'stage', 'morning_done', 'afternoon_done', 'last_completed_on')
 
 
@@ -25,7 +25,11 @@ class StudyBackup:
     new_words_enabled: bool = True
     words_per_group: int = 10
     groups_per_day: int = 3
-    hide_word_while_spelling: bool = False
+    spelling_hide: SpellingHideSettings = field(default_factory=SpellingHideSettings)
+
+    @property
+    def hide_word_while_spelling(self) -> bool:
+        return self.spelling_hide.mode == 'all'
 
 
 def validate_task_history(records):
@@ -123,9 +127,12 @@ def parse_study_backup(content: str) -> StudyBackup:
     settings = document['study_settings']
     _fields(settings, ('study_last_add_new_vocabulary', 'group_counter', 'new_words_enabled',
                        'words_per_group', 'groups_per_day', 'hide_word_while_spelling'), '学习设置')
-    for key in ('new_words_enabled', 'hide_word_while_spelling'):
+    for key in ('new_words_enabled',):
         if type(settings[key]) is not bool:
             raise ValidationError(f'学习设置 {key}：必须是true或false。')
+    hiding = settings['hide_word_while_spelling']
+    _fields(hiding, SpellingHideSettings.__dataclass_fields__, '拼写隐藏设置')
+    spelling_hide = SpellingHideSettings(**hiding)
     for key in ('words_per_group', 'groups_per_day'):
         _integer(settings[key], 1, 1000, f'学习设置 {key}')
     last_draw = settings['study_last_add_new_vocabulary']
@@ -140,7 +147,7 @@ def parse_study_backup(content: str) -> StudyBackup:
     return StudyBackup(words, records, last_draw, settings['group_counter'], document['task_history'],
                        new_words_enabled=settings['new_words_enabled'],
                        words_per_group=settings['words_per_group'], groups_per_day=settings['groups_per_day'],
-                       hide_word_while_spelling=settings['hide_word_while_spelling'])
+                       spelling_hide=spelling_hide)
 
 
 def serialize_study_backup(backup: StudyBackup) -> str:
@@ -152,7 +159,7 @@ def serialize_study_backup(backup: StudyBackup) -> str:
                                    'new_words_enabled': backup.new_words_enabled,
                                    'words_per_group': backup.words_per_group,
                                    'groups_per_day': backup.groups_per_day,
-                                   'hide_word_while_spelling': backup.hide_word_while_spelling}}
+                                   'hide_word_while_spelling': asdict(backup.spelling_hide)}}
     content = json.dumps(document, ensure_ascii=False, indent=2) + '\n'
     parse_study_backup(content)
     return content

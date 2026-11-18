@@ -1,4 +1,5 @@
-from datetime import date, datetime
+from dataclasses import replace
+from datetime import date, datetime, timedelta
 
 import pytest
 from PySide6.QtCore import QPoint, Qt
@@ -53,7 +54,7 @@ def test_all_refresh_controls_use_same_entry_and_capture_next_period(window, rep
 def test_notice_has_exact_two_lines_clickable_styled_controls_and_tracks_viewport(window, repo, monkeypatch, qtbot, tmp_path):
     page, _, _ = finish(window, repo, monkeypatch)
     notice = page.completion_notice
-    assert notice.title.text() == '当前时段任务完成，总时长 63 m，有效用时 47 m，效率 76%'
+    assert notice.title.text() == '当前时段任务完成，总时长 1 h 3 m，有效用时 47 m，效率 76%'
     assert notice.instruction.text() == '在新时段点击'
     assert notice.suffix.text() == '，开启新任务'
     assert notice.refresh_link.text() == '刷新' and notice.refresh_link.font().underline()
@@ -77,6 +78,24 @@ def test_notice_has_exact_two_lines_clickable_styled_controls_and_tracks_viewpor
         assert notice.refresh_link.geometry().right() < notice.suffix.geometry().left()
     qtbot.mouseMove(notice.refresh_link)
     window.grab().save(str(tmp_path / 'completion-notice.png'))
+
+
+@pytest.mark.parametrize('total_seconds,effective_seconds,total,effective', [
+    (0, 0, '0 m', '0 m'),
+    (3569, 59, '59 m', '0 m'),
+    (3570, 3599, '1 h 0 m', '59 m'),
+    (6000, 3600, '1 h 40 m', '1 h 0 m'),
+    (90000, 89999, '25 h 0 m', '24 h 59 m'),
+    (-1, 60, '—', '1 m'),
+])
+def test_notice_formats_hours_without_changing_rounding(window, repo, monkeypatch,
+                                                      total_seconds, effective_seconds, total, effective):
+    page, _, _ = finish(window, repo, monkeypatch)
+    history = page.timer.history
+    end = datetime.fromisoformat(history.started_at) + timedelta(seconds=total_seconds)
+    history = replace(history, ended_at=end.isoformat(), duration_seconds=effective_seconds)
+    page.completion_notice.set_history(history)
+    assert f'总时长 {total}，有效用时 {effective}，' in page.completion_notice.title.text()
 
 
 def test_completed_notice_survives_refresh_and_tab_switch_but_yields_to_completed_words(window, repo, monkeypatch):

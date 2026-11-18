@@ -1145,7 +1145,6 @@ class MainWindow(QMainWindow):
     def open_settings(self):
         if not self.current_table().delegate.submit():
             return
-        previous = (self._last_form_focus if not self.form_collapsed else None) or QApplication.focusWidget()
         self.shortcuts.set_suspended(True)
         try:
             dialog = SettingsDialog(self.shortcuts, self, clear_content=self.clear_content,
@@ -1155,12 +1154,9 @@ class MainWindow(QMainWindow):
             dialog.deleteLater()
         finally:
             self.shortcuts.set_suspended(False)
-            if previous and shiboken6.isValid(previous):
-                self.activateWindow()
-                previous.setFocus()
-                # Qt restores the modal parent's old focus during dialog teardown.
-                # Reapply our last input target after that restoration completes.
-                QTimer.singleShot(0, lambda: self.restore_input_focus(previous))
+            self.restore_list_focus()
+            # Qt restores the modal parent's old focus during dialog teardown.
+            QTimer.singleShot(0, self.restore_list_focus)
 
     def set_study_new_words(self, enabled, context):
         # Save the live clock before a draw can reopen a completed task or change its totals.
@@ -1365,6 +1361,12 @@ class MainWindow(QMainWindow):
             QMessageBox.critical(self, '导入失败', detail)
         finally:
             self.shortcuts.set_suspended(False)
+
+    def restore_list_focus(self):
+        if not self._closing:
+            table = self.current_table()
+            with table.preserve_view():
+                self.restore_input_focus(table)
 
     def restore_input_focus(self, widget):
         if not self._closing and shiboken6.isValid(widget) and widget.isVisible():
