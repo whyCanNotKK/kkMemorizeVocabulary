@@ -25,7 +25,10 @@ class ReviewKeyRouter(QObject):
     def eventFilter(self, source, event):
         if event.type() != QEvent.Type.KeyPress:
             return False
-        step = navigation_step(event)
+        search_enter = (source is self.search_box
+                        and event.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter)
+                        and not event.modifiers() & ~Qt.KeyboardModifier.KeypadModifier)
+        step = 1 if search_enter else navigation_step(event)
         if step is None or not isinstance(source, QWidget):
             return False
         app = QApplication.instance()
@@ -37,7 +40,7 @@ class ReviewKeyRouter(QObject):
             return False
         table = self.active_table()
         if self.search_box is not None and self.search_box.isVisible():
-            if source is self.search_box and event.key() == Qt.Key.Key_Down:
+            if source is self.search_box and (event.key() == Qt.Key.Key_Down or search_enter):
                 if table.navigate_entries(1, first=True):
                     event.accept()
                     return True

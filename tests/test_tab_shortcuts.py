@@ -202,10 +202,118 @@ def test_form_title_tracks_editing_and_reset(window, repo):
     window.reset_form(saved)
     assert window.form_title.text() == "编辑单词"
     window.set_form_collapsed(True)
-    assert window.collapse_button.toolTip() == "展开编辑单词区域"
+    assert window.collapse_button.toolTip() == "展开编辑单词区域 · Alt+↑"
     QTimer.singleShot(10, lambda: QApplication.activeModalWidget().accept())
     window.cancel_form()
     assert window.form_title.text() == "添加单词"
     window.reset_form(saved)
     assert window._save_form()
     assert window.form_title.text() == "添加单词"
+
+
+
+def press_arrow(window, qtbot, key):
+    qtbot.keyClick(QApplication.focusWidget() or window, key, Qt.KeyboardModifier.AltModifier)
+
+
+def test_alt_horizontal_arrows_switch_adjacent_tabs_without_wrap_and_update_tips(window, qtbot):
+    window.search_box.setFocus()
+    press_arrow(window, qtbot, Qt.Key.Key_Left)
+    assert window.filter_name == 'pending' and window.search_box.hasFocus()
+    for page in ('all', 'learned', 'study17'):
+        press_arrow(window, qtbot, Qt.Key.Key_Right)
+        assert window.filter_name == page and window.current_table().hasFocus()
+        for number, (key, button) in enumerate(window.filter_buttons.items(), 1):
+            assert button.toolTip() == f'Alt+{number}' + (' · Alt+←/→' if key != page else '')
+    press_arrow(window, qtbot, Qt.Key.Key_Right)
+    assert window.filter_name == 'study17'
+    for page in ('learned', 'all', 'pending'):
+        press_arrow(window, qtbot, Qt.Key.Key_Left)
+        assert window.filter_name == page and window.current_table().hasFocus()
+
+
+@pytest.mark.parametrize('page', ['pending', 'all', 'learned', 'study17'])
+def test_alt_vertical_arrows_set_section_state_and_keep_list_focus(window, qtbot, page):
+    window.activate_filter(page)
+    table = window.current_table()
+    state = table.view_state()
+    panel = window.history_panel if page == 'study17' else window
+    button = window.history_panel.collapse_button if page == 'study17' else window.collapse_button
+    def collapsed():
+        return panel.collapsed if page == 'study17' else panel.form_collapsed
+    for key, expected in ((Qt.Key.Key_Down, True), (Qt.Key.Key_Down, True),
+                          (Qt.Key.Key_Up, False), (Qt.Key.Key_Up, False)):
+        press_arrow(window, qtbot, key)
+        qtbot.wait(10)
+        assert collapsed() is expected
+        assert table.hasFocus() and table.view_state()[:2] == state[:2]
+        assert button.toolTip().endswith(' · Alt+↑' if expected else ' · Alt+↓')
+
+
+def test_alt_section_does_not_restore_old_form_focus_and_preserves_search_focus(window, qtbot):
+    edit = window.blocks[0].word
+    edit.setText('draft')
+    edit.setFocus()
+    press_arrow(window, qtbot, Qt.Key.Key_Down)
+    qtbot.wait(20)
+    assert window.form_collapsed and window.table.hasFocus()
+    assert not window.collapse_button.hasFocus()
+    window.search_box.setFocus()
+    press_arrow(window, qtbot, Qt.Key.Key_Up)
+    qtbot.wait(20)
+    assert not window.form_collapsed and window.search_box.hasFocus()
+    assert edit.text() == 'draft'
+    press_arrow(window, qtbot, Qt.Key.Key_Down)
+    assert window.search_box.hasFocus()
+
+
+def test_alt_arrows_respect_invalid_inline_edit_suspension_and_repeat(window, repo, qtbot):
+    entry = repo.save(WordEntry('word', [Sense('n.', '词')], [RelatedWord('child', [Sense('n.', '子词')])]))
+    window.reveal(entry.id, True)
+    window.table.edit(window.model.index(0, 1))
+    editor = window.table.delegate.editor
+    editor.setText('')
+    press_arrow(window, qtbot, Qt.Key.Key_Right)
+    assert window.filter_name == 'pending' and editor.hasFocus()
+    editor.setText('saved')
+    press_arrow(window, qtbot, Qt.Key.Key_Right)
+    assert window.filter_name == 'all' and window.table.hasFocus()
+    assert repo.get(entry.id).text == 'saved'
+    window.shortcuts.set_suspended(True)
+    press_arrow(window, qtbot, Qt.Key.Key_Right)
+    assert window.filter_name == 'all'
+    window.shortcuts.set_suspended(False)
+    QApplication.sendEvent(window.table, QKeyEvent(QEvent.Type.KeyPress, Qt.Key.Key_Right,
+                           Qt.KeyboardModifier.AltModifier, '', True))
+    assert window.filter_name == 'all'
+
+
+@pytest.mark.parametrize('direction', ['Left', 'Right', 'Up', 'Down'])
+def test_alt_arrows_are_reserved(window, direction):
+    with pytest.raises(ValidationError):
+        window.shortcuts.update(dict(window.shortcuts.values, save=f'Alt+{direction}'))
+
+
+
+def test_alt_section_collapsing_focused_history_moves_to_word_list(window, qtbot):
+    window.activate_filter('study17')
+    window.history_panel.set_collapsed(False)
+    window.history_panel.table.setFocus()
+    press_arrow(window, qtbot, Qt.Key.Key_Down)
+    qtbot.wait(20)
+    assert window.history_panel.collapsed and window.study_page.table.hasFocus()
+    press_arrow(window, qtbot, Qt.Key.Key_Up)
+    qtbot.wait(20)
+    assert not window.history_panel.collapsed and window.study_page.table.hasFocus()
+
+
+def test_alt_arrow_legacy_bindings_are_repaired_without_duplicate_defaults(repo, qtbot):
+    from vocabulary.domain import DEFAULT_SHORTCUTS
+    from vocabulary.window import MainWindow
+    repo.write_shortcuts(dict(DEFAULT_SHORTCUTS, save='Alt+Left', add_related=DEFAULT_SHORTCUTS['save']))
+    reopened = MainWindow(repo)
+    qtbot.addWidget(reopened)
+    assert reopened.shortcuts.values['save'] == DEFAULT_SHORTCUTS['save']
+    assert len(set(reopened.shortcuts.values.values())) == len(DEFAULT_SHORTCUTS)
+    assert reopened.shortcuts.active_bindings['Alt+Left'] == 'tab_previous'
+    reopened._closing = True

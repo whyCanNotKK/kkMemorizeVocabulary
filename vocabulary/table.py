@@ -810,7 +810,7 @@ class WordTable(QTableView):
     relatedMoveRequested = Signal(int, int, int)
     senseMoveRequested = Signal(int, int, int, int)
     shuffleRequested = Signal()
-    studyCycleRestartRequested = Signal()
+    entryCycleRestartRequested = Signal()
 
     def __init__(self, model, before_edit, parent=None):
         super().__init__(parent)
@@ -1181,9 +1181,9 @@ class WordTable(QTableView):
         if scroll:
             self.scrollTo(index, QAbstractItemView.ScrollHint.EnsureVisible)
 
-    def set_entry_revealed(self, entry_id, expanded):
+    def set_entry_revealed(self, entry_id, expanded, *, allow_search=False):
         """The page owns reveal state; restore selection after its projection resets."""
-        if self.search_active:
+        if self.search_active and not allow_search:
             return
         self.revealRequested.emit(entry_id, expanded)
         self.select_entry(entry_id)
@@ -1388,7 +1388,7 @@ class WordTable(QTableView):
                     actions = self.action_rects(self.visualRect(index), row)
                     if any(name == 'study' and rect.contains(event.position().toPoint())
                            for name, rect in actions):
-                        self.skip_study_entry(row.entry.id)
+                        self.skip_entry(row.entry.id)
                         event.accept()
                         return
                 if self._right_copy_hit(index, row, event.position().toPoint()):
@@ -1638,7 +1638,7 @@ class WordTable(QTableView):
                 and self.state() != QAbstractItemView.State.EditingState):
             key = event.key()
             modifiers = event.modifiers()
-            if key in (Qt.Key.Key_Enter, Qt.Key.Key_Delete):
+            if key in (Qt.Key.Key_Return, Qt.Key.Key_Enter, Qt.Key.Key_Delete):
                 modifiers &= ~Qt.KeyboardModifier.KeypadModifier
             if (event.modifiers() == Qt.KeyboardModifier.ControlModifier
                     and key in (Qt.Key.Key_Up, Qt.Key.Key_Down)):
@@ -1647,6 +1647,15 @@ class WordTable(QTableView):
                 self.verticalScrollBar().triggerAction(action)
                 event.accept()
                 return
+            if key in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
+                current = self.currentIndex()
+                row = current.data(Qt.ItemDataRole.UserRole)
+                if (modifiers == Qt.KeyboardModifier.NoModifier and not event.isAutoRepeat()
+                        and row is not None and self.selectionModel().isSelected(current)):
+                    self.skip_entry(row.entry.id)
+                if modifiers == Qt.KeyboardModifier.NoModifier:
+                    event.accept()
+                    return
             if self.study_mode and self._study_key(event):
                 event.accept()
                 return
@@ -1718,8 +1727,8 @@ class WordTable(QTableView):
         task = self.model().study_tasks.get(entry_id)
         return task is not None and self.spelling_hide_settings.hides(task.entry, task.stage)
 
-    def skip_study_entry(self, entry_id):
-        if not self.study_mode or not self.delegate.submit() or not self.can_navigate_entries():
+    def skip_entry(self, entry_id):
+        if not self.delegate.submit() or not self.can_navigate_entries():
             return
         self.reset_mouse_target()
         rows = self.model().rows
@@ -1730,7 +1739,7 @@ class WordTable(QTableView):
             return
         last = entry_id == pending[-1]
         if source.hidden:
-            self.set_entry_revealed(entry_id, True)
+            self.set_entry_revealed(entry_id, True, allow_search=True)
             source = next((row for row in self.model().rows if row.first and row.entry.id == entry_id), None)
             if source is None or source.hidden:
                 return
@@ -1740,7 +1749,7 @@ class WordTable(QTableView):
         self.cancel_pending_copy()
         self.reset_study_input()
         if last:
-            self.studyCycleRestartRequested.emit()
+            self.entryCycleRestartRequested.emit()
         self.select_entry(pending[(pending.index(entry_id) + 1) % len(pending)], scroll=True)
         self.setFocus()
 
@@ -1765,8 +1774,6 @@ class WordTable(QTableView):
                 or not self.can_navigate_entries()):
             return True
         if key in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
-            if not event.modifiers() & ~Qt.KeyboardModifier.KeypadModifier:
-                self.skip_study_entry(row.entry.id)
             return True
         if key in (Qt.Key.Key_Left, Qt.Key.Key_Right):
             return True

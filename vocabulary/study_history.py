@@ -434,7 +434,7 @@ class StudyHistoryPanel(QFrame):
         self.collapse_button.setChecked(collapsed)
         self.collapse_button.setIcon(icon('chevron_up' if collapsed else 'chevron_down'))
         label = f'{"展开" if collapsed else "收起"}背单词记录区域'
-        self.collapse_button.setToolTip(label)
+        self.collapse_button.setToolTip(label + (' · Alt+↑' if collapsed else ' · Alt+↓'))
         self.collapse_button.setAccessibleName(label)
         self.refresh()
         if not collapsed:

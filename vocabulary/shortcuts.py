@@ -17,11 +17,13 @@ from .theme import GOLD, icon
 RESERVED_DIGITS = {f"{modifier}+{keypad}{number}"
                    for modifier in ("Alt", "Ctrl") for keypad in ("", "Num+")
                    for number in range(1, 10)}
+RESERVED_ARROWS = {f'Alt+{direction}' for direction in ('Left', 'Right', 'Up', 'Down')}
 
 
 def repair_reserved_shortcuts(values):
     resets = {action: DEFAULT_SHORTCUTS[action] for action, value in values.items()
-              if QKeySequence(value).toString(QKeySequence.SequenceFormat.PortableText) in RESERVED_DIGITS}
+              if QKeySequence(value).toString(QKeySequence.SequenceFormat.PortableText)
+              in RESERVED_DIGITS | RESERVED_ARROWS}
     if not resets:
         return {}
     occupied = set(resets.values())
@@ -57,6 +59,8 @@ def normalize_shortcut(value: str) -> str:
     normalized = sequence.toString(QKeySequence.SequenceFormat.PortableText)
     if normalized in RESERVED_DIGITS:
         raise ValidationError("Alt+1～9 和 Ctrl+1～9（含数字键盘）为保留快捷键。")
+    if normalized in RESERVED_ARROWS:
+        raise ValidationError('Alt+方向键已保留给标签切换和区域展开/收起。')
     reserved = {"Ctrl+A", "Ctrl+C", "Ctrl+V", "Ctrl+X", "Ctrl+Z", "Ctrl+Y", "Alt+F4"}
     if sys.platform == "darwin":
         reserved.update({"Meta+A", "Meta+C", "Meta+V", "Meta+X", "Meta+Z"})

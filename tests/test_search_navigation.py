@@ -16,13 +16,18 @@ def results(window, repo, qtbot, request):
     return entries
 
 
-def test_search_down_selects_first_result_despite_old_selection_and_scroll(window, qtbot, results):
+@pytest.mark.parametrize('key,modifier', [
+    (Qt.Key.Key_Down, Qt.KeyboardModifier.NoModifier),
+    (Qt.Key.Key_Return, Qt.KeyboardModifier.NoModifier),
+    (Qt.Key.Key_Enter, Qt.KeyboardModifier.KeypadModifier),
+])
+def test_search_down_selects_first_result_despite_old_selection_and_scroll(window, qtbot, results, key, modifier):
     table, search = window.table, window.search_box
     table.select_entry(results[-1].id, scroll=True)
     assert table.verticalScrollBar().value() > 0
     search.setFocus()
     search.setCursorPosition(2)
-    qtbot.keyClick(search, Qt.Key.Key_Down)
+    qtbot.keyClick(search, key, modifier)
     assert table.hasFocus()
     assert table.currentIndex().data(Qt.ItemDataRole.UserRole).entry.id == results[0].id
     assert {index.data(Qt.ItemDataRole.UserRole).entry.id
@@ -57,20 +62,22 @@ def test_up_from_second_result_stops_at_first_before_returning(window, qtbot, re
     assert window.search_box.hasFocus()
 
 
-def test_search_without_results_keeps_focus(window, qtbot):
+@pytest.mark.parametrize('key', [Qt.Key.Key_Down, Qt.Key.Key_Return, Qt.Key.Key_Enter])
+def test_search_without_results_keeps_focus(window, qtbot, key):
     window.search_box.setText("absent")
     window.search_box.setFocus()
-    qtbot.keyClick(window.search_box, Qt.Key.Key_Down)
+    qtbot.keyClick(window.search_box, key)
     assert window.search_box.hasFocus()
 
 
 @pytest.mark.parametrize("query", ["", "   "])
-def test_empty_search_down_enters_list_but_up_stays_in_list(window, repo, qtbot, query):
+@pytest.mark.parametrize('key', [Qt.Key.Key_Down, Qt.Key.Key_Return, Qt.Key.Key_Enter])
+def test_empty_search_down_enters_list_but_up_stays_in_list(window, repo, qtbot, query, key):
     entry = repo.save(WordEntry("word", [Sense("n.", "词")]))
     window.refresh()
     window.search_box.setText(query)
     window.search_box.setFocus()
-    qtbot.keyClick(window.search_box, Qt.Key.Key_Down)
+    qtbot.keyClick(window.search_box, key)
     assert window.table.hasFocus()
     assert window.table.currentIndex().data(Qt.ItemDataRole.UserRole).entry.id == entry.id
     qtbot.keyClick(window.table, Qt.Key.Key_Up)
@@ -82,8 +89,9 @@ def test_modified_arrows_and_inline_editor_keep_their_scope(window, qtbot, resul
     search.setFocus()
     for modifier in (Qt.KeyboardModifier.ControlModifier, Qt.KeyboardModifier.ShiftModifier,
                      Qt.KeyboardModifier.AltModifier, Qt.KeyboardModifier.MetaModifier):
-        qtbot.keyClick(search, Qt.Key.Key_Down, modifier)
-        assert search.hasFocus()
+        for key in (Qt.Key.Key_Down, Qt.Key.Key_Return, Qt.Key.Key_Enter):
+            qtbot.keyClick(search, key, modifier)
+            assert search.hasFocus()
     table.select_entry(results[0].id)
     table.setFocus()
     qtbot.keyClick(table, Qt.Key.Key_Up, Qt.KeyboardModifier.ControlModifier)

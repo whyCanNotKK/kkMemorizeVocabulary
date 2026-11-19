@@ -229,3 +229,25 @@ def test_native_related_actions_follow_focused_middle_word(window, qtbot, native
     qtbot.wait(10)
     assert [block.word.text() for block in window.blocks] == (
         ["main", "a", "b", "", "c"] if action == "add" else ["main", "a", "c"])
+
+
+
+def test_native_alt_arrows_share_navigation_and_section_actions(window, native, qtbot):
+    bridge, _ = native
+    window.search_box.setFocus()
+    def chord(key):
+        bridge.refresh()
+        assert not bridge.dispatch_key(0xA4, True)
+        assert bridge.dispatch_key(key, True)
+        assert bridge.dispatch_key(key, True)
+        qtbot.wait(10)
+        bridge.dispatch_key(key, False)
+        bridge.dispatch_key(0xA4, False)
+    chord(0x27)
+    assert window.filter_name == 'all' and window.table.hasFocus()
+    chord(0x28)
+    assert window.form_collapsed and window.table.hasFocus()
+    chord(0x26)
+    assert not window.form_collapsed and window.table.hasFocus()
+    chord(0x25)
+    assert window.filter_name == 'pending' and window.table.hasFocus()

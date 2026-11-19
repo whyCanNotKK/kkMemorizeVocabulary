@@ -111,7 +111,13 @@ def test_reveal_tooltip_only_applies_inside_mask(review_list, monkeypatch):
         point = origin + offset
         event = QHelpEvent(QEvent.Type.ToolTip, point, table.viewport().mapToGlobal(point))
         QApplication.sendEvent(table.viewport(), event)
-    assert tips == ["点击查看词性、翻译和关联词"] * 3
+    texts = []
+    for tip in tips:
+        document = QTextDocument()
+        document.setHtml(tip)
+        texts.append(document.toPlainText())
+    ending = '输入词性' if table.study_mode else '空格'
+    assert texts == [f'查看释义和关联词 · \ufffc · \ufffc · {ending}'] * 3
 
 
 @pytest.mark.parametrize("key", [Qt.Key.Key_Left, Qt.Key.Key_Right, Qt.Key.Key_W,
@@ -354,13 +360,13 @@ def test_single_reveal_prioritizes_complete_entry(review_list, window, repo, qtb
     assert bar.value() == min(position, bar.maximum())
 
 
-@pytest.mark.parametrize("review_list", ["study17"], indirect=True)
+@pytest.mark.parametrize("review_list", ["pending", "all", "learned", "study17"], indirect=True)
 @pytest.mark.parametrize("key,modifier", [
     (Qt.Key.Key_Return, Qt.KeyboardModifier.NoModifier),
     (Qt.Key.Key_Enter, Qt.KeyboardModifier.NoModifier),
     (Qt.Key.Key_Enter, Qt.KeyboardModifier.KeypadModifier),
 ])
-def test_study_enter_reveals_hidden_source_then_skips_without_completing(review_list, window, repo, qtbot, key, modifier):
+def test_enter_reveals_hidden_source_then_skips_without_completing(review_list, window, repo, qtbot, key, modifier):
     table, entries = review_list
     entry = entries[1]
     table.setCurrentIndex(index_for(table, entry))
@@ -369,7 +375,8 @@ def test_study_enter_reveals_hidden_source_then_skips_without_completing(review_
     assert_selected(table, entries[2])
     assert table.currentIndex().data(Qt.ItemDataRole.UserRole).hidden
     assert all(not row.hidden for row in table.model().rows if row.entry.id == entry.id)
-    assert entry.id in {task.entry.id for task in repo.study_tasks(window.study_page.context)}
+    if table.study_mode:
+        assert entry.id in {task.entry.id for task in repo.study_tasks(window.study_page.context)}
     for _ in range(3):
         repeat = QKeyEvent(QEvent.Type.KeyPress, key, modifier, "\r", True, 1)
         QApplication.sendEvent(table, repeat)
@@ -379,28 +386,16 @@ def test_study_enter_reveals_hidden_source_then_skips_without_completing(review_
     with qtbot.assertNotEmitted(table.actionRequested):
         qtbot.keyClick(table, key, modifier)
     assert entry.id in {row.entry.id for row in table.model().rows}
-    assert entry.id in {task.entry.id for task in repo.study_tasks(window.study_page.context)}
-    assert not repo.get(entry.id).learned
+    if table.study_mode:
+        assert entry.id in {task.entry.id for task in repo.study_tasks(window.study_page.context)}
+    assert repo.get(entry.id).learned == entry.learned
     assert_selected(table, entries[2])
     assert table.currentIndex().data(Qt.ItemDataRole.UserRole).hidden
     assert table.hasFocus()
 
 
-@pytest.mark.parametrize("review_list", ["pending", "all", "learned"], indirect=True)
-def test_enter_does_not_perform_study_actions_on_other_pages(review_list, qtbot):
-    table, entries = review_list
-    for revealed in (False, True):
-        table.revealRequested.emit(entries[0].id, revealed)
-        table.setCurrentIndex(index_for(table, entries[0]))
-        table.setFocus()
-        for key in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
-            with qtbot.assertNotEmitted(table.actionRequested), qtbot.assertNotEmitted(table.revealRequested):
-                qtbot.keyClick(table, key)
-            assert table.currentIndex().data(Qt.ItemDataRole.UserRole).hidden is not revealed
-
-
-@pytest.mark.parametrize("review_list", ["study17"], indirect=True)
-def test_study_enter_requires_selection_and_unmodified_press(review_list, window, qtbot):
+@pytest.mark.parametrize("review_list", ["pending", "all", "learned", "study17"], indirect=True)
+def test_enter_requires_selection_and_unmodified_press(review_list, window, qtbot):
     table, entries = review_list
     table.setCurrentIndex(index_for(table, entries[0]))
     table.setFocus()
@@ -412,9 +407,9 @@ def test_study_enter_requires_selection_and_unmodified_press(review_list, window
     table.clearSelection()
     with qtbot.assertNotEmitted(table.revealRequested), qtbot.assertNotEmitted(table.actionRequested):
         qtbot.keyClick(table, Qt.Key.Key_Return)
-    window.study_page.refresh_button.setFocus()
+    window.settings_button.setFocus()
     with qtbot.assertNotEmitted(table.actionRequested):
-        qtbot.keyClick(window.study_page.refresh_button, Qt.Key.Key_Return)
+        qtbot.keyClick(window, Qt.Key.Key_Return)
 
 
 @pytest.mark.parametrize("review_list", ["study17"], indirect=True)
@@ -446,7 +441,7 @@ def test_study_button_tooltip_reflects_visibility(review_list, monkeypatch):
     assert len(tips) == 1
     document = QTextDocument()
     document.setHtml(tips[0])
-    assert document.toPlainText() == "记下（需先展示释义）\n跳过 · \ufffc · \ufffc"
+    assert document.toPlainText() == "记下（需先展示释义）\n查看释义并跳过 · \ufffc · \ufffc"
     table.revealRequested.emit(entries[0].id, True)
     QApplication.sendEvent(table.viewport(), event)
     document.setHtml(tips[-1])

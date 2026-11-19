@@ -128,8 +128,8 @@ class MainWindow(QMainWindow):
         self.study_page.table.delegate.contentRemoved.connect(self.inline_content_removed)
         self.study_page.table.editPreparationRequested.connect(self.prepare_list_edit)
         self.study_page.table.copyRequested.connect(self.copy_text)
-        self.study_page.table.studyCycleRestartRequested.connect(lambda: self.set_global_hidden(True))
         for table in (self.table, self.study_page.table):
+            table.entryCycleRestartRequested.connect(lambda: self.set_global_hidden(True))
             table.wholeWordCopyRequested.connect(self.copy_whole_word)
             table.pasteRejected.connect(self.toast_paste_error)
         self.study_page.table.relatedMoveRequested.connect(self.move_related_word)
@@ -162,7 +162,7 @@ class MainWindow(QMainWindow):
         self.collapse_button.setIconSize(QSize(40, 26))
         self.collapse_button.setIcon(icon("chevron_down"))
         self.collapse_button.setCheckable(True)
-        self.collapse_button.setToolTip("收起添加单词区域")
+        self.collapse_button.setToolTip("收起添加单词区域 · Alt+↓")
         self.collapse_button.setAccessibleName("收起添加单词区域")
         self.collapse_button.clicked.connect(self.set_form_collapsed)
         header.addWidget(self.collapse_button, 0, 1, Qt.AlignmentFlag.AlignCenter)
@@ -241,6 +241,14 @@ class MainWindow(QMainWindow):
             fixed[action] = (f"Alt+{number}",)
             callbacks[action] = lambda key=key: self.activate_filter(key)
             self.filter_buttons[key].setToolTip(fixed[action][0])
+        for action, chord, callback in (
+            ('tab_previous', 'Alt+Left', lambda: self.activate_adjacent_filter(-1)),
+            ('tab_next', 'Alt+Right', lambda: self.activate_adjacent_filter(1)),
+            ('section_expand', 'Alt+Up', lambda: self.set_current_section_collapsed(False)),
+            ('section_collapse', 'Alt+Down', lambda: self.set_current_section_collapsed(True)),
+        ):
+            fixed[action] = (chord,)
+            callbacks[action] = callback
         scoped = {"focus_search": self.can_focus_search}
         for number in range(1, 10):
             action = f"copy_word_{number}"
@@ -331,7 +339,7 @@ class MainWindow(QMainWindow):
         else:
             self.toast.dismiss()
 
-    def set_form_collapsed(self, collapsed):
+    def set_form_collapsed(self, collapsed, *, restore_focus=True):
         if self.filter_name == 'study17':
             return
         if collapsed == self.form_collapsed:
@@ -342,7 +350,7 @@ class MainWindow(QMainWindow):
             candidate = focus if focus and self.editor_body.isAncestorOf(focus) else self._last_form_focus
             self._collapsed_focus = candidate if (candidate and shiboken6.isValid(candidate)
                                                   and self.editor_body.isAncestorOf(candidate)) else None
-            if focus and self.editor_body.isAncestorOf(focus):
+            if restore_focus and focus and self.editor_body.isAncestorOf(focus):
                 self.collapse_button.setFocus()
             self.editor_body.hide()
         else:
@@ -352,11 +360,28 @@ class MainWindow(QMainWindow):
         self.collapse_button.setChecked(collapsed)
         self.collapse_button.setIcon(icon("chevron_up" if collapsed else "chevron_down"))
         label = f"{'展开' if collapsed else '收起'}{self.form_title.text()}区域"
-        self.collapse_button.setToolTip(label)
+        self.collapse_button.setToolTip(label + (' · Alt+↑' if collapsed else ' · Alt+↓'))
         self.collapse_button.setAccessibleName(label)
-        if not collapsed and self._collapsed_focus and shiboken6.isValid(self._collapsed_focus):
+        if restore_focus and not collapsed and self._collapsed_focus and shiboken6.isValid(self._collapsed_focus):
             widget = self._collapsed_focus
             QTimer.singleShot(0, lambda: self.restore_input_focus(widget))
+
+    def set_current_section_collapsed(self, collapsed):
+        studying = self.filter_name == 'study17'
+        current = self.history_panel.collapsed if studying else self.form_collapsed
+        if current == collapsed or self.current_table().dragging or self.form_drag.active:
+            return
+        focus = QApplication.focusWidget()
+        hidden = self.history_panel.table if studying else self.editor_body
+        if collapsed and focus and (focus is hidden or hidden.isAncestorOf(focus)):
+            focus = self.current_table()
+            self.restore_list_focus()
+        if studying:
+            self.history_panel.set_collapsed(collapsed)
+        else:
+            self.set_form_collapsed(collapsed, restore_focus=False)
+        if focus and shiboken6.isValid(focus) and focus.isVisible():
+            focus.setFocus(Qt.FocusReason.ShortcutFocusReason)
 
     def schedule_editor_resize(self):
         if not self._closing:
@@ -386,6 +411,7 @@ class MainWindow(QMainWindow):
         QTimer.singleShot(0, self.ensure_current_input_visible)
 
     def refresh(self, entries=None):
+        self.update_tab_tooltips()
         studying = self.filter_name == "study17"
         self.search_box.setVisible(not studying)
         self.editor_panel.setVisible(not studying)
@@ -556,6 +582,16 @@ class MainWindow(QMainWindow):
         self.refresh()
         return True
 
+    def update_tab_tooltips(self):
+        for number, (key, button) in enumerate(self.filter_buttons.items(), 1):
+            button.setToolTip(f'Alt+{number}' + (' · Alt+←/→' if key != self.filter_name else ''))
+
+    def activate_adjacent_filter(self, step):
+        pages = list(self.filter_buttons)
+        target = pages.index(self.filter_name) + step
+        if 0 <= target < len(pages):
+            self.activate_filter(pages[target])
+
     def activate_filter(self, key):
         if not self.set_filter(key):
             return
@@ -587,7 +623,9 @@ class MainWindow(QMainWindow):
 
     def reveal(self, entry_id, expanded):
         if self.search_box.text().strip():
-            return
+            if not expanded:
+                return
+            self._search_hidden[self.filter_name].discard(entry_id)
         if expanded:
             self.revealed.add(entry_id)
         else:
@@ -663,7 +701,7 @@ class MainWindow(QMainWindow):
         self.edit_id = entry.id if entry else None
         self.form_title.setText("编辑单词" if self.edit_id is not None else "添加单词")
         label = f"{'展开' if self.form_collapsed else '收起'}{self.form_title.text()}区域"
-        self.collapse_button.setToolTip(label)
+        self.collapse_button.setToolTip(label + (' · Alt+↑' if self.form_collapsed else ' · Alt+↓'))
         self.collapse_button.setAccessibleName(label)
         entry = entry or WordEntry()
         self.add_block(entry.text, entry.senses, phonetic=entry.phonetic)

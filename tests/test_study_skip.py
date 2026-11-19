@@ -195,3 +195,47 @@ def test_skip_does_not_leave_invalid_inline_editor(skip_list, qtbot):
     assert table.delegate.editor is editor and editor.text() == ''
     assert table.currentIndex().data(Qt.ItemDataRole.UserRole).entry.id == words[0].id
     table.delegate.cancel()
+
+
+
+@pytest.mark.parametrize('page', ['pending', 'all', 'learned'])
+@pytest.mark.parametrize('count', [1, 3])
+def test_ordinary_enter_reveals_last_then_hides_page_and_wraps(window, repo, qtbot, page, count):
+    words = [repo.save(WordEntry(f'word-{i}', [Sense('n.', '词')],
+                                [RelatedWord('child', [Sense('n.', '关联')])], learned=page == 'learned'))
+             for i in range(count)]
+    window.set_filter(page)
+    table = window.table
+    before = repo.list_entries()
+    table.select_entry(words[-1].id)
+    table.setFocus()
+    qtbot.keyClick(table, Qt.Key.Key_Return)
+    assert table.currentIndex() == table._entry_index(words[-1].id)
+    assert all(not row.hidden for row in table.model().rows if row.entry.id == words[-1].id)
+    qtbot.keyClick(table, Qt.Key.Key_Enter, Qt.KeyboardModifier.KeypadModifier)
+    assert table.currentIndex() == table._entry_index(words[0].id)
+    assert table.hasFocus() and all(row.hidden for row in table.model().rows)
+    assert window.global_hidden and window.global_hide_button.isChecked()
+    assert repo.list_entries() == before
+
+
+@pytest.mark.parametrize('page', ['pending', 'all', 'learned'])
+def test_enter_search_wrap_hides_only_results_and_can_reveal_next_cycle(window, repo, qtbot, page):
+    outside = repo.save(WordEntry('outside', [Sense('n.', '外部')], learned=page == 'learned'))
+    words = [repo.save(WordEntry(f'match-{i}', [Sense('n.', '词')], learned=page == 'learned'))
+             for i in range(2)]
+    window.set_filter(page)
+    window.reveal(outside.id, True)
+    window.search_box.setText('match')
+    table = window.table
+    table.select_entry(words[-1].id)
+    table.setFocus()
+    qtbot.keyClick(table, Qt.Key.Key_Return)
+    assert table.currentIndex() == table._entry_index(words[0].id)
+    assert all(row.hidden for row in table.model().rows)
+    assert outside.id in window.revealed
+    qtbot.keyClick(table, Qt.Key.Key_Return)
+    assert table.currentIndex() == table._entry_index(words[1].id)
+    assert all(not row.hidden for row in table.model().rows if row.entry.id == words[0].id)
+    assert all(row.hidden for row in table.model().rows if row.entry.id == words[1].id)
+    assert window.search_box.text() == 'match'

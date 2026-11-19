@@ -330,7 +330,8 @@ def copy_word_tooltip() -> str:
 def study_mark_tooltip(hidden=False) -> str:
     first = ('记下（需先展示释义）' if hidden else
              f'记下 · {_tooltip_icon("mouse_left", "鼠标左键")} · [单词拼写]')
+    skip = '查看释义并跳过' if hidden else '跳过'
     return (f'<p style="white-space:nowrap; margin:0">{first}</p>'
-            f'<p style="white-space:nowrap; margin:0">跳过 · '
+            f'<p style="white-space:nowrap; margin:0">{skip} · '
             f'{_tooltip_icon("mouse_right", "鼠标右键")} · {_tooltip_icon("enter_key", "回车")}</p>')
 
