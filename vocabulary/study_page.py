@@ -84,7 +84,7 @@ class StudyPage(QWidget):
         self.table = WordTable(self.model, lambda: True)
         self.table.set_hide_word_while_spelling(repository.study_spelling_hide_settings())
         self.table.set_page_state("study17", False, 0)
-        self.table.empty_text = "当前时段没有待完成的单词\n切换日期或时段后，请点击刷新"
+        self.table.empty_text = ''
         self.completion_notice = StudyCompletionNotice(
             self.refresh_button.icon(), self.refresh_button.iconSize(), self.table.viewport())
         self.completion_notice.refreshRequested.connect(self.reload)
@@ -148,11 +148,12 @@ class StudyPage(QWidget):
             self.model.populate([task.entry for task in visible], self.revealed)
             self.table.update_spans()
         history = self.timer.history
-        show_notice = history is not None and bool(history.status) and self.model.rowCount() == 0
+        show_notice = self.model.rowCount() == 0
         if show_notice:
-            self.completion_notice.set_history(history)
-        self.table.empty_text = ('' if show_notice else
-                                 "当前时段没有待完成的单词\n切换日期或时段后，请点击刷新")
+            if history is not None and history.status:
+                self.completion_notice.set_history(history)
+            else:
+                self.completion_notice.set_empty()
         self.completion_notice.setVisible(show_notice)
         self.table.viewport().update()
 

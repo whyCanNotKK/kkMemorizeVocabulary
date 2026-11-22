@@ -113,7 +113,7 @@ def test_cross_database_roundtrip_and_repeat_replace_maps_final_ids(source, repo
     assert repo.get(unrelated.id)
     adopted = repo.replace_imports(result.conflicts)['alpha']
     repo.replace_study_progress(backup)
-    assert repo.study_backup().words[0].id == adopted.id != current.id
+    assert repo.study_backup().words[0].id == adopted.id == current.id
     assert repo.study_backup().records == backup.records
     assert repo.shortcuts()['save'] == 'Alt+S'
     assert repo.prepare_study(AM) == []  # morning completion and the generated-date marker survived
@@ -386,7 +386,7 @@ def test_study_import_reuses_duplicate_dialog_and_final_local_id(source, window,
     assert len(seen) == 1 and info and not errors
     restored = window.repository.study_backup()
     assert restored.records == source.study_backup().records
-    assert (restored.words[0].id != old.id) == (incoming is True)
+    assert restored.words[0].id == old.id
     assert restored.words[0].senses[0].translation == ('中文\n第二行' if incoming else '本机内容')
 
 
@@ -399,7 +399,7 @@ def test_words_only_overwrite_keeps_local_progress_after_id_changes(source, wind
     window.import_words()
     assert not errors and info
     assert window.repository.study_backup().records == before
-    assert window.repository.study_backup().words[0].id != old.id
+    assert window.repository.study_backup().words[0].id == old.id
 
 
 def test_import_reloads_clock_but_does_not_draw_until_explicit_refresh(source, window, monkeypatch, tmp_path):

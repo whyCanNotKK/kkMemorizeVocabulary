@@ -10,6 +10,7 @@ from .domain import (CLEANUP_COMMANDS, DEFAULT_SHORTCUTS, DuplicateWord, Related
                      WordContentValidationError, WordEntry, clean_entry, clean_word_content,
                      same_entry_content, shortcut_candidates)
 from .transfer import ImportConflict, ImportResult
+from .import_merge import AutoMergeResult, plan_auto_merge
 from .learning import (STAGE_GAPS, SpellingHideSettings, StudyContext, StudyDrawSettings, StudyTask,
                        StudyTaskHistory, next_stage, study_due, study_timestamp)
 from .study_transfer import RECORD_FIELDS, StudyBackup
@@ -107,6 +108,76 @@ class Repository:
             self._save_entry(entry, counters)
         return self.get(entry.id)
 
+    def set_phonetic(self, entry_id: int, phonetic: str, related_text: str | None = None) -> WordEntry:
+        """Update only a pronunciation, matching related words by name rather than position."""
+        if not isinstance(phonetic, str):
+            raise ValidationError("音标必须是文本。")
+        with self.connection:
+            self.connection.execute("BEGIN IMMEDIATE")
+            self.get(entry_id)
+            if related_text is None:
+                self.connection.execute("UPDATE words SET phonetic=? WHERE id=?", (phonetic.strip(), entry_id))
+            else:
+                target_id = self._import_related_id(entry_id, related_text)
+                if target_id is None:
+                    raise ValueError(f'本地关联词“{related_text}”不存在，无法同步音标。')
+                self.connection.execute("UPDATE related_words SET phonetic=? WHERE id=?",
+                                        (phonetic.strip(), target_id))
+            self.connection.execute(
+                "UPDATE words SET updated_at=strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id=?", (entry_id,))
+            current = self.get(entry_id)
+        return current
+
+    def _import_related_id(self, entry_id, text):
+        return next((row['id'] for row in self.connection.execute(
+            'SELECT id,text FROM related_words WHERE word_id=? ORDER BY position,id', (entry_id,))
+            if row['text'].strip().casefold() == text.strip().casefold()), None)
+
+    def sync_import_translation(self, entry_id: int, sense: Sense,
+                                related_text: str | None = None) -> WordEntry:
+        # Use the existing word validator, retaining even an explicitly empty translation.
+        sense = clean_word_content(RelatedWord('import', [sense])).senses[0]
+        with self.connection:
+            self.connection.execute('BEGIN IMMEDIATE')
+            self.get(entry_id)
+            column, target_id = 'word_id', entry_id
+            if related_text is not None:
+                column, target_id = 'related_id', self._import_related_id(entry_id, related_text)
+                if target_id is None:
+                    raise ValueError(f'本地关联词“{related_text}”不存在，无法同步译文。')
+            existing = self.connection.execute(
+                f'SELECT id FROM senses WHERE {column}=? AND pos=? ORDER BY position,id LIMIT 1',
+                (target_id, sense.pos)).fetchone()
+            if existing:
+                self.connection.execute('UPDATE senses SET translation=? WHERE id=?',
+                                        (sense.translation, existing['id']))
+            else:
+                self.connection.execute(f'''INSERT INTO senses({column},pos,translation,position)
+                    SELECT ?,?,?,COALESCE(MAX(position),-1)+1 FROM senses WHERE {column}=?''',
+                    (target_id, sense.pos, sense.translation, target_id))
+            self.connection.execute(
+                "UPDATE words SET updated_at=strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id=?", (entry_id,))
+            current = self.get(entry_id)
+        return current
+
+    def append_import_related(self, entry_id: int, related: RelatedWord) -> WordEntry:
+        related = clean_word_content(related)
+        with self.connection:
+            self.connection.execute('BEGIN IMMEDIATE')
+            self.get(entry_id)
+            if self._import_related_id(entry_id, related.text) is None:
+                cursor = self.connection.execute('''INSERT INTO related_words(word_id,text,position,phonetic)
+                    SELECT ?,?,COALESCE(MAX(position),-1)+1,? FROM related_words WHERE word_id=?''',
+                    (entry_id, related.text, related.phonetic, entry_id))
+                self.connection.executemany(
+                    'INSERT INTO senses(related_id,pos,translation,position) VALUES (?,?,?,?)',
+                    [(cursor.lastrowid, sense.pos, sense.translation, index)
+                     for index, sense in enumerate(related.senses)])
+                self.connection.execute(
+                    "UPDATE words SET updated_at=strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id=?", (entry_id,))
+            current = self.get(entry_id)
+        return current
+
     def replace_word_content(self, expected: WordEntry, owner: int, word: RelatedWord):
         """Replace just the target word and its definitions from a list snapshot."""
         word = clean_word_content(word)
@@ -202,14 +273,14 @@ class Repository:
             raise DuplicateWord(existing[0])
         return normalized
 
-    def _save_entry(self, entry: WordEntry, counters, forced_id=None):
+    def _save_entry(self, entry: WordEntry, counters):
         """Write within the caller's transaction; ordinary edits keep learned state."""
         normalized = self._check_word_name(entry.text, entry.id)
         if entry.id is None:
             entry.sort_order = self._next_order(counters, entry.learned)
             cursor = self.connection.execute(
-                "INSERT INTO words(id,text,normalized_text,important,learned,sort_order,phonetic) VALUES (?,?,?,?,?,?,?)",
-                (forced_id, entry.text, normalized, entry.important, entry.learned, entry.sort_order, entry.phonetic))
+                "INSERT INTO words(text,normalized_text,important,learned,sort_order,phonetic) VALUES (?,?,?,?,?,?)",
+                (entry.text, normalized, entry.important, entry.learned, entry.sort_order, entry.phonetic))
             entry.id = cursor.lastrowid
         else:
             cursor = self.connection.execute("""UPDATE words SET text=?,normalized_text=?,important=?,phonetic=?,
@@ -231,48 +302,75 @@ class Repository:
                 [(cursor.lastrowid, s.pos, s.translation, j) for j, s in enumerate(child.senses)])
 
     def import_entries(self, drafts: list[WordEntry]) -> ImportResult:
-        entries = [clean_entry(draft) for draft in drafts]
-        if all(entry.sort_order is not None for entry in entries):
-            entries.sort(key=lambda entry: entry.sort_order)
+        entries = [(index, clean_entry(draft)) for index, draft in enumerate(drafts)]
+        for _, entry in entries:
+            for word in [entry, *entry.related]:
+                while word.phonetic.startswith('/') or word.phonetic.endswith('/'):
+                    word.phonetic = word.phonetic.strip('/').strip()
+        if all(entry.sort_order is not None for _, entry in entries):
+            entries.sort(key=lambda item: item[1].sort_order)
         result = ImportResult()
         with self._transaction() as counters:
-            for entry in entries:
+            for source_index, entry in entries:
                 entry.id = None
                 existing = self.connection.execute(
                     "SELECT id FROM words WHERE normalized_text=?", (entry.text.casefold(),)).fetchone()
                 if existing:
                     current = self.get(existing[0])
                     if not same_entry_content(current, entry):
-                        result.conflicts.append(ImportConflict(current, entry))
+                        result.conflicts.append(ImportConflict(current, entry, source_index))
                 else:
                     self._save_entry(entry, counters)
                     result.inserted += 1
         return result
 
     def replace_imports(self, choices: list[ImportConflict]) -> dict[str, WordEntry]:
-        """Adopt in choice order, resolving names afresh after each delete/recreate."""
+        """Adopt in place, moving to a category's end only when learned state changes."""
         entries = [clean_entry(choice.incoming) for choice in choices]
         adopted = {}
         with self._transaction() as counters:
+            self.connection.execute('BEGIN IMMEDIATE')
             for entry in entries:
                 normalized = entry.text.casefold()
                 current = self.connection.execute(
-                    "SELECT id FROM words WHERE normalized_text=?", (normalized,)).fetchone()
+                    "SELECT id,learned FROM words WHERE normalized_text=?", (normalized,)).fetchone()
                 if current is None:
                     raise ValueError("待替换的主词已不存在。")
-                # Reserve before deleting: INTEGER PRIMARY KEY would otherwise reuse the last ID.
-                new_id = self.connection.execute("SELECT COALESCE(MAX(id),0)+1 FROM words").fetchone()[0]
-                progress = self.connection.execute(
-                    "SELECT * FROM memorize_vocabulary_17day WHERE word_id=?", (current[0],)).fetchone()
-                self.connection.execute("DELETE FROM words WHERE id=?", (current[0],))
-                entry.id = None
-                self._save_entry(entry, counters, forced_id=new_id)
-                if progress is not None:
-                    self.connection.execute("""INSERT INTO memorize_vocabulary_17day
-                        (word_id,group_number,stage,morning_done,afternoon_done,last_completed_on)
-                        VALUES (?,?,?,?,?,?)""", (new_id, *(progress[field] for field in RECORD_FIELDS)))
+                entry.id = current['id']
+                self._save_entry(entry, counters)
+                if bool(current['learned']) != entry.learned:
+                    rank = self._next_order(counters, entry.learned)
+                    self.connection.execute('UPDATE words SET learned=?,sort_order=? WHERE id=?',
+                                            (entry.learned, rank, entry.id))
                 adopted[normalized] = self.get(entry.id)
         return adopted
+
+    def auto_merge_imports(self, choices: list[ImportConflict]) -> AutoMergeResult:
+        """Process candidates once in order, committing all safe changes atomically."""
+        result = AutoMergeResult()
+        with self._transaction() as counters:
+            self.connection.execute('BEGIN IMMEDIATE')
+            for index, choice in enumerate(choices):
+                incoming = clean_entry(choice.incoming)
+                name = incoming.text.casefold()
+                row = self.connection.execute(
+                    'SELECT id FROM words WHERE normalized_text=?', (name,)).fetchone()
+                if row is None:
+                    raise ValueError('待合并的主词已不存在。')
+                current = self.get(row['id'])
+                decision = plan_auto_merge(current, incoming)
+                if decision.entry is None:
+                    result.skipped[index] = decision.reason
+                else:
+                    if same_entry_content(current, decision.entry):
+                        result.stats.unchanged += 1
+                    else:
+                        self._save_entry(decision.entry, counters)
+                        current = self.get(current.id)
+                        result.stats.changed += 1
+                    result.processed_indices.append(index)
+                result.entries[name] = current
+        return result
 
     def batch_update_sort_orders(self, updates: dict[int, int]):
         """One UPDATE for all changed ranks; missing IDs and invalid ranks fail atomically."""

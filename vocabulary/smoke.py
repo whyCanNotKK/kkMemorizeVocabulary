@@ -3,13 +3,32 @@ import json
 from pathlib import Path
 import traceback
 
-from PySide6.QtCore import QPoint, Qt
+from PySide6.QtCore import QPoint, Qt, QTimer
 from PySide6.QtTest import QTest
-from PySide6.QtWidgets import QLabel
+from PySide6.QtWidgets import QApplication, QLabel, QMessageBox
 
 from .shortcuts import SettingsDialog
 from .import_dialog import ImportConflictDialog
 from .transfer import read_entries, serialize_entries, write_entries
+
+
+def _auto_merge_and_confirm(comparison):
+    """Acknowledge the real completion message during unattended smoke checks."""
+    timer = QTimer(comparison)
+
+    def confirm():
+        popup = QApplication.activeModalWidget()
+        if isinstance(popup, QMessageBox) and popup.windowTitle() == '自动合并完成':
+            timer.stop()
+            popup.accept()
+
+    timer.timeout.connect(confirm)
+    timer.start(10)
+    try:
+        comparison.auto_merge()
+    finally:
+        timer.stop()
+        timer.deleteLater()
 
 
 def run_smoke(app, window, directory: Path):
@@ -206,7 +225,17 @@ def run_smoke(app, window, directory: Path):
         imported = read_entries(directory / "all-words.json")
         assert serialize_entries(imported) == serialize_entries(entries)
         result = repo.import_entries(imported)
-        assert result.inserted == 0 and not result.conflicts
+        assert result.inserted == 0
+        # Import strips phonetic slashes; a roundtrip can therefore need comparison.
+        # Automatic merging must keep the nonempty local pronunciation untouched.
+        if result.conflicts:
+            comparison = ImportConflictDialog(repo, result, window)
+            count = len(result.conflicts)
+            _auto_merge_and_confirm(comparison)
+            assert not comparison.conflicts
+            assert result.auto_merge_stats.changed == 0
+            assert result.auto_merge_stats.unchanged == count
+        assert repo.list_entries() == entries
         from dataclasses import replace
         result = repo.import_entries([replace(entry, important=not entry.important) for entry in imported])
         assert result.inserted == 0 and len(result.conflicts) == len(entries)
@@ -214,15 +243,30 @@ def run_smoke(app, window, directory: Path):
         comparison.show()
         QTest.qWait(40)
         comparison.grab().save(str(directory / "import-comparison.png"))
+        expected = comparison.conflicts[0].incoming
         QTest.mouseClick(comparison.cards[0][1].description, Qt.MouseButton.LeftButton)
         assert len(comparison.conflicts) == len(entries) - 1
         adopted = next(entry for entry in repo.list_entries()
                        if entry.text.casefold() == entries[0].text.casefold())
-        assert adopted.id != entries[0].id
-        assert replace(adopted, id=entries[0].id, sort_order=entries[0].sort_order) == replace(
-            entries[0], important=not entries[0].important)
+        assert adopted.id == entries[0].id and adopted.sort_order == entries[0].sort_order
+        assert replace(adopted, id=None, sort_order=None) == replace(expected, id=None, sort_order=None)
         comparison.close()
         report["checks"].append("json_roundtrip_and_immediate_card_import")
+        # Add a missing related-word pronunciation without replacing the main word.
+        candidate = replace(adopted, text=adopted.text.upper(), related=[
+            *adopted.related[:-1], replace(adopted.related[-1], phonetic='səˈrenəti')])
+        result = repo.import_entries([candidate])
+        comparison = ImportConflictDialog(repo, result, window)
+        comparison.show()
+        _auto_merge_and_confirm(comparison)
+        merged = repo.get(adopted.id)
+        assert not comparison.conflicts and merged.text == adopted.text
+        assert merged.senses == adopted.senses and merged.important == adopted.important
+        assert merged.learned == adopted.learned and merged.related[-1].phonetic == 'səˈrenəti'
+        changed = int(adopted.related[-1].phonetic != 'səˈrenəti')
+        assert result.auto_merge_stats.changed == changed
+        assert result.auto_merge_stats.unchanged == 1 - changed
+        report["checks"].append("automatic_merge_keeps_local_id_flags_and_fills_related_phonetic")
         report["ok"] = True
     except Exception:
         report["error"] = traceback.format_exc()

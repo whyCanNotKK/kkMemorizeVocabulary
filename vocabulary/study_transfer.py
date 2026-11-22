@@ -170,8 +170,11 @@ def read_study_backup(path: str | Path) -> StudyBackup:
 
 
 def read_word_or_study_file(path: str | Path) -> list[WordEntry] | StudyBackup:
+    return parse_word_or_study_file(Path(path).read_text(encoding='utf-8-sig'))
+
+
+def parse_word_or_study_file(content: str) -> list[WordEntry] | StudyBackup:
     """Classify only to select a parser; a format label alone never bypasses validation."""
-    content = Path(path).read_text(encoding='utf-8-sig')
     try:
         document = json.loads(content)
     except (ValueError, RecursionError) as error:

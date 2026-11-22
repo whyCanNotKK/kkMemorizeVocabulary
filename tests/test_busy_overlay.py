@@ -207,4 +207,4 @@ def test_conflict_adoption_uses_its_own_overlay_and_releases_it_afterward(repo, 
     assert states == [True]
     assert not dialog.busy_overlay.active and not dialog.isVisible()
     adopted = repo.list_entries()[0]
-    assert adopted.id != original.id and adopted.senses[0].translation == 'changed'
+    assert adopted.id == original.id and adopted.senses[0].translation == 'changed'

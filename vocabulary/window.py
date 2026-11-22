@@ -24,9 +24,9 @@ from .review_navigation import ReviewKeyRouter
 from .study_page import StudyPage
 from .study_history import StudyHistoryPanel
 from .learning import StudyContext
-from .study_transfer import StudyBackup, read_study_backup, read_word_or_study_file, write_study_backup
+from .study_transfer import StudyBackup, parse_study_backup, parse_word_or_study_file, write_study_backup
 from .theme import ACCENT, GOLD, MUTED, icon
-from .transfer import write_entries
+from .transfer import ImportSource, write_entries
 from .transfer_jobs import run_repository_task
 from .widgets import FloatingNotice, PosCombo, SearchBox, WordBlock, button, confirm_remove
 from .word_clipboard import encode
@@ -1283,20 +1283,20 @@ class MainWindow(QMainWindow):
             if not path:
                 return
             try:
-                entries = self.busy_overlay.run('正在读取导入文件…', lambda: read_word_or_study_file(path))
+                source, entries = self.busy_overlay.run(
+                    '正在读取导入文件…', lambda: ImportSource.read(path, parse_word_or_study_file))
             except (ValidationError, UnicodeError):
                 QMessageBox.critical(self, '导入失败', '数据结构不合法，导入失败')
                 return
             if isinstance(entries, StudyBackup):
-                return self.import_study_progress(entries, require_choice=True)
+                return self.import_study_progress(entries, require_choice=True, source=source)
             if not self.current_table().delegate.submit() or not self.resolve_dirty():
                 return
             result = run_repository_task(self.repository, self.busy_overlay,
                                          '正在导入单词…', 'import_entries', entries)
             if self.edit_id is not None:
                 self.reset_form()
-            self.refresh_after_transfer()
-            replaced_ids = self.resolve_word_conflicts(result)
+            replaced_ids = self.resolve_word_conflicts(result, source=source)
             self.refresh_after_transfer()
             self.show_import_result(result.inserted, len(replaced_ids))
         except Exception as error:
@@ -1306,9 +1306,9 @@ class MainWindow(QMainWindow):
             self.shortcuts.set_suspended(False)
 
     def show_import_result(self, inserted, replaced):
-        QMessageBox.information(
-            self, '导入完成', f'新增 <span style="color:{ACCENT}">{inserted}</span> 个主词，'
-            f'覆盖 <span style="color:{ACCENT}">{replaced}</span> 个主词。')
+        message = (f'新增 <span style="color:{ACCENT}">{inserted}</span> 个主词，'
+                   f'覆盖 <span style="color:{ACCENT}">{replaced}</span> 个主词。')
+        QMessageBox.information(self, '导入完成', message)
 
     def refresh_after_transfer(self, overlay=None):
         overlay = overlay or self.busy_overlay
@@ -1317,11 +1317,10 @@ class MainWindow(QMainWindow):
         with overlay.display('正在更新单词列表…'):
             self.refresh(entries)
 
-    def resolve_word_conflicts(self, result):
+    def resolve_word_conflicts(self, result, *, source=None):
         if not result.conflicts:
             return set()
-        dialog = ImportConflictDialog(self.repository, result, self)
-        dialog.resolved.connect(lambda: self.refresh_after_transfer(dialog.busy_overlay))
+        dialog = ImportConflictDialog(self.repository, result, self, source=source)
         try:
             dialog.exec()
             return dialog.replaced_names
@@ -1371,7 +1370,7 @@ class MainWindow(QMainWindow):
             return 'words'
         return 'cancel'
 
-    def import_study_progress(self, backup=None, *, require_choice=False):
+    def import_study_progress(self, backup=None, *, require_choice=False, source=None):
         if self.busy_overlay.active:
             return
         self.shortcuts.set_suspended(True)
@@ -1384,7 +1383,8 @@ class MainWindow(QMainWindow):
                     'JSON 文件 (*.json)')
                 if not path:
                     return
-                backup = self.busy_overlay.run('正在读取学习进度…', lambda: read_study_backup(path))
+                source, backup = self.busy_overlay.run(
+                    '正在读取学习进度…', lambda: ImportSource.read(path, parse_study_backup))
             mode = (self.choose_study_import_mode()
                     if require_choice or self.repository.has_study_progress() else 'full')
             if mode == 'cancel':
@@ -1397,7 +1397,7 @@ class MainWindow(QMainWindow):
                                          '正在导入单词…', 'import_entries', backup.words)
             if self.edit_id is not None:
                 self.reset_form()
-            replaced = self.resolve_word_conflicts(result)
+            replaced = self.resolve_word_conflicts(result, source=source)
             if mode == 'full':
                 run_repository_task(self.repository, self.busy_overlay,
                                     '正在恢复学习进度…', 'replace_study_progress', backup)

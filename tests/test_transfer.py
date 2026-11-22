@@ -183,23 +183,22 @@ def test_import_insert_transaction_rolls_back(repo):
     assert repo.list_entries() == []
 
 
-def test_import_replacement_is_complete_and_recreates_at_end(repo):
+def test_import_replacement_updates_in_place_and_moves_only_when_state_changes(repo):
     first = repo.save(WordEntry("record", [Sense("adj.", "原内容")], important=True))
     second = repo.save(complete("second"))
     incoming = complete("RECORD")
     result = repo.import_entries([incoming])
     repo.replace_imports(result.conflicts)
     adopted = by_text(repo, "record")
-    assert adopted.id != first.id
+    assert adopted.id == first.id
     assert adopted == replace(incoming, id=adopted.id, sort_order=2)
-    with pytest.raises(ValueError):
-        repo.get(first.id)
+    assert repo.get(first.id) == adopted
     assert [item.id for item in repo.list_entries()] == [second.id, adopted.id]
     assert repo.get(second.id) == second
     reverse = repo.import_entries([complete("record", learned=False, important=True)])
     repo.replace_imports(reverse.conflicts)
     latest = by_text(repo, "record")
-    assert latest.id != adopted.id and not latest.learned and latest.important
+    assert latest.id == adopted.id and not latest.learned and latest.important
 
 
 def test_all_replacements_roll_back_together(repo):
@@ -232,8 +231,8 @@ def test_conflict_dialog_shows_complete_plain_text_and_immediate_choices(repo, q
     left, right = dialog.cards[0]
     assert left.star.accessibleName() == "非重点" and right.star.accessibleName() == "重点"
     assert left.learned.isVisible() and right.learned.isVisible()
-    assert right.learned.toolTip() == '待记'
-    assert left.learned.toolTip() == "已记住"
+    assert '待记，点击标记为已记下' in right.learned.toolTip() and '鼠标右键' in right.learned.toolTip()
+    assert '已记住，点击改为待记' in left.learned.toolTip() and '鼠标右键' in left.learned.toolTip()
     assert "    record" in left.description.text() and "\n第二行" in left.description.text()
     assert left.description.text().startswith("n. 记录")
     assert "    else 关联释义" in left.description.text()

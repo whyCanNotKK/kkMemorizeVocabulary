@@ -356,7 +356,10 @@ def test_empty_incomplete_task_does_not_hide_timer(window, repo, monkeypatch, st
     else:
         assert page.timer.history is None
     assert not page.tasks and not page.timer_button.isEnabled()
-    assert not page.completion_notice.isVisible()
+    assert page.completion_notice.isVisible()
+    assert page.completion_notice.title.text() == '当前暂无待背单词'
+    assert page.completion_notice.instruction.text() == '点击'
+    assert page.completion_notice.suffix.text() == '任务'
     assert all(control.isVisible() for control in (page.elapsed_icon, page.elapsed_label, page.timer_button))
 
 

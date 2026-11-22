@@ -236,15 +236,15 @@ def test_import_new_first_then_click_order_and_repeated_names(repo, qtbot):
     dialog.show()
     dialog.choose(dialog.conflicts[1], True)
     current = dialog.conflicts[0].current
-    assert current.id != old.id and current.text == "Old" and current.sort_order == 3
+    assert current.id == old.id and current.text == "Old" and current.sort_order == old.sort_order
     assert dialog.cards[0][0].entry == current
     dialog.choose_all(True)
-    latest = repo.list_entries()[-1]
-    assert latest.text == "OLD" and latest.sort_order == 4 and latest.id != current.id
+    latest = repo.get(old.id)
+    assert latest.text == "OLD" and latest.sort_order == old.sort_order and latest.id == current.id
     assert dialog.replaced_ids == {latest.id} and dialog.replaced_names == {"old"}
 
 
-def test_import_recreate_failure_restores_deleted_aggregate_and_counters(repo):
+def test_import_update_failure_restores_aggregate_and_counters(repo):
     a, b = repo.save(word("a")), repo.save(word("b"))
     result = repo.import_entries([word("A", learned=True), word("B", learned=True)])
     result.conflicts[-1].incoming.senses[0].translation = "FAIL"

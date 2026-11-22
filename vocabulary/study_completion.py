@@ -1,4 +1,4 @@
-"""Centered completion notice with two refresh controls sharing one request."""
+"""Centered empty-list notice with two refresh controls sharing one request."""
 from PySide6.QtCore import QEvent, Qt, Signal
 from PySide6.QtWidgets import QHBoxLayout, QLabel, QPushButton, QToolButton, QVBoxLayout, QWidget
 
@@ -57,14 +57,22 @@ class StudyCompletionNotice(QWidget):
         parent.installEventFilter(self)
         self.hide()
 
+    def set_empty(self):
+        self._set_content('当前暂无待背单词', '点击', '任务')
+
     def set_history(self, history):
         total, efficiency = history.timing
         total_text = _format_minutes(total)
         effective_text = _format_minutes(history.duration_seconds // 60)
         efficiency_text = f'{efficiency}%' if efficiency is not None else '—'
         title = f'当前时段任务完成，总时长 {total_text}，有效用时 {effective_text}，效率 {efficiency_text}'
-        if self.title.text() != title:
+        self._set_content(title, '在新时段点击', '，开启新任务')
+
+    def _set_content(self, title, instruction, suffix):
+        if (self.title.text(), self.instruction.text(), self.suffix.text()) != (title, instruction, suffix):
             self.title.setText(title)
+            self.instruction.setText(instruction)
+            self.suffix.setText(suffix)
             if self.isVisible():
                 self.reposition()
 

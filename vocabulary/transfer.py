@@ -6,6 +6,7 @@ from pathlib import Path
 import tempfile
 
 from .domain import POS_OPTIONS, RelatedWord, Sense, ValidationError, WordEntry, normalize_pos
+from .import_merge import AutoMergeStats
 
 
 FORMAT = "kkMemorizeVocabulary"
@@ -16,12 +17,96 @@ VERSION = 3
 class ImportConflict:
     current: WordEntry
     incoming: WordEntry
+    source_index: int | None = None
 
 
 @dataclass
 class ImportResult:
     inserted: int = 0
     conflicts: list[ImportConflict] = field(default_factory=list)
+    auto_merge_stats: AutoMergeStats | None = None
+
+
+def _import_flag_locations(content):
+    """Index booleans once using JSON decoding, including escaped keys and nested values."""
+    decoder = json.JSONDecoder()
+
+    def skip_space(position):
+        while content[position] in ' \t\r\n':
+            position += 1
+        return position
+
+    def members(position):
+        position = skip_space(position + 1)  # Validated object opening brace.
+        while content[position] != '}':
+            key, position = decoder.raw_decode(content, position)
+            position = skip_space(position)
+            start = skip_space(position + 1)  # Colon.
+            _, end = decoder.raw_decode(content, start)
+            yield key, start, end
+            position = skip_space(end)
+            if content[position] == ',':
+                position = skip_space(position + 1)
+
+    words_start = None
+    for key, start, _ in members(skip_space(0)):
+        if key == 'words':
+            words_start = start
+    # Like json.loads, only the final occurrence counts if a word file repeats a key.
+    if words_start is None:
+        raise ValidationError('导入文件缺少words。')
+    locations = {}
+    position, index = skip_space(words_start + 1), 0
+    while content[position] != ']':
+        for flag, begin, end in members(position):
+            if flag in {'important', 'learned'}:
+                locations[index, flag] = begin, end
+        _, position = decoder.raw_decode(content, position)
+        position = skip_space(position)
+        if content[position] == ',':
+            position = skip_space(position + 1)
+        index += 1
+    return locations
+
+
+class ImportSource:
+    """Keep a validated import snapshot and update only the selected record's flag."""
+    def __init__(self, path, content):
+        self.path = Path(path)
+        self.content = content
+        self._template = content
+        self._flag_locations = _import_flag_locations(content)
+        self._replacements = {}
+
+    @classmethod
+    def read(cls, path, parser):
+        content = Path(path).read_text(encoding="utf-8-sig")
+        parsed = parser(content)
+        return cls(path, content), parsed
+
+    def set_flag(self, source_index, flag, value):
+        if flag not in {"important", "learned"} or type(value) is not bool:
+            raise ValueError("不支持的状态修改。")
+        if self.path.read_text(encoding="utf-8-sig") != self.content:
+            raise ValueError("导入JSON文件已被外部修改，请重新导入后再修改状态。")
+        location = self._flag_locations.get((source_index, flag))
+        if type(source_index) is not int or location is None:
+            raise ValueError("找不到导入文件中的对应词条，请重新导入。")
+        replacements = self._replacements.copy()
+        literal = 'true' if value else 'false'
+        if literal == self._template[location[0]:location[1]]:
+            replacements.pop(location, None)
+        else:
+            replacements[location] = literal
+        parts, cursor = [], 0
+        for (start, end), token in sorted(replacements.items()):
+            parts.extend((self._template[cursor:start], token))
+            cursor = end
+        parts.append(self._template[cursor:])
+        content = ''.join(parts)
+        write_text_atomically(self.path, content)
+        self.content = content
+        self._replacements = replacements
 
 
 def serialize_entries(entries: list[WordEntry]) -> str:

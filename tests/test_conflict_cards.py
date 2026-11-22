@@ -26,7 +26,7 @@ def dialog_with_words(repo, qtbot, count=20):
     return dialog, originals, incoming
 
 
-@pytest.mark.parametrize("area", ["background", "word", "description", "star", "learned", "pos_badge"])
+@pytest.mark.parametrize("area", ["background", "word", "description", "pos_badge"])
 def test_whole_card_including_child_labels_commits_and_removes_pair(repo, qtbot, area):
     dialog, originals, incoming = dialog_with_words(repo, qtbot, 2)
     card = dialog.cards[0][1]
@@ -38,7 +38,7 @@ def test_whole_card_including_child_labels_commits_and_removes_pair(repo, qtbot,
     else:
         qtbot.mouseClick(getattr(card, area), Qt.MouseButton.LeftButton)
     adopted = by_text(repo, incoming[0].text)
-    assert adopted.id != originals[0].id
+    assert adopted.id == originals[0].id
     assert adopted == replace(incoming[0], id=adopted.id, sort_order=1)
     assert len(dialog.conflicts) == 1 and len(dialog.cards) == 1
     assert dialog.cards[0][0].entry.id == originals[1].id
@@ -58,12 +58,12 @@ def test_comparison_labels_alignment_and_live_counts(repo, qtbot, themed_app, tm
     dialog.show()
     qtbot.wait(20)
     assert dialog.windowTitle() == '导入重复词对比选取'
-    assert dialog.summary.accessibleName() == '导入新词：1 个，重复单词：2 个，点击卡片立即采用'
+    assert dialog.summary.accessibleName() == '导入新词：1 个，重复单词：2 个，鼠标左键 卡片立即采用，鼠标右键 相应位置修改或同步单词信息'
     for count in (1, 2):
         assert f'<span style="color:{ACCENT}">{count}</span>' in dialog.summary.text()
     assert 'font-size' not in dialog.summary.text()
     assert dialog.summary.alignment() == Qt.AlignmentFlag.AlignCenter
-    assert {button.text() for button in dialog.findChildren(QPushButton)} == {'全部选用'}
+    assert {button.text() for button in dialog.findChildren(QPushButton)} == {'全部选用', '自动合并'}
     assert [label.text() for label in dialog.column_titles] == ['本地单词', '导入单词']
     for index, (title, button) in enumerate(zip(dialog.column_titles,
                                               (dialog.all_left_button, dialog.all_right_button))):
@@ -76,7 +76,7 @@ def test_comparison_labels_alignment_and_live_counts(repo, qtbot, themed_app, tm
         assert abs(center - expected) <= 10
     dialog.grab().save(str(tmp_path / 'comparison-header.png'))
     qtbot.mouseClick(dialog.cards[0][0], Qt.MouseButton.LeftButton)
-    assert dialog.summary.accessibleName() == '导入新词：1 个，重复单词：1 个，点击卡片立即采用'
+    assert dialog.summary.accessibleName() == '导入新词：1 个，重复单词：1 个，鼠标左键 卡片立即采用，鼠标右键 相应位置修改或同步单词信息'
     dialog.close()
     assert not dialog.isVisible() and repo.list_entries()[0].senses[0].translation == '旧'
 
@@ -90,7 +90,7 @@ def test_bulk_choice_immediately_commits_remaining_and_finishes(repo, qtbot, inc
         actual = by_text(repo, original.text)
         assert actual == (replace(candidate, id=actual.id, sort_order=actual.sort_order) if incoming else original)
         if incoming:
-            assert actual.id != original.id
+            assert actual.id == original.id
 
 
 def test_each_comparison_pair_has_equal_height_and_top_aligned_content(repo, qtbot, themed_app, tmp_path):
@@ -174,20 +174,21 @@ def test_same_word_remaining_left_cards_update_to_current_system_entry(repo, qtb
     dialog.show()
     qtbot.mouseClick(dialog.cards[0][1], Qt.MouseButton.LeftButton)
     assert dialog.cards[0][0].entry == by_text(repo, "same")
-    assert dialog.cards[0][0].entry.id != original.id
+    assert dialog.cards[0][0].entry.id == original.id
     assert "第一次覆盖" in dialog.cards[0][0].description.text()
     qtbot.mouseClick(dialog.cards[0][0], Qt.MouseButton.LeftButton)
     assert by_text(repo, "same").senses[0].translation == "第一次覆盖"
 
 
 @pytest.mark.parametrize("key", [Qt.Key.Key_Return, Qt.Key.Key_Space])
-def test_keyboard_can_choose_card(repo, qtbot, key):
+def test_keyboard_cannot_choose_card(repo, qtbot, key):
     dialog, originals, imported = dialog_with_words(repo, qtbot, 1)
     right = dialog.cards[0][1]
     right.setFocus()
     qtbot.keyClick(right, key)
-    assert dialog.result() == QDialog.DialogCode.Accepted
-    assert by_text(repo, imported[0].text).learned
+    assert dialog.isVisible() and len(dialog.conflicts) == 1
+    assert by_text(repo, imported[0].text) == originals[0]
+    dialog.reject()
 
 
 def test_phonetics_use_separate_aligned_lines_and_cards_remain_clickable(repo, qtbot, tmp_path, themed_app):
@@ -228,7 +229,7 @@ def test_phonetics_use_separate_aligned_lines_and_cards_remain_clickable(repo, q
     child = next(label for label in dialog.cards[0][1].description.findChildren(QLabel)
                  if label.text().startswith('recorder'))
     qtbot.mouseClick(child, Qt.MouseButton.LeftButton)
-    assert by_text(repo, 'record').phonetic == '/new/'
+    assert by_text(repo, 'record').phonetic == 'new'
     assert not dialog.conflicts
 
 
@@ -245,12 +246,13 @@ def test_floating_status_icons_do_not_change_content_geometry(qtbot, themed_app)
     assert card.status_badges.y() == 0
     assert card.status_badges.geometry().right() < card.width()
     assert card.status_badges.geometry().bottom() < card.description.y()
-    assert card.learned.pixmap().toImage().pixelColor(6, 6).alpha() == 0
+    assert card.learned.icon().pixmap(12, 12).toImage().pixelColor(6, 6).alpha() == 0
     card.set_entry(replace(entry, important=False, learned=True))
     qtbot.wait(20)
     assert card.description.geometry() == before and card.word.width() == word_width
-    assert card.learned.pixmap().toImage().pixelColor(6, 6).green() > 150
-    assert card.star.toolTip() == '非重点' and card.learned.toolTip() == '已记住'
+    assert card.learned.icon().pixmap(12, 12).toImage().pixelColor(6, 6).green() > 150
+    assert '设为重点' in card.star.toolTip() and '已记住，点击改为待记' in card.learned.toolTip()
+    assert '鼠标右键' in card.star.toolTip() and '鼠标右键' in card.learned.toolTip()
     card.resize(600, 100)
     qtbot.wait(10)
     assert card.status_badges.x() == card.width() - card.status_badges.width() - 14
@@ -286,7 +288,8 @@ def test_all_parts_of_speech_render_translations_at_the_same_start(qtbot):
     long_translation = next(label for label in main if label.text().startswith("主译文-长内容"))
     assert long_translation.height() == long_translation.fontMetrics().height() + 4
     assert long_translation.display_text.endswith('...')
-    assert long_translation.toolTip() == long_translation.text()
+    assert long_translation.text() in long_translation.toolTip()
+    assert '鼠标右键' in long_translation.toolTip() and '同步到本地译文' in long_translation.toolTip()
 
 
 @pytest.mark.parametrize('text', ['long-word-' * 8, '/long-phonetic-' * 8 + '/',

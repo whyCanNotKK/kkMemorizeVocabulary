@@ -66,6 +66,7 @@ QScrollBar::handle:horizontal { background: #485362; border-radius: 4px; min-wid
 QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal { width: 0; }
 QScrollBar::add-page:horizontal, QScrollBar::sub-page:horizontal { background: transparent; }
 QToolTip { background: #303a47; color: #e8edf4; border: 1px solid #566779; padding: 7px; }
+QLabel#autoMergeToolTip { background: #303a47; color: #e8edf4; border: 1px solid #566779; }
 QFrame#wordBlock { border: none; background: transparent; }
 QFrame#wordSeparator { border: none; background: #343e4a; }
 QMessageBox { background: #1e242d; }
@@ -308,6 +309,11 @@ def mouse_action_hint(label: str, button: str, shortcut: str = "", *, modifier: 
     prefix = f'{escape(modifier)} + ' if modifier else ''
     hint = f'{escape(label)} · {prefix}{_tooltip_icon("mouse_" + button, "鼠标左键" if button == "left" else "鼠标右键")}'
     return hint + (f' · {escape(shortcut)}' if shortcut else '')
+
+
+def mouse_action_prefix(label: str, button: str) -> str:
+    """Inline action with the existing mouse icon before escaped plain text."""
+    return f'{_tooltip_icon("mouse_" + button, "鼠标左键" if button == "left" else "鼠标右键")} {escape(label)}'
 
 
 def related_drag_tooltip() -> str:

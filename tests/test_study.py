@@ -152,8 +152,8 @@ def test_edit_replace_import_and_delete_preserve_or_clear_progress(repo):
     assert progress(repo, entry.id) == state
     conflicts = repo.import_entries([WordEntry(entry.text, [Sense('v.', '新内容')])]).conflicts
     adopted = repo.replace_imports(conflicts)[entry.text.casefold()]
-    assert adopted.id != entry.id
-    assert progress(repo, adopted.id) == dict(state, word_id=adopted.id)
+    assert adopted.id == entry.id
+    assert progress(repo, adopted.id) == state
     repo.delete(adopted.id)
     assert repo.connection.execute('SELECT count(*) FROM memorize_vocabulary_17day').fetchone()[0] == 0
 
@@ -183,7 +183,7 @@ def test_import_failure_restores_progress_and_original(repo):
     repo.prepare_study(AM)
     state = progress(repo, entry.id)
     conflicts = repo.import_entries([WordEntry(entry.text, [Sense('v.', '新内容')])]).conflicts
-    repo.connection.execute("""CREATE TRIGGER fail_transfer BEFORE INSERT ON memorize_vocabulary_17day
+    repo.connection.execute("""CREATE TRIGGER fail_transfer BEFORE INSERT ON senses
         BEGIN SELECT RAISE(ABORT,'transfer failed'); END""")
     with pytest.raises(sqlite3.IntegrityError):
         repo.replace_imports(conflicts)

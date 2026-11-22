@@ -63,7 +63,9 @@ def test_phonetic_only_conflict_is_visible_and_replacement_rolls_back(repo, rela
     (incoming.related[0] if related else incoming).phonetic = "/changed/"
     result = repo.import_entries([incoming])
     assert len(result.conflicts) == 1
-    assert "/changed/" in entry_description(result.conflicts[0].incoming)
+    imported = result.conflicts[0].incoming
+    assert (imported.related[0] if related else imported).phonetic == "changed"
+    assert "changed" in entry_description(imported)
     repo.connection.execute("""CREATE TRIGGER fail_phonetic BEFORE INSERT ON senses
         BEGIN SELECT RAISE(ABORT,'failed'); END""")
     with pytest.raises(sqlite3.IntegrityError):
