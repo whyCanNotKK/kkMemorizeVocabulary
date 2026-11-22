@@ -457,12 +457,14 @@ def test_search_temporary_reveal_restores_mixed_states_across_pages(window, repo
     assert visible(window) == [hidden.text, expanded.text]
     assert all(not row.hidden for row in window.model.rows)
     assert window.model.rowCount() == 4
-    # Ctrl-click cannot conceal search results or alter the state restored afterwards.
+    # An explicit hide overrides the temporary reveal and survives clearing the query.
     row = next(i for i, item in enumerate(window.model.rows) if item.entry.id == expanded.id)
     qtbot.mouseClick(window.table.viewport(), Qt.MouseButton.LeftButton,
                     Qt.KeyboardModifier.ControlModifier,
                     pos=window.table.visualRect(window.model.index(row, 3)).center())
-    assert window.revealed == original and all(not row.hidden for row in window.model.rows)
+    original.discard(expanded.id)
+    assert window.revealed == original
+    assert [item.entry.id for item in window.model.rows if item.hidden] == [expanded.id]
     window.set_filter("learned")
     assert visible(window) == [learned.text] and not window.model.rows[0].hidden
     window.search_box.setText("no-match")
@@ -472,8 +474,7 @@ def test_search_temporary_reveal_restores_mixed_states_across_pages(window, repo
     assert all(not row.hidden for row in window.model.rows)
     window.search_box.setText(clear_text)
     assert window.revealed == original
-    assert [row.entry.id for row in window.model.rows if row.hidden] == [hidden.id, learned.id]
-    assert all(not row.hidden for row in window.model.rows if row.entry.id == expanded.id)
+    assert [row.entry.id for row in window.model.rows if row.hidden] == [hidden.id, expanded.id, learned.id]
 
 
 def test_search_eye_changes_results_and_state_restored_after_clearing(window, repo):

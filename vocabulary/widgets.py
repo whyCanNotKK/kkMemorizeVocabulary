@@ -619,7 +619,12 @@ class WordBlock(QFrame):
 
     def focused_row(self):
         focus = QApplication.focusWidget()
-        return next((row for row in self.rows if focus is row or focus and row.isAncestorOf(focus)), None)
+        # Combo popup views are separate windows; follow their owning input too.
+        while focus is not None:
+            if focus in self.rows:
+                return focus
+            focus = focus.parentWidget()
+        return None
 
     def move_sense(self, source, target):
         self.rows.insert(target, self.rows.pop(source))

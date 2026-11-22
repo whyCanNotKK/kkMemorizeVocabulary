@@ -24,7 +24,7 @@ def focus_target(window, qtbot, name):
 
 @pytest.mark.parametrize('target', ['search', 'list', 'outer_blank', 'form_blank', 'save', 'main'])
 @pytest.mark.parametrize('trigger', ['button', 'shortcut'])
-def test_add_is_always_visible_and_appends_without_a_word_target(window, qtbot, target, trigger):
+def test_add_button_is_always_available_but_shortcut_requires_form_control(window, qtbot, target, trigger):
     populate(window, qtbot)
     before = list(window.blocks)
     focus_target(window, qtbot, target)
@@ -38,6 +38,9 @@ def test_add_is_always_visible_and_appends_without_a_word_target(window, qtbot, 
     else:
         qtbot.keyClick(QApplication.focusWidget() or window, Qt.Key.Key_N, Qt.KeyboardModifier.ControlModifier)
     qtbot.wait(10)
+    if trigger == 'shortcut' and target in ('search', 'list', 'outer_blank', 'form_blank'):
+        assert window.blocks == before
+        return
     index = 1 if target == 'main' else len(before)
     created = window.blocks[index]
     assert created not in before and created.word.hasFocus()
@@ -62,6 +65,9 @@ def test_delete_last_uses_the_existing_delete_function(window, qtbot, monkeypatc
         qtbot.mouseClick(window.remove_related_button, Qt.MouseButton.LeftButton)
     else:
         qtbot.keyClick(QApplication.focusWidget(), Qt.Key.Key_M, Qt.KeyboardModifier.ControlModifier)
+    if trigger == 'shortcut' and target == 'form_blank':
+        assert removed == [] and window.blocks == before
+        return
     assert removed == [before[-1]] and window.blocks == before[:-1]
     assert window.blocks[-1].word.hasFocus()
 

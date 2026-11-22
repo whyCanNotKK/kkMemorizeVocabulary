@@ -247,12 +247,12 @@ def test_dragging_between_panels_does_not_resize_form(window, qtbot):
     assert window.editor_panel.height() == height
 
 
-def test_form_actions_expand_collapsed_panel_and_duplicate_toast_locates_word(window, repo, qtbot):
+def test_form_shortcut_keeps_panel_collapsed_but_edit_action_expands_it(window, repo, qtbot):
     saved = seed(repo)
     window.set_form_collapsed(True)
     qtbot.keyClick(window.table, Qt.Key.Key_N, Qt.KeyboardModifier.ControlModifier)
     qtbot.wait(30)
-    assert not window.form_collapsed and len(window.blocks) == 2
+    assert window.form_collapsed and len(window.blocks) == 1
     window.reset_form()
     window.set_form_collapsed(True)
     window.list_action(saved.id, "edit")

@@ -250,6 +250,8 @@ class MainWindow(QMainWindow):
             fixed[action] = (chord,)
             callbacks[action] = callback
         scoped = {"focus_search": self.can_focus_search}
+        for action in ("add_related", "remove_related", "add_sense", "remove_sense", "important"):
+            scoped[action] = self.can_use_form_shortcuts
         for number in range(1, 10):
             action = f"copy_word_{number}"
             fixed[action] = (f"Ctrl+{number}", f"Ctrl+Num+{number}")
@@ -623,9 +625,10 @@ class MainWindow(QMainWindow):
 
     def reveal(self, entry_id, expanded):
         if self.search_box.text().strip():
-            if not expanded:
-                return
-            self._search_hidden[self.filter_name].discard(entry_id)
+            if expanded:
+                self._search_hidden[self.filter_name].discard(entry_id)
+            else:
+                self._search_hidden[self.filter_name].add(entry_id)
         if expanded:
             self.revealed.add(entry_id)
         else:
@@ -715,7 +718,8 @@ class MainWindow(QMainWindow):
         self.update_tab_order()
 
     def update_related_actions(self):
-        form_focused = self.form_focus.active and QApplication.focusWidget() is not self.editor_panel
+        form_focused = (self.form_focus.active
+                        and self.can_use_form_shortcuts(QApplication.focusWidget()))
         self.add_related_button.setVisible(True)
         target = self.related_action_block()
         can_remove = len(self.blocks) > 1
@@ -852,6 +856,19 @@ class MainWindow(QMainWindow):
         for block in self.blocks:
             block.set_shortcuts(keys)
         self.star_changed()
+
+    def can_use_form_shortcuts(self, focus):
+        """Form mutation keys require a live control target in the expanded form."""
+        popup = QApplication.activePopupWidget()
+        if popup is not None:
+            owner = popup.parentWidget()
+            if not isinstance(owner, PosCombo):
+                return False
+            if focus is popup or (focus is not None and popup.isAncestorOf(focus)):
+                focus = owner
+        return (self.filter_name != 'study17' and not self.form_collapsed
+                and self.editor_panel.isVisible() and focus is not None and focus is not self.editor_panel
+                and self.editor_panel.isAncestorOf(focus))
 
     def _can_change_form(self):
         if self.filter_name == 'study17':

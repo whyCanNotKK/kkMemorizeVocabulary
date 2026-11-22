@@ -91,6 +91,35 @@ def test_native_chords_follow_saved_remapping_and_leave_editing_keys_alone(windo
     assert len(window.blocks[0].rows) == 2
 
 
+@pytest.mark.parametrize("key", ["N", "M", "J", "K", "I"])
+def test_native_form_shortcuts_outside_form_are_not_consumed(window, qtbot, native, key):
+    bridge, _ = native
+    window.search_box.setFocus()
+    before = window.form_value()
+    bridge.refresh()
+    bridge.dispatch_key(0xA2, True)
+    assert not bridge.dispatch_key(ord(key), True)
+    bridge.dispatch_key(ord(key), False)
+    bridge.dispatch_key(0xA2, False)
+    qtbot.wait(10)
+    assert window.form_value() == before and window.search_box.hasFocus()
+
+
+@pytest.mark.parametrize("key", ["N", "J", "I"])
+def test_queued_native_form_shortcut_is_discarded_after_focus_leaves_form(window, qtbot, native, key):
+    bridge, _ = native
+    window.blocks[0].word.setFocus()
+    bridge.refresh()
+    before = window.form_value()
+    bridge.dispatch_key(0xA2, True)
+    assert bridge.dispatch_key(ord(key), True)
+    window.search_box.setFocus()
+    bridge.dispatch_key(ord(key), False)
+    bridge.dispatch_key(0xA2, False)
+    qtbot.wait(10)
+    assert window.form_value() == before and window.search_box.hasFocus()
+
+
 def test_queued_native_chord_is_discarded_after_configuration_changes(window, qtbot, native):
     bridge, api = native
     bridge.dispatch_key(0xA2, True)

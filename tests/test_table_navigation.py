@@ -244,7 +244,7 @@ def test_review_keys_belong_to_inline_editor_while_editing(window, repo, qtbot, 
     table.delegate.cancel()
 
 
-def test_search_keeps_answers_revealed_but_allows_main_word_navigation(window, repo, qtbot):
+def test_search_toggles_answers_and_allows_main_word_navigation(window, repo, qtbot):
     entries = [repo.save(WordEntry(f"word-{i}", [Sense("n.", "释义")],
                                    [RelatedWord("child", [Sense("n.", "关联")])]))
                for i in range(2)]
@@ -254,6 +254,9 @@ def test_search_keeps_answers_revealed_but_allows_main_word_navigation(window, r
     table.setFocus()
     qtbot.keyClick(table, Qt.Key.Key_Space)
     assert window.revealed == set()
+    assert window.model.rows[0].hidden
+    qtbot.keyClick(table, Qt.Key.Key_Space)
+    assert window.revealed == {entries[0].id}
     assert all(not row.hidden for row in window.model.rows)
     qtbot.keyClick(table, Qt.Key.Key_Down)
     assert_selected(table, entries[1])

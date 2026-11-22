@@ -122,6 +122,77 @@ def test_search_eye_uses_actual_results_and_only_changes_matching_words(window, 
     assert {row.entry.id for row in window.model.rows if row.hidden} == {matching.id}
 
 
+@pytest.mark.parametrize("gesture", ["space", "ctrl-click"])
+@pytest.mark.parametrize("filter_name", ["pending", "all", "learned"])
+def test_search_individual_toggle_hides_and_reveals_group(window, repo, qtbot, gesture, filter_name):
+    entry = repo.save(WordEntry("matching", [Sense("n.", "definition")],
+                               [RelatedWord("child", [Sense("v.", "related")])],
+                               learned=filter_name == "learned"))
+    window.set_filter(filter_name)
+    window.search_box.setText("matching")
+    table = window.table
+    table.select_entry(entry.id)
+    table.setFocus()
+    assert table.hasFocus()
+    assert all(not row.hidden for row in window.model.rows)
+
+    if gesture == "space":
+        qtbot.keyClick(table, Qt.Key.Key_Space)
+    else:
+        qtbot.mouseClick(table.viewport(), Qt.MouseButton.LeftButton,
+                        Qt.KeyboardModifier.ControlModifier,
+                        pos=table.visualRect(window.model.index(1, 3)).center())
+
+    assert len(window.model.rows) == 1 and window.model.rows[0].hidden
+    assert table.hasFocus()
+    if gesture == "space":
+        qtbot.keyClick(table, Qt.Key.Key_Space)
+    else:
+        mask = table.delegate.mask_rect(table.visualRect(window.model.index(0, 2)))
+        qtbot.mouseClick(table.viewport(), Qt.MouseButton.LeftButton,
+                        pos=mask.center().toPoint())
+    assert len(window.model.rows) == 2 and all(not row.hidden for row in window.model.rows)
+    assert table.hasFocus()
+
+
+@pytest.mark.parametrize("button", [Qt.MouseButton.LeftButton, Qt.MouseButton.RightButton])
+def test_search_mask_reveals_after_global_hide(window, repo, qtbot, button):
+    entry = repo.save(WordEntry("matching", [Sense("n.", "definition")]))
+    window.search_box.setText("matching")
+    window.set_global_hidden(True)
+    assert window.model.rows[0].hidden
+    table = window.table
+    mask = table.delegate.mask_rect(table.visualRect(window.model.index(0, 2)))
+
+    qtbot.mouseClick(table.viewport(), button, pos=mask.center().toPoint())
+
+    assert not window.model.rows[0].hidden
+    assert table.hasFocus() and table.currentIndex().data(Qt.ItemDataRole.UserRole).entry.id == entry.id
+    assert table.delegate.editor is None
+
+
+def test_search_space_respects_focus_and_individual_state_survives_refresh(window, repo, qtbot):
+    entries = [repo.save(WordEntry(name, [Sense("n.", "definition")]))
+               for name in ("match-one", "match-two", "other")]
+    window.search_box.setText("match")
+    window.search_box.setFocus()
+    qtbot.keyClick(window.search_box, Qt.Key.Key_Space)
+    assert window.search_box.text() == "match "
+    assert all(not row.hidden for row in window.model.rows)
+    qtbot.keyClick(window.search_box, Qt.Key.Key_Return)
+    assert window.table.hasFocus()
+    qtbot.keyClick(window.table, Qt.Key.Key_Space)
+
+    window.refresh()
+    assert {row.entry.id for row in window.model.rows if row.hidden} == {entries[0].id}
+    window.search_box.setText("match-")
+    assert all(not row.hidden for row in window.model.rows)
+    qtbot.keyClick(window.table, Qt.Key.Key_Space)
+    qtbot.keyClick(window.table, Qt.Key.Key_Space)
+    window.search_box.clear()
+    assert {row.entry.id for row in window.model.rows if not row.hidden} == {entries[0].id}
+
+
 def test_eye_includes_offscreen_words_and_preserves_selection_and_scroll(window, repo, qtbot):
     entries = [repo.save(WordEntry(f"word-{i}", [Sense("n.", "释义")])) for i in range(40)]
     window.refresh()

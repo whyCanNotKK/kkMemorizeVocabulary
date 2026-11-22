@@ -1181,10 +1181,8 @@ class WordTable(QTableView):
         if scroll:
             self.scrollTo(index, QAbstractItemView.ScrollHint.EnsureVisible)
 
-    def set_entry_revealed(self, entry_id, expanded, *, allow_search=False):
+    def set_entry_revealed(self, entry_id, expanded):
         """The page owns reveal state; restore selection after its projection resets."""
-        if self.search_active and not allow_search:
-            return
         self.revealRequested.emit(entry_id, expanded)
         self.select_entry(entry_id)
 
@@ -1739,7 +1737,7 @@ class WordTable(QTableView):
             return
         last = entry_id == pending[-1]
         if source.hidden:
-            self.set_entry_revealed(entry_id, True, allow_search=True)
+            self.set_entry_revealed(entry_id, True)
             source = next((row for row in self.model().rows if row.first and row.entry.id == entry_id), None)
             if source is None or source.hidden:
                 return
