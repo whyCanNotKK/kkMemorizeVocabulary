@@ -473,6 +473,7 @@ class MainWindow(ListControllerMixin, QMainWindow):
         block = WordBlock(text, senses, related, phonetic=phonetic)
         block.copyRequested.connect(lambda: self.copy_form_word(block))
         block.pasteRejected.connect(self.toast_paste_error)
+        block.spellingMoveRequested.connect(lambda step: self.move_form_spelling(block, step))
         block.changed.connect(self.form_changed)
         block.structureChanged.connect(self.update_tab_order)
         block.heightChanged.connect(self.schedule_editor_resize)
@@ -482,6 +483,15 @@ class MainWindow(ListControllerMixin, QMainWindow):
         self.blocks.insert(position, block)
         self.update_related_actions()
         return block
+
+    def move_form_spelling(self, block, step):
+        if (block not in self.blocks or not block.word.hasFocus()
+                or not self.can_use_form_shortcuts(block.word) or self.form_drag.active
+                or QApplication.activeModalWidget() or QApplication.activePopupWidget()):
+            return
+        position = self.blocks.index(block) + step
+        if 0 <= position < len(self.blocks):
+            self.blocks[position].word.setFocus(Qt.FocusReason.ShortcutFocusReason)
 
     def reset_form(self, entry=None):
         self.form_drag.cancel()

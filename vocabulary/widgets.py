@@ -15,6 +15,7 @@ from .domain import POS_OPTIONS, SHORTCUT_LABELS, RelatedWord, Sense, normalize_
 from .theme import MUTED, copy_word_tooltip, draw_related_arrow, draw_symbol, icon, related_drag_tooltip
 from .pos_picker import pos_shortcut
 from .word_paste import handle_word_paste, set_word_field
+from .input_placeholder import EnterPlaceholder
 
 INPUT_HEIGHT = 36
 WORD_WIDTH = 144
@@ -362,7 +363,7 @@ class SenseRow(QWidget):
         self.pos.set_pos(sense.pos)
         self.translation = ExpandingTextEdit()
         self.translation.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        self.translation.setPlaceholderText("翻译（Enter 换行）")
+        self.translation.enter_placeholder = EnterPlaceholder(self.translation, "翻译", "换行")
         self.translation.setPlainText(sense.translation)
         self.translation.setTabChangesFocus(True)
         self.translation.setFixedHeight(INPUT_HEIGHT)
@@ -450,6 +451,7 @@ class WordBlock(QFrame):
     cursorMoved = Signal()
     copyRequested = Signal()
     pasteRejected = Signal(str)
+    spellingMoveRequested = Signal(int)
 
     def __init__(self, text="", senses=None, related=False, parent=None, *, phonetic=""):
         super().__init__(parent)
@@ -472,7 +474,7 @@ class WordBlock(QFrame):
         inputs.setSpacing(INPUT_SPACING)
         self.word = QLineEdit()
         set_word_field(self.word, text)
-        self.word.setPlaceholderText("关联词" if related else "单词")
+        self.word.enter_placeholder = EnterPlaceholder(self.word, "关联词" if related else "单词", "换词")
         self.word.setFixedSize(WORD_WIDTH, INPUT_HEIGHT)
         self.word.setAccessibleName("关联词" if related else "主词")
         word_column = QWidget()
@@ -559,6 +561,13 @@ class WordBlock(QFrame):
         row.deleteLater()
 
     def eventFilter(self, field, event):
+        if (field is self.word and event.type() == QEvent.Type.KeyPress
+                and event.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter)):
+            modifiers = event.modifiers() & ~Qt.KeyboardModifier.KeypadModifier
+            if modifiers in (Qt.KeyboardModifier.NoModifier, Qt.KeyboardModifier.ShiftModifier):
+                if not event.isAutoRepeat():
+                    self.spellingMoveRequested.emit(-1 if modifiers == Qt.KeyboardModifier.ShiftModifier else 1)
+                return True
         if (self._paste_undo is not None and event.type() == QEvent.Type.KeyPress
                 and event.key() == Qt.Key.Key_Escape
                 and event.modifiers() == Qt.KeyboardModifier.NoModifier):
