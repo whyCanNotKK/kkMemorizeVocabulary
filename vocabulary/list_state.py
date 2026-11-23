@@ -129,7 +129,7 @@ class ListState:
             yield self.search
 
     def patch_entry(self, entry):
-        """Replace resident content only; membership/ranking invalidation is caller-owned."""
+        """Replace resident content only; membership/ranking invalidation belongs to list_sync."""
         patched = set()
         for cache in self._caches():
             for index, cached in enumerate(cache.entries):
@@ -142,36 +142,6 @@ class ListState:
         for cache in self._caches():
             cache.entries = [replace(entry, sort_order=updates[entry.id])
                              if entry.id in updates else entry for entry in cache.entries]
-
-    def remap_locations(self, entry_id, *, related_permutation=None,
-                        sense_owner=None, sense_permutation=None):
-        """Keep logical cells attached to their original items after a committed reorder.
-
-        Each permutation lists old indexes in new order. Content patches and
-        location changes are separate: equal spellings/definitions are never
-        used as identity, and inactive search positions need no loaded content.
-        """
-        related_indexes = ({old: new for new, old in enumerate(related_permutation)}
-                           if related_permutation is not None else {})
-        sense_indexes = ({old: new for new, old in enumerate(sense_permutation)}
-                         if sense_permutation is not None else {})
-
-        def remap(view_state):
-            part, selected, scroll = view_state
-            if part is None or part[0] != entry_id:
-                return view_state
-            word_id, owner, sense, column = part
-            original_owner = owner
-            if owner >= 0:
-                owner = related_indexes.get(owner, owner)
-            if original_owner == sense_owner:
-                sense = sense_indexes.get(sense, sense)
-            return (word_id, owner, sense, column), selected, scroll
-
-        for cache in self._caches():
-            cache.view_state = remap(cache.view_state)
-        for position in self.search_positions.values():
-            position.view_state = remap(position.view_state)
 
     def remove_entry(self, entry_id):
         """Drop resident copies after deletion; a page query supplies any replacement."""

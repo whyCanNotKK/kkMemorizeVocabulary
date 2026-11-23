@@ -12,6 +12,7 @@ from PySide6.QtWidgets import (
 from .domain import SHORTCUT_LABELS, DuplicateWord, RelatedWord, ValidationError, WordContentValidationError, WordEntry
 from .busy_overlay import BusyOverlay
 from .list_controller import ListControllerMixin
+from .list_sync import CommittedChange, LocationMap
 from .pagination import PaginationBar
 from .draft_reset_dialog import DraftResetDialog
 from .unsaved_input_dialog import UnsavedInputDialog
@@ -233,7 +234,7 @@ class MainWindow(ListControllerMixin, QMainWindow):
             "add_sense": self.add_sense,
             "remove_sense": self.remove_sense,
             "save": self.save_current,
-            "important": self.toggle_form_star,
+            "important": self.toggle_important,
             "edit_selected": self.edit_selected,
         }
         callbacks = {
@@ -241,7 +242,7 @@ class MainWindow(ListControllerMixin, QMainWindow):
         }
         callbacks["toggle_visibility"] = self.set_global_hidden
         callbacks["focus_search"] = self.focus_search
-        fixed = {}
+        fixed = {"important": ("F1",)}
         for number, key in enumerate(self.filter_buttons, 1):
             action = f"tab_{key}"
             fixed[action] = (f"Alt+{number}",)
@@ -256,8 +257,9 @@ class MainWindow(ListControllerMixin, QMainWindow):
             fixed[action] = (chord,)
             callbacks[action] = callback
         scoped = {"focus_search": self.can_focus_search}
-        for action in ("add_related", "remove_related", "add_sense", "remove_sense", "important"):
+        for action in ("add_related", "remove_related", "add_sense", "remove_sense"):
             scoped[action] = self.can_use_form_shortcuts
+        scoped['important'] = self.can_toggle_important
         for number in range(1, 10):
             action = f"copy_word_{number}"
             fixed[action] = (f"Ctrl+{number}", f"Ctrl+Num+{number}")
@@ -503,6 +505,9 @@ class MainWindow(ListControllerMixin, QMainWindow):
             self.add_block(child.text, child.senses, True, phonetic=child.phonetic)
         self.star_button.setChecked(entry.important)
         self.star_changed()
+        self._form_source = deepcopy(entry)
+        self._form_origins = {block: (owner, tuple(block.rows))
+                              for owner, block in enumerate(self.blocks, -1)}
         self._baseline = deepcopy(self.form_value())
         self.form_changed()
         self.refresh_shortcut_labels()
@@ -559,12 +564,23 @@ class MainWindow(ListControllerMixin, QMainWindow):
         self.star_button.setIcon(icon("star", GOLD if self.star_button.isChecked() else "#596371"))
         if hasattr(self, "shortcuts"):
             key = self.shortcuts.labels()["important"]
-            self.star_button.setToolTip(f"{'重点' if self.star_button.isChecked() else '非重点'} · {key} · 空格切换")
+            self.star_button.setToolTip(f"重点 · F1 · {key}")
         self.form_changed()
 
     def toggle_form_star(self):
         if self.filter_name != 'study17' and not self.table.delegate.editor:
             self.star_button.toggle()
+
+    def can_toggle_important(self, focus):
+        return (self.can_use_form_shortcuts(focus)
+                or (self.filter_name != 'study17' and focus is self.table
+                    and self.table.can_use_selected_action()))
+
+    def toggle_important(self):
+        if self.can_use_form_shortcuts(QApplication.focusWidget()):
+            self.toggle_form_star()
+        elif self.filter_name != 'study17':
+            self.table.request_selected_action('important')
 
     def run_form_action(self, action):
         if self.filter_name != 'study17' or action == self.save_current:
@@ -650,6 +666,7 @@ class MainWindow(ListControllerMixin, QMainWindow):
     def refresh_shortcut_labels(self):
         keys = self.shortcuts.labels()
         self.table.edit_word_shortcut = keys['edit_selected']
+        self.table.important_shortcut = keys['important']
         self.update_visibility_button()
         self.update_related_actions()
         self.save_button.setText(f"{'保存修改' if self.edit_id else '保存'}  {keys['save']}")
@@ -747,12 +764,27 @@ class MainWindow(ListControllerMixin, QMainWindow):
             focus = focus.parentWidget()
         return None
 
+    def form_location_map(self, before=None):
+        if before is not None and (before.related != self._form_source.related or
+                                   before.senses != self._form_source.senses):
+            return LocationMap(reset=True)
+        owners, senses = {}, {}
+        for block, (old_owner, rows) in self._form_origins.items():
+            new_owner = self.blocks.index(block) - 1 if block in self.blocks else None
+            owners[old_owner] = new_owner
+            if new_owner is not None:
+                senses[old_owner] = {old: block.rows.index(row) if row in block.rows else None
+                                     for old, row in enumerate(rows)}
+        return LocationMap(owners=owners, senses=senses)
+
     def _save_form(self):
         if not self.current_table().delegate.submit():
             return False
         is_new = self.edit_id is None
         try:
             draft = self.form_value()
+            before = self.repository.get(self.edit_id) if not is_new else None
+            locations = self.form_location_map(before)
             saved = self.repository.save(draft)
         except DuplicateWord as error:
             self.duplicate_id = error.entry_id
@@ -765,7 +797,7 @@ class MainWindow(ListControllerMixin, QMainWindow):
         self.duplicate_id = None
         self.toast.dismiss()
         self.reset_form()
-        self.form_saved(saved, is_new)
+        self.form_saved(saved, is_new, before=before, locations=locations)
         self.blocks[0].word.setFocus()
         return True
 
@@ -853,17 +885,32 @@ class MainWindow(ListControllerMixin, QMainWindow):
                 if not spelling.strip():
                     self.repository.remove_inline_content(row.entry, row.owner, None, self.study_page.context)
                     self.show_notice(f"已删除 {row.word.text}")
-                    self.queue_saved_entry(row.entry.id)
+                    locations = (LocationMap() if row.owner == -1 else LocationMap(
+                        owners={i: None if i == row.owner else i - (i > row.owner)
+                                for i in range(len(row.entry.related))}))
+                    self.queue_saved_entry(row.entry.id, before=row.entry, locations=locations)
                     return CELL_REMOVED
             if isinstance(value, RelatedWord):
                 self.repository.replace_word_content(row.entry, row.owner, value)
             elif column == 3 and not value.strip() and len(row.word.senses) > 1:
                 self.repository.remove_inline_content(row.entry, row.owner, row.sense, self.study_page.context)
                 self.show_notice("已删除释义")
-                self.queue_saved_entry(row.entry.id)
+                locations = LocationMap(senses={row.owner: {
+                    i: None if i == row.sense else i - (i > row.sense)
+                    for i in range(len(row.word.senses))}})
+                self.queue_saved_entry(row.entry.id, before=row.entry, locations=locations)
                 return CELL_REMOVED
             else:
                 entry = self.repository.get(row.entry.id)
+                snapshot_invalid = (
+                    self.repository.content_revision != self._known_content_revision or
+                    (row.entry.id not in self.study_page._entry_cache if self.filter_name == 'study17'
+                     else self._display_cache is not None and not self._display_cache.valid))
+                if snapshot_invalid and (
+                        row.owner == -1 and (entry.text, entry.phonetic, entry.senses) !=
+                        (row.entry.text, row.entry.phonetic, row.entry.senses)
+                        or row.owner != -1 and entry.related != row.entry.related):
+                    raise ValueError("单词内容已变化，当前输入已保留。")
                 target = entry if row.owner == -1 else entry.related[row.owner]
                 if column == 1:
                     target.text = spelling
@@ -874,7 +921,9 @@ class MainWindow(ListControllerMixin, QMainWindow):
                 elif column == 3:
                     target.senses[row.sense].translation = value
                 self.repository.save(entry)
-            self.queue_saved_entry(row.entry.id)
+            locations = (LocationMap(replaced=frozenset({row.owner}))
+                         if isinstance(value, RelatedWord) else LocationMap())
+            self.queue_saved_entry(row.entry.id, before=row.entry, locations=locations)
         except DuplicateWord as error:
             self.duplicate_id = error.entry_id
             self.show_notice(str(error), True, duplicate=True)
@@ -945,7 +994,10 @@ class MainWindow(ListControllerMixin, QMainWindow):
         self.history_panel.refresh()
 
     def clear_content(self, command):
+        revision = self.repository.content_revision
         self.repository.clear_content(command)
+        if self.repository.content_revision != revision:
+            self.apply_committed_change(CommittedChange(bulk=True))
         if command != 'clean vocabulary only':
             # Reset only after commit, so a failed deletion retains the active clock.
             self.study_page.timer.reset()
@@ -959,7 +1011,10 @@ class MainWindow(ListControllerMixin, QMainWindow):
         self.study_page.invalidate_contents()
         self.study_page.load(self.study_page.context or StudyContext.now())
         self.history_panel.refresh()
-        self.refresh()
+        if self.filter_name != 'study17' and self._display_cache is not None and not self._display_cache.valid:
+            cache = self._display_cache
+            self.request_list(cache.category, cache.keyword, cache.page_number or 1,
+                              self.current_anchor(), force=True)
 
     def export_words(self):
         if self.busy_overlay.active or self._list_loading:
@@ -1023,6 +1078,8 @@ class MainWindow(ListControllerMixin, QMainWindow):
             self.show_import_result(result.inserted, len(replaced_ids))
         except Exception as error:
             logging.exception("Could not import words")
+            if self._display_cache is not None and not self._display_cache.valid:
+                self.refresh_after_transfer()
             QMessageBox.critical(self, "导入失败", str(error))
         finally:
             self.shortcuts.set_suspended(False)
@@ -1033,9 +1090,11 @@ class MainWindow(ListControllerMixin, QMainWindow):
         QMessageBox.information(self, '导入完成', message)
 
     def refresh_after_transfer(self, overlay=None):
-        self.study_page.invalidate_contents()
-        self.list_state.invalidate()
-        self.refresh()
+        if self.repository.content_revision != self._known_content_revision:
+            self.apply_committed_change(CommittedChange(bulk=True))
+        if self.filter_name == 'study17':
+            self.study_page.load(self.study_page.context or StudyContext.now())
+        self.refresh(invalidate=False)
 
     def resolve_word_conflicts(self, result, *, source=None):
         if not result.conflicts:
@@ -1174,5 +1233,7 @@ class MainWindow(ListControllerMixin, QMainWindow):
         self._search_timer.stop()
         self.list_jobs.shutdown()
         self._closing = True
+        if self.repository.content_committed == self.external_content_committed:
+            self.repository.content_committed = None
         event.accept()
 

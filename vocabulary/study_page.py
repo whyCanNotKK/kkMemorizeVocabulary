@@ -258,6 +258,22 @@ class StudyPage(QWidget):
         self._spelling_settings_revision = getattr(self.repository, 'spelling_settings_revision', 0)
         self.table.set_hide_word_while_spelling(settings)
 
+    def apply_sync(self, plan):
+        change = plan.change
+        if plan.invalidate_study:
+            self.invalidate_contents()
+        if change.sort_orders:
+            self.patch_sort_orders(change.sort_orders)
+        if change.after is not None:
+            self.patch_entry(change.after)
+        elif change.before is not None:
+            key = change.before.id
+            self._entry_cache.pop(key, None)
+            self.tasks = [task for task in self.tasks if task.entry.id != key]
+            self.completed_tasks = [task for task in self.completed_tasks if task.entry.id != key]
+            self.revealed.discard(key)
+            self._known_ids.discard(key)
+
     def invalidate_contents(self):
         self._entry_cache.clear()
 
@@ -278,8 +294,6 @@ class StudyPage(QWidget):
         self.tasks = [replace(task, entry=deepcopy(entry)) if task.entry.id == entry.id else task for task in self.tasks]
         self.completed_tasks = [replace(task, entry=deepcopy(entry)) if task.entry.id == entry.id else task for task in self.completed_tasks]
         self.model.study_tasks = {task.entry.id: task for task in self.tasks + self.completed_tasks}
-        if self.table.delegate.editor is None:
-            self.table.replace_entry(entry)
 
     def set_global_hidden(self, hidden):
         self.global_hidden = hidden

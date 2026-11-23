@@ -346,7 +346,7 @@ def test_saving_matching_new_word_during_debounce_keeps_saved_target_and_form_fo
     block.word.setFocus()
     assert window._save_form()
     settled(qtbot, window, keyword="word")
-    qtbot.wait(220)  # The superseded debounce callback must not steal focus later.
+    qtbot.wait(window._search_timer.interval() + 70)  # Wait past the superseded debounce deadline.
     assert not window._search_timer.isActive()
     assert window.table.currentIndex().data(Qt.ItemDataRole.UserRole).entry.text == "word-new"
     assert window.blocks[0].word.hasFocus()
@@ -425,3 +425,157 @@ def test_second_page_drag_uses_category_offset_and_keeps_first_page_unchanged(ma
     assert [entry.id for entry in window._display_cache.entries[:2]] == [ids[501], ids[500]]
     assert [entry.id for entry in repo.query_page('pending', page_number=1).entries] == ids[:500]
     assert [entry.id for entry in repo.query_page('pending', page_number=2).entries[:2]] == [ids[501], ids[500]]
+
+
+@pytest.mark.parametrize("new_text,expected", [("banana", []), ("apple-pie", ["apple-pie"])])
+def test_study_edit_revalidates_cached_search(make_window, repo, qtbot, new_text, expected):
+    entry = repo.save(WordEntry("apple", [Sense("n.", "fruit")]))
+    window = make_window()
+    window.search_box.setText("apple")
+    settled(qtbot, window, keyword="apple")
+    window.set_filter("study17")
+    table = window.study_page.table
+    assert table.edit_field((entry.id, -1, 0, 1))
+    table.delegate.editor.setText(new_text)
+    assert table.delegate.submit()
+    qtbot.waitUntil(lambda: not window._pending_entries)
+    assert not window.list_state.search.valid
+    window.set_filter("pending")
+    settled(qtbot, window, category="pending", keyword="apple")
+    assert [entry.text for entry in window._display_cache.entries] == expected
+    assert window._display_cache.total == len(expected)
+
+
+@pytest.mark.parametrize("selected,expected", [(0, (0, 1)), (1, (0, 3)), (2, (1, 3))])
+def test_inactive_sense_location_survives_deletion(make_window, repo, qtbot, selected, expected):
+    entry = repo.save(WordEntry("apple", [Sense("n.", "one"), Sense("v.", "two"), Sense("adj.", "three")]))
+    window = make_window()
+    window.reveal(entry.id, True)
+    window.table.setCurrentIndex(window.table._entry_index(entry.id, -1, selected, 3))
+    window.set_filter("all")
+    settled(qtbot, window, category="all")
+    window.reveal(entry.id, True)
+    assert window.table.edit_field((entry.id, -1, 0, 3))
+    window.table.delegate.editor.setPlainText("")
+    assert window.table.delegate.submit()
+    qtbot.waitUntil(lambda: not window._pending_entries)
+    window.set_filter("pending")
+    settled(qtbot, window, category="pending")
+    index = window.table.currentIndex()
+    row = index.data(Qt.ItemDataRole.UserRole)
+    assert (row.sense, index.column()) == expected
+    assert row.entry.id == entry.id and not row.hidden
+
+
+def test_failed_page_request_restores_committed_page_input(make_window, repo, qtbot, monkeypatch):
+    seed(repo, 501)
+    window = make_window()
+    def fail(*args, **kwargs):
+        raise OSError("injected page failure")
+    monkeypatch.setattr(PageReader, "query_page", fail)
+    qtbot.mouseClick(window.pagination.next_button, Qt.MouseButton.LeftButton)
+    qtbot.waitUntil(lambda: not window._list_loading)
+    assert window.pagination.page_input.text() == "1"
+    assert window._display_cache.page_number == 1
+    assert len(window._display_cache.entries) == 500
+    assert window.pagination.next_button.isEnabled()
+
+
+def test_form_reorder_tracks_duplicate_senses_by_original_widgets(make_window, repo, qtbot):
+    entry = repo.save(WordEntry("apple", [Sense("n.", "same"), Sense("n.", "same"), Sense("v.", "last")]))
+    window = make_window()
+    window.reveal(entry.id, True)
+    window.table.setCurrentIndex(window.table._entry_index(entry.id, -1, 1, 3))
+    window.reset_form(entry)
+    block = window.blocks[0]
+    block.rows.insert(0, block.rows.pop(1))
+    assert window._save_form()
+    index = window.table.currentIndex()
+    assert index.data(Qt.ItemDataRole.UserRole).sense == 0
+    assert index.column() == 3
+
+
+def test_study_edit_can_add_an_absent_search_hit(make_window, repo, qtbot):
+    entry = repo.save(WordEntry("banana", [Sense("n.", "fruit")]))
+    window = make_window()
+    window.search_box.setText("apple")
+    settled(qtbot, window, keyword="apple")
+    assert window._display_cache.total == 0
+    window.set_filter("study17")
+    table = window.study_page.table
+    assert table.edit_field((entry.id, -1, 0, 1))
+    table.delegate.editor.setText("apple")
+    assert table.delegate.submit()
+    qtbot.waitUntil(lambda: not window._pending_entries)
+    window.set_filter("pending")
+    settled(qtbot, window, category="pending", keyword="apple")
+    assert [entry.id for entry in window._display_cache.entries] == [entry.id]
+
+
+def test_background_commit_invalidates_without_querying_inactive_pages(make_window, repo, qtbot, monkeypatch):
+    from vocabulary.transfer_jobs import run_repository_task
+    seed(repo)
+    window = make_window()
+    window.set_filter("all")
+    settled(qtbot, window, category="all")
+    calls = []
+    original = PageReader.query_page
+    def read(*args, **kwargs):
+        calls.append(True)
+        return original(*args, **kwargs)
+    monkeypatch.setattr(PageReader, "query_page", read)
+    run_repository_task(repo, window.busy_overlay, "test", "import_entries",
+                        [WordEntry("new", [Sense("n.", "new")])])
+    assert calls == []
+    assert not window.list_state.normal["pending"].valid
+    assert not window.list_state.normal["all"].valid
+    window.set_filter("pending")
+    settled(qtbot, window, category="pending")
+    assert window._display_cache.total == 4
+    assert len(calls) == 1
+
+
+
+def test_committed_form_change_rejects_inflight_old_search(make_window, repo, qtbot, monkeypatch):
+    entry = repo.save(WordEntry("apple", [Sense("n.", "fruit")]))
+    window = make_window()
+    started, release = Event(), Event()
+    original = PageReader.query_page
+    def read(reader, *args, **kwargs):
+        result = original(reader, *args, **kwargs)
+        if not started.is_set():
+            started.set()
+            release.wait(3)
+        return result
+    monkeypatch.setattr(PageReader, "query_page", read)
+    window.search_box.setText("apple")
+    qtbot.waitUntil(started.is_set)
+    try:
+        window.reset_form(entry)
+        window.blocks[0].word.setText("banana")
+        assert window._save_form()
+    finally:
+        release.set()
+    settled(qtbot, window, keyword="apple")
+    assert window._display_cache.total == 0
+    assert not window._display_cache.entries
+    assert repo.get(entry.id).text == "banana"
+
+
+def test_import_later_failure_still_presents_committed_words(make_window, repo, qtbot, tmp_path, monkeypatch):
+    from vocabulary.transfer import write_entries
+    seed(repo)
+    window = make_window()
+    path = tmp_path / "import.json"
+    write_entries(path, [WordEntry("new", [Sense("n.", "new")])])
+    monkeypatch.setattr(QFileDialog, "getOpenFileName", lambda *a: (str(path), ""))
+    errors = []
+    monkeypatch.setattr(QMessageBox, "critical", lambda *a: errors.append(a[-1]))
+    def fail(*args, **kwargs):
+        raise RuntimeError("later stage failed")
+    monkeypatch.setattr(window, "resolve_word_conflicts", fail)
+    window.import_words()
+    settled(qtbot, window)
+    assert errors == ["later stage failed"]
+    assert window._display_cache.total == 4
+    assert "new" in [entry.text for entry in window._display_cache.entries]

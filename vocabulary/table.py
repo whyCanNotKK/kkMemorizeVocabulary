@@ -971,6 +971,7 @@ class WordTable(QTableView):
         self.shuffle_button.setToolTip("随机排列全部待记单词")
         self.shuffle_button.setAccessibleName("随机排列全部待记单词")
         self.edit_word_shortcut = ""
+        self.important_shortcut = ""
         self.shuffle_button.clicked.connect(self.shuffleRequested)
         self._layout_shuffle_button()
         header.geometriesChanged.connect(self._layout_shuffle_button)
@@ -1426,6 +1427,19 @@ class WordTable(QTableView):
         return (self.isVisible() and self.isEnabled() and self.delegate.editor is None
                 and self.state() != QAbstractItemView.State.EditingState and not self._drag_candidate)
 
+    def can_use_selected_action(self):
+        current = self.currentIndex()
+        return (not self.study_mode and self.hasFocus() and self.can_navigate_entries()
+                and not QApplication.activeModalWidget() and not QApplication.activePopupWidget()
+                and current.data(Qt.ItemDataRole.UserRole) is not None
+                and self.selectionModel().isSelected(current))
+
+    def request_selected_action(self, action):
+        if self.can_use_selected_action():
+            self.cancel_pending_copy()
+            row = self.currentIndex().data(Qt.ItemDataRole.UserRole)
+            self.actionRequested.emit(row.entry.id, action)
+
     @property
     def dragging(self):
         return self._drag_candidate is not None
@@ -1814,15 +1828,10 @@ class WordTable(QTableView):
                 event.accept()
                 return
             if key in (Qt.Key.Key_F1, Qt.Key.Key_F4, Qt.Key.Key_Delete):
-                current = self.currentIndex()
-                row = current.data(Qt.ItemDataRole.UserRole)
-                if (not self.study_mode and self.can_navigate_entries() and not event.isAutoRepeat()
-                        and not QApplication.activeModalWidget() and not QApplication.activePopupWidget()
-                        and row is not None and self.selectionModel().isSelected(current)):
-                    self.cancel_pending_copy()
+                if not event.isAutoRepeat():
                     action = {Qt.Key.Key_F1: "important", Qt.Key.Key_F4: "learned",
                               Qt.Key.Key_Delete: "trash"}[key]
-                    self.actionRequested.emit(row.entry.id, action)
+                    self.request_selected_action(action)
                 event.accept()
                 return
             if key == Qt.Key.Key_F2:
@@ -2069,8 +2078,11 @@ class WordTable(QTableView):
                         if rect.contains(event.pos()):
                             text = labels[name]
                 elif index.column() == 0 and row.first:
+                    important_label = "取消重点 · F1" if row.entry.important else "设置为重点 · F1"
+                    if self.important_shortcut:
+                        important_label += f" · {self.important_shortcut}"
                     text = ('' if self.study_mode else
-                            tooltip_lines("取消重点 · F1" if row.entry.important else "设置为重点 · F1",
+                            tooltip_lines(important_label,
                                           mouse_action_hint("整词复制", "right")))
                 elif row.hidden and index.column() in (2, 3):
                     if self.delegate.mask_hit(index, event.pos()):

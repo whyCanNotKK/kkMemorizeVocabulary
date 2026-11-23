@@ -9,6 +9,7 @@ from PySide6.QtCore import Qt, QTimer
 from PySide6.QtWidgets import QApplication
 
 from .list_state import ListState
+from .list_sync import CommittedChange, LocationMap, ViewIntent, synchronize
 from .list_jobs import ListJobs
 from .list_query import normalize_keyword
 from .theme import icon
@@ -18,6 +19,7 @@ from .learning import StudyContext
 class ListControllerMixin:
     def init_lists(self):
         self.list_state = ListState()
+        self.repository.content_committed = self.external_content_committed
         self.list_jobs = ListJobs(self.repository.path, self)
         self.list_jobs.success.connect(self.list_loaded)
         self.list_jobs.failure.connect(self.list_failed)
@@ -30,7 +32,7 @@ class ListControllerMixin:
         self._pending_edit_target = None
         self._search_timer = QTimer(self)
         self._search_timer.setSingleShot(True)
-        self._search_timer.setInterval(150)
+        self._search_timer.setInterval(250)
         self._search_timer.timeout.connect(self.run_search)
         self._known_content_revision = getattr(self.repository, 'content_revision', 0)
         self.revealed = self.list_state.normal['pending'].revealed_ids
@@ -94,17 +96,12 @@ class ListControllerMixin:
         if self._pending_entries and self.current_table().delegate.editor is None:
             self.refresh_after_inline(requery=False)
         keyword = normalize_keyword(keyword)
-        revision = getattr(self.repository, 'content_revision', 0)
-        if revision != self._known_content_revision:
-            self._known_content_revision = revision
-            self.list_state.bump_revision()
-            self.list_state.invalidate()
-            self.study_page.invalidate_contents()
+        self.sync_unreported_content()
         self.save_list_view()
         cache = self.list_state.cache_for(category, keyword, None if anchor else page_number)
         if cache is not None and anchor and anchor[0] not in cache.ids:
             cache = None
-        action = {'kind': intent, 'anchor': anchor, 'reveal_id': reveal_id}
+        action = ViewIntent(intent, anchor, reveal_id).action()
         if cache is not None and cache.valid and not force:
             self.list_jobs.cancel()
             self._list_request = None
@@ -150,6 +147,7 @@ class ListControllerMixin:
         self.set_list_loading(False)
         # No UI error or retry action: retain the last committed snapshot.
         if self._display_cache is not None:
+            self.pagination.set_page(self._display_cache.page_number, self._display_cache.total)
             self.search_box.set_result_count(
                 self._display_cache.total if self.applied_keyword() else None)
         else:
@@ -250,13 +248,16 @@ class ListControllerMixin:
             return (row.entry.id, row.owner, row.sense, current.column())
         return None
 
-    def refresh(self, entries=None):
+    def refresh(self, entries=None, *, invalidate=True):
         if self.filter_name == 'study17':
             self.list_layout()
             return
-        self.list_state.bump_revision()
-        self.list_state.invalidate()
+        if invalidate:
+            self.list_state.bump_revision()
+            self.list_state.invalidate()
         cache = self._display_cache
+        if not invalidate and cache is not None and cache.valid:
+            return
         page = cache.page_number if cache is not None else 1
         self.request_list(self.filter_name, self.applied_keyword(), page or 1,
                           self.current_anchor(), force=True)
@@ -314,6 +315,7 @@ class ListControllerMixin:
         if not self.current_table().delegate.submit():
             return False
         self.refresh_after_inline(requery=False)
+        self.sync_unreported_content()
         self._search_timer.stop()
         self.cancel_list_intents()
         self.save_list_view()
@@ -413,17 +415,41 @@ class ListControllerMixin:
             self.global_hide_button.setToolTip(
                 f"显示/隐藏 本页释义 · {self.shortcuts.labels()['toggle_visibility']}")
 
-    def note_list_mutation(self):
+    def sync_unreported_content(self):
+        if getattr(self.repository, 'content_revision', 0) != self._known_content_revision:
+            self.apply_committed_change(CommittedChange(bulk=True))
+
+    def external_content_committed(self):
+        if not self._closing:
+            self.apply_committed_change(CommittedChange(bulk=True))
+
+    def begin_content_sync(self):
+        """Invalidate in-flight reads immediately, even while an editor closes."""
         self._known_content_revision = getattr(self.repository, 'content_revision', 0)
         self.list_state.bump_revision()
         self.list_jobs.cancel()
         self._list_request = None
         self.set_list_loading(False)
 
-    def patch_entry_caches(self, entry):
-        self.list_state.patch_entry(entry)
-        self.study_page.patch_entry(entry)
-
+    def apply_committed_change(self, change, *, published=False, map_current=True):
+        if not published:
+            self.begin_content_sync()
+        self.save_list_view()
+        study_view = self.study_page.table.view_state()
+        normal_view = self.table.view_state()
+        plan = synchronize(self.list_state, change)
+        self._pending_edit_target = change.target(self._pending_edit_target, editing=True)
+        self._pending_search_anchor = change.target(self._pending_search_anchor)
+        self.study_page.apply_sync(plan)
+        # The active inline delegate has its own post-submit traversal. Its
+        # original target is remapped there, not a second time here.
+        for table, view in ((self.table, normal_view), (self.study_page.table, study_view)):
+            active = table is self.current_table()
+            if map_current or not active:
+                with table.preserve_view(view_state=change.view(view)):
+                    if change.after is not None:
+                        table.replace_entry(change.after)
+        return plan
 
     def study_visibility_changed(self, visible):
         self.list_state.eye_visible['study17'] = visible
@@ -431,7 +457,13 @@ class ListControllerMixin:
             self.update_visibility_button()
 
     def cached_entry(self, entry_id):
+        if (getattr(self.repository, 'content_revision', 0) != self._known_content_revision
+                or (self.filter_name != 'study17' and self._display_cache is not None
+                    and not self._display_cache.valid)):
+            return self.repository.get(entry_id)
         if self.filter_name == 'study17':
+            if entry_id not in self.study_page._entry_cache:
+                return self.repository.get(entry_id)
             for task in self.study_page.tasks + self.study_page.completed_tasks:
                 if task.entry.id == entry_id:
                     return deepcopy(task.entry)
@@ -457,12 +489,10 @@ class ListControllerMixin:
         except Exception as error:
             self.show_notice(str(error), True)
             return
-        self.note_list_mutation()
-        cache.entries.insert(target_index, cache.entries.pop(source))
-        self.list_state.patch_sort_orders(orders)
-        self.study_page.patch_sort_orders(orders)
-        self.list_state.invalidate([key for key in self.list_state.normal if key != cache.category])
-        cache.valid = True
+        ids = [entry.id for entry in cache.entries]
+        ids.insert(target_index, ids.pop(source))
+        self.apply_committed_change(CommittedChange(
+            sort_orders=orders, page_order=(cache.category, tuple(ids))))
         self.render_normal_cache()
 
     def move_related_word(self, entry_id, source, target):
@@ -473,13 +503,12 @@ class ListControllerMixin:
 
     def reorder_word_part(self, entry_id, source, target, owner=None):
         self.save_list_view()
-        study_part, study_selected, study_scroll = self.study_page.table.view_state()
         entry = self.cached_entry(entry_id)
+        original = deepcopy(entry)
         items = entry.related if owner is None else (entry if owner == -1 else entry.related[owner]).senses
         permutation = list(range(len(items)))
         if not (0 <= source < len(items) and 0 <= target < len(items)):
             return
-        anchor = self.current_anchor() if self.filter_name != 'study17' else self.study_page.table.view_state()[0]
         try:
             if owner is None:
                 self.repository.move_related(entry_id, source, target)
@@ -490,29 +519,10 @@ class ListControllerMixin:
             return
         items.insert(target, items.pop(source))
         permutation.insert(target, permutation.pop(source))
-        self.note_list_mutation()
-        self.patch_entry_caches(entry)
-        self.list_state.remap_locations(
-            entry_id, related_permutation=permutation if owner is None else None,
-            sense_owner=owner, sense_permutation=permutation if owner is not None else None)
-        if study_part and study_part[0] == entry_id:
-            key, study_owner, study_sense, study_column = study_part
-            if owner is None and study_owner >= 0:
-                study_owner = permutation.index(study_owner)
-            elif owner == study_owner:
-                study_sense = permutation.index(study_sense)
-            with self.study_page.table.preserve_view(
-                    view_state=((key, study_owner, study_sense, study_column), study_selected, study_scroll)):
-                pass
-        table = self.current_table()
-        table.replace_entry(entry)
-        if anchor and anchor[0] == entry_id:
-            entry_key, old_owner, sense, column = anchor
-            if owner is None and old_owner >= 0:
-                old_owner = permutation.index(old_owner)
-            elif owner == old_owner:
-                sense = permutation.index(sense)
-            table.setCurrentIndex(table._entry_index(entry_key, old_owner, sense, column))
+        locations = (LocationMap(owners={old: new for new, old in enumerate(permutation)})
+                     if owner is None else
+                     LocationMap(senses={owner: {old: new for new, old in enumerate(permutation)}}))
+        self.apply_committed_change(CommittedChange(before=original, after=entry, locations=locations))
         self.save_list_view()
 
     def shuffle_words(self):
@@ -524,10 +534,7 @@ class ListControllerMixin:
         except Exception as error:
             self.show_notice(str(error), True)
             return
-        self.note_list_mutation()
-        self.list_state.patch_sort_orders(orders)
-        self.study_page.patch_sort_orders(orders)
-        self.list_state.invalidate()
+        self.apply_committed_change(CommittedChange(sort_orders=orders))
         self.request_list(cache.category, '', 1, intent='top', force=True)
 
     def defer_list_edit(self, target):
@@ -545,36 +552,27 @@ class ListControllerMixin:
         cache = self._display_cache
         anchor = self.current_anchor() if self.filter_name != 'study17' else None
         if cache is not None and anchor and anchor[0] in changes:
-            changed = changes[anchor[0]]
+            changed = changes[anchor[0]].after
             if changed is None or (cache.keyword and not self.entry_matches(changed, cache.keyword)):
                 next_id = self.adjacent_entry_id(cache, anchor[0])
                 anchor = (next_id, -1, 0, 1) if next_id != anchor[0] else None
-        self.note_list_mutation()
         deleted = False
-        for entry_id, entry in changes.items():
-            if entry is None:
-                self.list_state.remove_entry(entry_id)
+        for entry_id, change in changes.items():
+            self.apply_committed_change(change, published=True, map_current=False)
+            if change.after is None:
                 if self.duplicate_id == entry_id:
                     self.duplicate_id = None
-                self.study_page.invalidate_contents()
                 deleted = True
             else:
-                self.patch_entry_caches(entry)
-                self.current_table().replace_entry(entry)
+                self.current_table().replace_entry(change.after)
         if self.filter_name == 'study17':
             if deleted:
                 self.study_page.load(self.study_page.context)
             return
         cache = self._display_cache
-        if cache is None:
-            return
-        if cache.keyword or deleted:
-            self.list_state.invalidate()
-            if requery:
-                self.request_list(cache.category, cache.keyword, cache.page_number or 1,
-                                  anchor, force=True)
-        elif self.list_state.search is not None:
-            self.list_state.search.valid = False
+        if cache is not None and not cache.valid and requery:
+            self.request_list(cache.category, cache.keyword, cache.page_number or 1,
+                              anchor, force=True)
 
     def prepare_list_edit(self, entry_id, column):
         self.refresh_after_inline()
@@ -587,11 +585,15 @@ class ListControllerMixin:
             else:
                 self.reveal(entry_id, True)
 
-    def queue_saved_entry(self, entry_id):
+    def queue_saved_entry(self, entry_id, *, before=None, locations=None):
+        before = before or self.cached_entry(entry_id)
         try:
-            self._pending_entries[entry_id] = self.repository.get(entry_id)
+            after = self.repository.get(entry_id)
         except ValueError:
-            self._pending_entries[entry_id] = None
+            after = None
+        self.begin_content_sync()
+        self._pending_entries[entry_id] = CommittedChange(
+            before=deepcopy(before), after=after, locations=locations or LocationMap())
         if self.current_table().delegate.editor is None:
             self.refresh_after_inline()
 
@@ -602,7 +604,7 @@ class ListControllerMixin:
                  *(sense.translation for word in entry.related for sense in word.senses)]
         return any(keyword in text.casefold() for text in texts)
 
-    def form_saved(self, entry, is_new):
+    def form_saved(self, entry, is_new, *, before=None, locations=None):
         pending = self._list_request
         pending_keyword = (normalize_keyword(self.search_box.text())
                            if self._list_loading or self._search_timer.isActive() else self.applied_keyword())
@@ -610,27 +612,18 @@ class ListControllerMixin:
         self._search_timer.stop()
         self._pending_search_anchor = None
         self.cancel_list_intents()
-        self.note_list_mutation()
-        self.patch_entry_caches(entry)
+        self.apply_committed_change(CommittedChange(
+            before=before if not is_new else None, after=entry,
+            locations=locations or LocationMap(reset=not is_new)))
         cache = self._display_cache
         category = 'pending' if is_new and pending_category == 'learned' else pending_category
         keyword = pending_keyword
-        if not is_new and cache is not None and not keyword and not cache.keyword and category == cache.category:
-            self.table.replace_entry(entry)
-            if self.list_state.search is not None:
-                self.list_state.search.valid = False
+        if (not is_new and cache is not None and cache.valid
+                and keyword == cache.keyword and category == cache.category):
             return
-        self.list_state.invalidate()
         anchor = (entry.id, -1, 0, 1)
         if is_new and keyword and not self.entry_matches(entry, keyword):
-            if cache is not None and category == cache.category and keyword == cache.keyword:
-                if is_new:
-                    cache.counts['pending'] += 1
-                    cache.counts['all'] += 1
-                cache.valid = True
-                self.show_list_cache(cache)
-            else:
-                self.request_list(category, keyword, 1, force=True)
+            self.request_list(category, keyword, (cache.page_number or 1) if cache else 1, force=True)
             self.toast.show_message(f'已保存 {entry.text}，不在当前搜索结果中')
         else:
             if not is_new and keyword and cache is not None and not self.entry_matches(entry, keyword):
@@ -675,21 +668,23 @@ class ListControllerMixin:
                 next_id = cache.before_id
         try:
             entry = self.cached_entry(entry_id)
+            original = deepcopy(entry)
             if action == 'important':
                 self.repository.set_flag(entry_id, 'important', not entry.important)
                 entry.important = not entry.important
-                self.note_list_mutation()
-                self.patch_entry_caches(entry)
-                table.replace_entry(entry)
+                self.apply_committed_change(CommittedChange(before=original, after=entry))
+                if not cache.valid:
+                    self.request_list(cache.category, cache.keyword, cache.page_number or 1,
+                                      self.current_anchor(), force=True)
                 return
             if action == 'learned':
                 self.repository.set_flag(entry_id, 'learned', not entry.learned)
+                self.apply_committed_change(CommittedChange(before=original, after=self.repository.get(entry_id)))
             elif action == 'trash':
                 if not self.confirm_word_removal(entry_id):
                     return
                 self.repository.delete(entry_id, self.study_page.context or StudyContext.now())
-                self.list_state.remove_entry(entry_id)
-                self.study_page.invalidate_contents()
+                self.apply_committed_change(CommittedChange(before=original))
                 if self.study_page.context is not None:
                     self.study_page.load(self.study_page.context)
                 self.history_panel.refresh()
@@ -699,8 +694,6 @@ class ListControllerMixin:
             self.show_notice(str(error), True)
             return
         self.toast.dismiss()
-        self.note_list_mutation()
-        self.list_state.invalidate()
         self.request_list(cache.category, cache.keyword, cache.page_number or 1,
                           (next_id, -1, 0, 1), intent='marked', force=True)
 

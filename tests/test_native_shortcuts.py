@@ -56,6 +56,49 @@ def test_native_chord_reaches_form_before_ime_and_fires_once(window, qtbot, nati
     assert len(window.blocks) == (2 if action == "add_related" else 1)
 
 
+def test_native_form_f1_fires_once_and_leaves_list_handling_available(window, qtbot, native):
+    bridge, _ = native
+    window.blocks[0].word.setFocus()
+    bridge.refresh()
+    before = window.star_button.isChecked()
+    assert bridge.dispatch_key(0x70, True)
+    assert bridge.dispatch_key(0x70, True)
+    assert bridge.dispatch_key(0x70, False)
+    qtbot.wait(20)
+    assert window.star_button.isChecked() != before
+    window.table.setFocus()
+    assert not bridge.dispatch_key(0x70, True)
+    assert not bridge.dispatch_key(0x70, False)
+
+
+def test_native_list_important_chord_and_f1_share_scope(window, repo, qtbot, native):
+    entry = repo.save(WordEntry('saved', [Sense('n.', 'meaning')]))
+    window.refresh()
+    window.table.select_entry(entry.id)
+    window.table.setFocus()
+    draft = window.form_value()
+    bridge, _ = native
+    bridge.refresh()
+    for modifier, key, expected in ((0xA2, ord('I'), False), (None, 0x70, True)):
+        if modifier is not None:
+            bridge.dispatch_key(modifier, True)
+        assert bridge.dispatch_key(key, True)
+        assert bridge.dispatch_key(key, True)
+        assert bridge.dispatch_key(key, False)
+        if modifier is not None:
+            bridge.dispatch_key(modifier, False)
+        qtbot.wait(20)
+        assert repo.get(entry.id).important == expected
+        assert window.form_value() == draft
+    bridge.dispatch_key(0xA2, True)
+    assert bridge.dispatch_key(ord('I'), True)
+    window.search_box.setFocus()
+    bridge.dispatch_key(ord('I'), False)
+    bridge.dispatch_key(0xA2, False)
+    qtbot.wait(20)
+    assert repo.get(entry.id).important
+
+
 def test_native_chords_release_for_foreign_window_and_suspended_recorder(window, native):
     bridge, api = native
     bridge.refresh()

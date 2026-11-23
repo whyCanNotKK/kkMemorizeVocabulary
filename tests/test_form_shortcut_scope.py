@@ -5,6 +5,35 @@ from PySide6.QtWidgets import QApplication
 from vocabulary.domain import RelatedWord, Sense, WordEntry
 
 
+@pytest.mark.parametrize('editing', [False, True])
+def test_form_f1_toggles_draft_and_survives_remapping(window, repo, qtbot, editing):
+    entry = repo.save(WordEntry('saved', [Sense('n.', 'meaning')]))
+    window.refresh()
+    window.reset_form(entry if editing else WordEntry('new', [Sense('n.', 'meaning')]))
+    block = window.blocks[0]
+    for control in (block.word, block.phonetic, block.rows[0].translation,
+                    block.rows[0].pos, window.star_button):
+        control.setFocus()
+        before = window.star_button.isChecked()
+        qtbot.keyClick(control, Qt.Key.Key_F1)
+        assert window.star_button.isChecked() != before
+        assert control.hasFocus()
+        assert repo.get(entry.id) == entry
+        assert window.star_button.toolTip() == '重点 · F1 · Ctrl+I'
+
+    window.shortcuts.update(dict(window.shortcuts.values, important='Alt+I'))
+    assert window.star_button.toolTip() == '重点 · F1 · Alt+I'
+    block.word.setFocus()
+    before = window.star_button.isChecked()
+    qtbot.keyClick(block.word, Qt.Key.Key_F1)
+    assert window.star_button.isChecked() != before
+    qtbot.keyClick(block.word, Qt.Key.Key_I, Qt.KeyboardModifier.AltModifier)
+    assert window.star_button.isChecked() == before
+    assert window._save_form()
+    saved = repo.get(entry.id) if editing else next(e for e in repo.list_entries() if e.text == 'new')
+    assert saved.important == before
+
+
 @pytest.mark.parametrize("key", [Qt.Key.Key_N, Qt.Key.Key_M, Qt.Key.Key_J, Qt.Key.Key_K, Qt.Key.Key_I])
 @pytest.mark.parametrize("target", ["search", "list", "toolbar", "outer_blank", "form_blank",
                                   "collapsed", "inline", "study"])
@@ -59,6 +88,7 @@ def test_remapped_form_shortcut_leaves_search_text_editing_available(window, qtb
     (Qt.Key.Key_N, 3, 2, True), (Qt.Key.Key_M, 1, 2, True),
     (Qt.Key.Key_J, 2, 3, True), (Qt.Key.Key_K, 2, 1, True),
     (Qt.Key.Key_I, 2, 2, False),
+    (Qt.Key.Key_F1, 2, 2, False),
 ])
 def test_form_pos_popup_inherits_shortcut_scope(window, qtbot, monkeypatch, key, words, senses, important):
     window.reset_form(WordEntry("draft", [Sense("n.", "first"), Sense("v.", "second")],
@@ -70,7 +100,8 @@ def test_form_pos_popup_inherits_shortcut_scope(window, qtbot, monkeypatch, key,
     combo.showPopup()
     qtbot.waitUntil(lambda: QApplication.activePopupWidget() is not None)
 
-    qtbot.keyClick(combo.view(), key, Qt.KeyboardModifier.ControlModifier)
+    modifier = Qt.KeyboardModifier.NoModifier if key == Qt.Key.Key_F1 else Qt.KeyboardModifier.ControlModifier
+    qtbot.keyClick(combo.view(), key, modifier)
     qtbot.wait(10)
 
     popup = QApplication.activePopupWidget()

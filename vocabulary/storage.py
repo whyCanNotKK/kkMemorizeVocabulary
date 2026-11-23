@@ -38,6 +38,9 @@ class Repository:
         path.parent.mkdir(parents=True, exist_ok=True)
         self.path = path
         self.content_revision = 0
+        # Optional owner notification for commits returned by a worker connection.
+        # transfer_jobs invokes it on the owning GUI thread, never from SQLite.
+        self.content_committed = None
         self.spelling_settings_revision = 0
         self.connection = sqlite3.connect(path, timeout=3)
         self.connection.row_factory = sqlite3.Row

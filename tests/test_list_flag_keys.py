@@ -108,8 +108,11 @@ def test_flag_keys_update_selected_main_word_and_persist(window, repo, qtbot, pa
     table.setCurrentIndex(table._entry_index(entry.id, owner, sense, 1))
     table.setFocus()
     hidden = table.model().rows[0].hidden
-    for important in (False, True):
-        qtbot.keyClick(table, Qt.Key.Key_F1)
+    for key, modifier, important in (
+        (Qt.Key.Key_F1, Qt.KeyboardModifier.NoModifier, False),
+        (Qt.Key.Key_I, Qt.KeyboardModifier.ControlModifier, True),
+    ):
+        qtbot.keyClick(table, key, modifier)
         assert repo.get(entry.id).important == important
         index = table._entry_index(entry.id, column=0)
         assert index.data(Qt.ItemDataRole.AccessibleTextRole) == ('重点' if important else '非重点')
@@ -133,6 +136,46 @@ def test_flag_keys_update_selected_main_word_and_persist(window, repo, qtbot, pa
     table.setFocus()
     qtbot.keyClick(table, Qt.Key.Key_F4)
     assert repo.get(entry.id).learned != learned
+
+
+def test_remapped_important_shortcut_only_updates_selected_list_word(window, repo, qtbot):
+    entry = seed(window, repo)
+    draft = window.form_value()
+    window.shortcuts.update(dict(window.shortcuts.values, important='Alt+I'))
+    qtbot.keyClick(window.table, Qt.Key.Key_I, Qt.KeyboardModifier.ControlModifier)
+    assert repo.get(entry.id).important
+    qtbot.keyClick(window.table, Qt.Key.Key_I, Qt.KeyboardModifier.AltModifier)
+    assert not repo.get(entry.id).important
+    assert window.form_value() == draft
+    qtbot.keyClick(window.table, Qt.Key.Key_F1)
+    assert repo.get(entry.id).important
+
+
+def test_important_chord_respects_list_selection_editing_drag_busy_and_study(window, repo, qtbot):
+    entry = seed(window, repo)
+    table = window.table
+    def press(control):
+        qtbot.keyClick(control, Qt.Key.Key_I, Qt.KeyboardModifier.ControlModifier)
+        assert repo.get(entry.id) == entry
+
+    table.clearSelection()
+    press(table)
+    table.select_entry(entry.id)
+    QApplication.sendEvent(table, QKeyEvent(QEvent.Type.KeyPress, Qt.Key.Key_I,
+                                          Qt.KeyboardModifier.ControlModifier, '', True))
+    assert repo.get(entry.id) == entry
+    table._drag_candidate = (entry.id, table.rect().center())
+    press(table)
+    table.cancel_drag()
+    with window.busy_overlay.display('testing'):
+        press(table)
+    table.edit(table._entry_index(entry.id))
+    press(table.delegate.editor)
+    table.delegate.cancel()
+    window.set_filter('study17')
+    window.study_page.table.select_entry(entry.id)
+    window.study_page.table.setFocus()
+    press(window.study_page.table)
 
 
 @pytest.mark.parametrize('key', [Qt.Key.Key_F1, Qt.Key.Key_F4])

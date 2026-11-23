@@ -1,3 +1,4 @@
+from vocabulary.list_sync import CommittedChange, LocationMap, synchronize
 from types import SimpleNamespace
 
 from vocabulary.domain import RelatedWord, Sense, WordEntry
@@ -176,7 +177,8 @@ def test_related_reorder_remaps_current_inactive_and_search_locations_by_index()
     state.search_positions["all"].view_state = ((1, -1, 0, 3), True, 47)
     state.normal["learned"].view_state = ((2, 0, 0, 3), True, 53)
 
-    state.remap_locations(1, related_permutation=[1, 0])
+    synchronize(state, CommittedChange(before=normal.entries[0], after=normal.entries[0],
+        locations=LocationMap(owners={0: 1, 1: 0})))
 
     assert normal.view_state == ((1, 1, 2, 3), True, 17)
     assert normal.scroll == 19
@@ -198,8 +200,8 @@ def test_sense_reorder_only_remaps_matching_original_owner_even_when_related_mov
     state.search_positions["all"].view_state = ((1, 1, 0, 3), True, 11)
     state.search_positions["learned"].view_state = ((1, -1, 1, 3), True, 13)
 
-    state.remap_locations(1, related_permutation=[1, 0],
-                          sense_owner=1, sense_permutation=[1, 0])
+    synchronize(state, CommittedChange(before=current.entries[0], after=current.entries[0],
+        locations=LocationMap(owners={0: 1, 1: 0}, senses={1: {0: 1, 1: 0}})))
 
     assert current.view_state == ((1, 0, 0, 3), True, 5)
     assert inactive.view_state == ((1, 1, 1, 2), False, 7)
@@ -217,7 +219,8 @@ def test_main_sense_location_remapping_is_independent_of_content_patch():
     state.patch_entry(updated)
     assert current.view_state == ((1, -1, 2, 3), True, 71)
 
-    state.remap_locations(1, sense_owner=-1, sense_permutation=[2, 0, 1])
+    synchronize(state, CommittedChange(before=updated, after=updated,
+        locations=LocationMap(senses={-1: {2: 0, 0: 1, 1: 2}})))
 
     assert current.view_state == ((1, -1, 0, 3), True, 71)
     assert state.search_positions["all"].view_state == ((1, -1, 1, 2), False, 73)
