@@ -17,6 +17,52 @@ from vocabulary.study_transfer import parse_study_backup, serialize_study_backup
 AM = StudyContext(date(2026, 11, 2), False)
 
 
+def test_spelling_settings_revision_only_tracks_committed_changes(repo):
+    assert repo.spelling_settings_revision == 0
+    repo.set_study_hide_word_while_spelling(False)
+    assert repo.spelling_settings_revision == 0
+    content_revision = repo.content_revision
+    repo.set_study_hide_word_while_spelling(True)
+    assert repo.spelling_settings_revision == 1
+    repo.set_study_spelling_hide_settings(SpellingHideSettings.from_enabled(True))
+    assert repo.spelling_settings_revision == 1
+    repo.connection.execute("""CREATE TRIGGER fail_spelling_revision BEFORE INSERT ON settings
+        WHEN NEW.key='study17.hide_word_while_spelling.minimum_stage'
+        BEGIN SELECT RAISE(ABORT,'spelling revision failed'); END""")
+    with pytest.raises(sqlite3.IntegrityError):
+        repo.set_study_hide_word_while_spelling(False)
+    assert repo.spelling_settings_revision == 1
+    assert repo.study_spelling_hide_settings() == SpellingHideSettings.from_enabled(True)
+    assert repo.content_revision == content_revision
+
+
+def test_study_render_reads_spelling_settings_only_after_a_setting_change(window, repo, monkeypatch):
+    page = window.study_page
+    getter = repo.study_spelling_hide_settings
+    calls = []
+
+    def read():
+        calls.append(True)
+        return getter()
+
+    monkeypatch.setattr(repo, 'study_spelling_hide_settings', read)
+    page.render()
+    page.render()
+    assert calls == []
+    settings = SpellingHideSettings('conditional', by_stage=True, minimum_stage=7)
+    repo.set_study_spelling_hide_settings(settings)
+    calls.clear()
+    page.render()
+    page.render()
+    assert calls == [True]
+    assert page._spelling_settings == settings
+    repo.set_study_hide_word_while_spelling(True)
+    page.set_spelling_settings(getter())
+    calls.clear()
+    page.render()
+    assert calls == []
+
+
 @pytest.mark.parametrize('legacy', [None, '0', '1'])
 def test_spelling_hide_legacy_setting_maps_to_complete_configuration(repo, legacy):
     if legacy is not None:

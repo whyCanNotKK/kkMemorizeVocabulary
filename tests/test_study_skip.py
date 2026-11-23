@@ -62,7 +62,8 @@ def test_skip_cycles_only_pending_words_without_changing_progress(skip_list, win
     page, words = skip_list
     table = page.table
     before = repo.study_backup()
-    ordinary_eye_states = dict(window._global_hidden)
+    ordinary_eye_states = {key: window.list_state.eye_visible[key]
+                           for key in ('pending', 'all', 'learned')}
     related = table._entry_index(words[0].id, owner=0, column=3)
     table.setCurrentIndex(related)
     qtbot.keyClicks(table, 'al')
@@ -78,17 +79,18 @@ def test_skip_cycles_only_pending_words_without_changing_progress(skip_list, win
             assert all(row.hidden for row in page.model.rows)
             assert not page.revealed
             assert page.global_hidden and window.global_hidden
-            assert window.global_hide_button.isChecked()
-            assert window.global_hide_button.accessibleName() == '全局隐藏：开'
+            assert not window.global_hide_button.isChecked()
+            assert window.global_hide_button.accessibleName() == '隐藏释义'
         QApplication.sendEvent(table, QKeyEvent(QEvent.Type.KeyPress, Qt.Key.Key_Return,
                                                Qt.KeyboardModifier.NoModifier, '\r', True))
         assert table.currentIndex() == table._entry_index(target.id)
-    assert window._global_hidden == ordinary_eye_states
+    assert {key: window.list_state.eye_visible[key]
+            for key in ('pending', 'all', 'learned')} == ordinary_eye_states
     page.reveal(words[0].id, True)  # Mixed visibility must use the new "hide all" record.
     assert window.next_global_hidden() is False
     window.set_global_hidden()
     assert all(not row.hidden for row in page.model.rows)
-    assert not page.global_hidden and not window.global_hide_button.isChecked()
+    assert not page.global_hidden and window.global_hide_button.isChecked()
 
 
 @pytest.mark.parametrize('trigger', ['mouse', 'return', 'keypad'])
@@ -106,7 +108,7 @@ def test_only_shown_pending_word_hides_all_and_keeps_focus(skip_list, window, re
     assert table.currentIndex() == current and table.hasFocus()
     assert table.study_input.position == 0
     assert all(row.hidden for row in page.model.rows)
-    assert page.global_hidden and window.global_hide_button.isChecked()
+    assert page.global_hidden and not window.global_hide_button.isChecked()
     assert repo.study_backup() == before
 
 
@@ -215,27 +217,36 @@ def test_ordinary_enter_reveals_last_then_hides_page_and_wraps(window, repo, qtb
     qtbot.keyClick(table, Qt.Key.Key_Enter, Qt.KeyboardModifier.KeypadModifier)
     assert table.currentIndex() == table._entry_index(words[0].id)
     assert table.hasFocus() and all(row.hidden for row in table.model().rows)
-    assert window.global_hidden and window.global_hide_button.isChecked()
+    assert window.global_hidden and not window.global_hide_button.isChecked()
     assert repo.list_entries() == before
 
 
 @pytest.mark.parametrize('page', ['pending', 'all', 'learned'])
-def test_enter_search_wrap_hides_only_results_and_can_reveal_next_cycle(window, repo, qtbot, page):
+def test_enter_search_wrap_keeps_results_shown_and_normal_cache_unchanged(window, repo, qtbot, page):
     outside = repo.save(WordEntry('outside', [Sense('n.', '外部')], learned=page == 'learned'))
     words = [repo.save(WordEntry(f'match-{i}', [Sense('n.', '词')], learned=page == 'learned'))
              for i in range(2)]
     window.set_filter(page)
     window.reveal(outside.id, True)
+    normal = window.list_state.normal[page]
+    normal_revealed = set(normal.revealed_ids)
+    normal_eye = window.list_state.eye_visible[page]
     window.search_box.setText('match')
     table = window.table
     table.select_entry(words[-1].id)
     table.setFocus()
     qtbot.keyClick(table, Qt.Key.Key_Return)
     assert table.currentIndex() == table._entry_index(words[0].id)
-    assert all(row.hidden for row in table.model().rows)
-    assert outside.id in window.revealed
+    assert all(not row.hidden for row in table.model().rows)
+    assert window.global_hide_button.isHidden()
+    assert normal.revealed_ids == normal_revealed
+    assert window.list_state.eye_visible[page] == normal_eye
     qtbot.keyClick(table, Qt.Key.Key_Return)
     assert table.currentIndex() == table._entry_index(words[1].id)
-    assert all(not row.hidden for row in table.model().rows if row.entry.id == words[0].id)
-    assert all(row.hidden for row in table.model().rows if row.entry.id == words[1].id)
+    assert all(not row.hidden for row in table.model().rows)
+    assert normal.revealed_ids == normal_revealed
+    assert window.list_state.eye_visible[page] == normal_eye
     assert window.search_box.text() == 'match'
+    window.search_box.clear()
+    assert {row.entry.id for row in table.model().rows if not row.hidden} == {outside.id}
+    assert window.list_state.eye_visible[page] == normal_eye

@@ -2,6 +2,7 @@
 from pathlib import Path
 from contextlib import contextmanager
 from datetime import datetime
+from functools import wraps
 import json
 import random
 import sqlite3
@@ -15,6 +16,20 @@ from .learning import (STAGE_GAPS, SpellingHideSettings, StudyContext, StudyDraw
                        StudyTaskHistory, next_stage, study_due, study_timestamp)
 from .study_transfer import RECORD_FIELDS, StudyBackup
 from .migration import migrate_database
+from .list_query import (PAGE_SIZE, export_entries as query_export_entries,
+                         get_entries_by_ids as query_entries_by_ids, query_page)
+
+
+def _content_write(method):
+    """Publish local cache invalidation only after a content write succeeds."""
+    @wraps(method)
+    def tracked(self, *args, **kwargs):
+        before = self.connection.total_changes
+        value = method(self, *args, **kwargs)
+        if self.connection.total_changes != before:
+            self.content_revision += 1
+        return value
+    return tracked
 
 
 class Repository:
@@ -22,6 +37,8 @@ class Repository:
         path = Path(path)
         path.parent.mkdir(parents=True, exist_ok=True)
         self.path = path
+        self.content_revision = 0
+        self.spelling_settings_revision = 0
         self.connection = sqlite3.connect(path, timeout=3)
         self.connection.row_factory = sqlite3.Row
         self.connection.execute("PRAGMA foreign_keys=ON")
@@ -85,9 +102,19 @@ class Repository:
                          bool(row["important"]), bool(row["learned"]), entry_id, row["sort_order"], row["phonetic"])
 
     def list_entries(self) -> list[WordEntry]:
-        return [self.get(row[0]) for row in self.connection.execute(
-            "SELECT id FROM words ORDER BY learned,sort_order,id")]
+        return self.get_entries_by_ids(row[0] for row in self.connection.execute(
+            "SELECT id FROM words ORDER BY learned,sort_order,id"))
 
+    def get_entries_by_ids(self, ids) -> list[WordEntry]:
+        return query_entries_by_ids(self.connection, ids)
+
+    def query_page(self, category, keyword="", page_number=1, anchor_id=None, page_size=PAGE_SIZE):
+        return query_page(self.connection, category, keyword, page_number, anchor_id, page_size)
+
+    def export_entries(self, category, keyword="") -> list[WordEntry]:
+        return query_export_entries(self.connection, category, keyword)
+
+    @_content_write
     def move_related(self, entry_id: int, source: int, target: int):
         with self.connection:
             self.connection.execute("BEGIN IMMEDIATE")
@@ -102,12 +129,14 @@ class Repository:
             self.connection.executemany("UPDATE related_words SET position=? WHERE id=? AND word_id=?",
                                         [(position, child_id, entry_id) for position, child_id in enumerate(ids)])
 
+    @_content_write
     def save(self, draft: WordEntry) -> WordEntry:
         entry = clean_entry(draft)
         with self._transaction() as counters:
             self._save_entry(entry, counters)
         return self.get(entry.id)
 
+    @_content_write
     def set_phonetic(self, entry_id: int, phonetic: str, related_text: str | None = None) -> WordEntry:
         """Update only a pronunciation, matching related words by name rather than position."""
         if not isinstance(phonetic, str):
@@ -133,6 +162,7 @@ class Repository:
             'SELECT id,text FROM related_words WHERE word_id=? ORDER BY position,id', (entry_id,))
             if row['text'].strip().casefold() == text.strip().casefold()), None)
 
+    @_content_write
     def sync_import_translation(self, entry_id: int, sense: Sense,
                                 related_text: str | None = None) -> WordEntry:
         # Use the existing word validator, retaining even an explicitly empty translation.
@@ -160,6 +190,7 @@ class Repository:
             current = self.get(entry_id)
         return current
 
+    @_content_write
     def append_import_related(self, entry_id: int, related: RelatedWord) -> WordEntry:
         related = clean_word_content(related)
         with self.connection:
@@ -178,6 +209,7 @@ class Repository:
             current = self.get(entry_id)
         return current
 
+    @_content_write
     def replace_word_content(self, expected: WordEntry, owner: int, word: RelatedWord):
         """Replace just the target word and its definitions from a list snapshot."""
         word = clean_word_content(word)
@@ -217,6 +249,7 @@ class Repository:
                 return "related_id", child[0]
         raise ValueError("释义所属单词已失效，请重试。")
 
+    @_content_write
     def remove_inline_content(self, expected: WordEntry, owner: int, sense: int | None,
                               context: StudyContext | None):
         """Remove a blank list field while the displayed target is still current."""
@@ -250,6 +283,7 @@ class Repository:
             self.connection.execute(
                 "UPDATE words SET updated_at=strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id=?", (entry.id,))
 
+    @_content_write
     def move_sense(self, entry_id: int, owner: int, source: int, target: int):
         """Reorder definitions of one word without rewriting content or study state."""
         with self.connection:
@@ -301,6 +335,7 @@ class Repository:
                 "INSERT INTO senses(related_id,pos,translation,position) VALUES (?,?,?,?)",
                 [(cursor.lastrowid, s.pos, s.translation, j) for j, s in enumerate(child.senses)])
 
+    @_content_write
     def import_entries(self, drafts: list[WordEntry]) -> ImportResult:
         entries = [(index, clean_entry(draft)) for index, draft in enumerate(drafts)]
         for _, entry in entries:
@@ -324,6 +359,7 @@ class Repository:
                     result.inserted += 1
         return result
 
+    @_content_write
     def replace_imports(self, choices: list[ImportConflict]) -> dict[str, WordEntry]:
         """Adopt in place, moving to a category's end only when learned state changes."""
         entries = [clean_entry(choice.incoming) for choice in choices]
@@ -345,6 +381,7 @@ class Repository:
                 adopted[normalized] = self.get(entry.id)
         return adopted
 
+    @_content_write
     def auto_merge_imports(self, choices: list[ImportConflict]) -> AutoMergeResult:
         """Process candidates once in order, committing all safe changes atomically."""
         result = AutoMergeResult()
@@ -372,10 +409,11 @@ class Repository:
                 result.entries[name] = current
         return result
 
+    @_content_write
     def batch_update_sort_orders(self, updates: dict[int, int]):
         """One UPDATE for all changed ranks; missing IDs and invalid ranks fail atomically."""
         if not updates:
-            return
+            return {}
         if any(type(key) is not int or type(value) is not int or
                not 1 <= value <= 9223372036854775807 for key, value in updates.items()):
             raise ValueError("排序号必须是 SQLite 可保存的正整数。")
@@ -388,7 +426,7 @@ class Repository:
         changed = {row["id"]: updates[row["id"]] for row in rows
                    if row["sort_order"] != updates[row["id"]]}
         if not changed:
-            return
+            return {}
         with self._transaction() as counters:
             self.connection.execute("""WITH updates AS (
                 SELECT CAST(key AS INTEGER) AS id, value AS sort_order FROM json_each(?)
@@ -397,31 +435,49 @@ class Repository:
                 WHERE id IN (SELECT id FROM updates)""", (json.dumps(changed),))
             for row in rows:
                 counters[row["learned"]] = max(counters[row["learned"]], updates[row["id"]])
+        return changed
 
+    @_content_write
     def move_entry(self, entry_id: int, target_index: int):
-        entry = self.get(entry_id)
-        entries = [item for item in self.list_entries() if item.learned == entry.learned]
-        source = next(i for i, item in enumerate(entries) if item.id == entry_id)
-        if not 0 <= target_index < len(entries):
-            raise ValueError("无效的目标位置。")
-        if source == target_index:
-            return
-        entries.insert(target_index, entries.pop(source))
-        rank = entries[target_index - 1].sort_order + 1 if target_index else 1
-        updates = {entry_id: rank}
-        for item in entries[target_index + 1:]:
-            if item.sort_order > rank:
-                break
-            rank += 1
-            updates[item.id] = rank
-        self.batch_update_sort_orders(updates)
+        # Read only ordering metadata; never hydrate the words being shifted.
+        with self.connection:
+            self.connection.execute("BEGIN IMMEDIATE")
+            entry = self.connection.execute(
+                "SELECT learned,sort_order,id FROM words WHERE id=?", (entry_id,)).fetchone()
+            if entry is None:
+                raise ValueError("该单词已不存在。")
+            learned = entry["learned"]
+            total = self.connection.execute(
+                "SELECT COUNT(*) FROM words WHERE learned=?", (learned,)).fetchone()[0]
+            if type(target_index) is not int or not 0 <= target_index < total:
+                raise ValueError("无效的目标位置。")
+            source = self.connection.execute("""SELECT COUNT(*) FROM words
+                WHERE learned=? AND (sort_order,id)<(?,?)""",
+                (learned, entry["sort_order"], entry_id)).fetchone()[0]
+            if source == target_index:
+                return {}
+            previous = self.connection.execute("""SELECT sort_order,id FROM words
+                WHERE learned=? AND id<>? ORDER BY sort_order,id LIMIT 1 OFFSET ?""",
+                (learned, entry_id, target_index - 1)).fetchone() if target_index else None
+            rank = previous["sort_order"] + 1 if previous is not None else 1
+            updates = {entry_id: rank}
+            suffix = self.connection.execute("""SELECT id,sort_order FROM words
+                WHERE learned=? AND id<>? ORDER BY sort_order,id LIMIT -1 OFFSET ?""",
+                (learned, entry_id, target_index))
+            for item in suffix:
+                if item["sort_order"] > rank:
+                    break
+                rank += 1
+                updates[item["id"]] = rank
+            return self.batch_update_sort_orders(updates)
 
+    @_content_write
     def shuffle_entries(self, page: str):
         if page not in {"pending", "learned", "all"}:
             raise ValueError("无效的随机排列分类。")
         groups = {False: [], True: []}
-        for entry in self.list_entries():
-            groups[entry.learned].append(entry)
+        for row in self.connection.execute("SELECT id,learned,sort_order FROM words ORDER BY learned,sort_order,id"):
+            groups[bool(row["learned"])].append(row)
         states = (False, True) if page == "all" else (page == "learned",)
         updates = {}
         for learned in states:
@@ -429,10 +485,11 @@ class Repository:
             if len(entries) < 2:
                 continue
             random.shuffle(entries)
-            updates.update({entry.id: number for number, entry in enumerate(entries, 1)
-                            if entry.sort_order != number})
-        self.batch_update_sort_orders(updates)
+            updates.update({entry["id"]: number for number, entry in enumerate(entries, 1)
+                            if entry["sort_order"] != number})
+        return self.batch_update_sort_orders(updates)
 
+    @_content_write
     def delete(self, entry_id: int, context: StudyContext | None = None):
         with self.connection:
             self.connection.execute('BEGIN IMMEDIATE')
@@ -458,20 +515,24 @@ class Repository:
         """Clear the requested scope atomically, including dependent word content."""
         if command not in CLEANUP_COMMANDS:
             raise ValueError("无效的清空命令。")
+        removed_words = 0
         with self._transaction() as counters:
             self.connection.execute('BEGIN IMMEDIATE')
             if command == 'clean vocabulary only':
-                self.connection.execute('''DELETE FROM words WHERE NOT EXISTS
-                    (SELECT 1 FROM memorize_vocabulary_17day WHERE word_id=words.id)''')
+                removed_words = self.connection.execute('''DELETE FROM words WHERE NOT EXISTS
+                    (SELECT 1 FROM memorize_vocabulary_17day WHERE word_id=words.id)''').rowcount
             elif command == 'remove all':
-                self.connection.execute('DELETE FROM words')
+                removed_words = self.connection.execute('DELETE FROM words').rowcount
                 counters[:] = [0, 0]
             if command != 'clean vocabulary only':
                 self.connection.execute('DELETE FROM memorize_vocabulary_17day')
                 self.connection.execute('DELETE FROM study_task_history')
                 self.connection.execute('''DELETE FROM settings WHERE key IN
                     ('study_last_add_new_vocabulary', 'study17.group_counter')''')
+        if removed_words:
+            self.content_revision += 1
 
+    @_content_write
     def set_flag(self, entry_id: int, flag: str, value: bool):
         if flag not in {"important", "learned"}:
             raise ValueError("不支持的属性")
@@ -505,11 +566,11 @@ class Repository:
                 ('study17.groups_per_day', str(settings.groups_per_day)),
             ])
 
-    def prepare_study(self, context: StudyContext) -> list[StudyTask]:
+    def prepare_study(self, context: StudyContext, entries_by_id=None) -> list[StudyTask]:
         with self.connection:
             self.connection.execute('BEGIN IMMEDIATE')
             self._draw_study(context)
-        return self.study_tasks(context)
+        return self.study_tasks(context, entries_by_id)
 
     _NEW_STUDY_WORDS = '''FROM words WHERE learned=0 AND NOT EXISTS
         (SELECT 1 FROM memorize_vocabulary_17day WHERE word_id=words.id)'''
@@ -550,8 +611,11 @@ class Repository:
         ])
 
     def set_study_spelling_hide_settings(self, settings: SpellingHideSettings):
+        previous = self.study_spelling_hide_settings()
         with self.connection:
             self._write_study_spelling_hide_settings(settings)
+        if settings != previous:
+            self.spelling_settings_revision += 1
 
     def initialize_study_new_words(self):
         """Run once at application startup, never when opening worker connections."""
@@ -583,10 +647,15 @@ class Repository:
         if generated is not None and generated[0] == context.day.isoformat():
             return
         settings = self.study_draw_settings()
-        ids = [row[0] for row in self.connection.execute(
-            'SELECT id ' + self._NEW_STUDY_WORDS + ' ORDER BY random() LIMIT ?', (settings.daily_word_count,))]
+        candidates = self.connection.execute('SELECT id,important ' + self._NEW_STUDY_WORDS).fetchall()
+        important_ids = [row['id'] for row in candidates if row['important']]
+        ids = random.sample(important_ids, min(settings.daily_word_count * 4 // 5, len(important_ids)))
+        selected = set(ids)
+        remaining = [row['id'] for row in candidates if row['id'] not in selected]
+        ids.extend(random.sample(remaining, min(settings.daily_word_count - len(ids), len(remaining))))
         if not ids:
             return
+        random.shuffle(ids)
         counter = self.connection.execute("SELECT value FROM settings WHERE key='study17.group_counter'").fetchone()
         maximum = int(counter[0]) if counter else 0
         self.connection.executemany('''INSERT INTO memorize_vocabulary_17day
@@ -606,22 +675,31 @@ class Repository:
         wait = 'CASE stage ' + ' '.join(f'WHEN {stage} THEN {gap}' for stage, gap in STAGE_GAPS.items()) + ' END'
         return f"stage<>0 AND (stage=1 OR julianday(?)-julianday(last_completed_on)>={wait})"
 
-    def study_tasks(self, context: StudyContext) -> list[StudyTask]:
+    def study_tasks(self, context: StudyContext, entries_by_id=None) -> list[StudyTask]:
         flag = "afternoon_done" if context.afternoon else "morning_done"
         rows = self.connection.execute(f"""SELECT word_id,group_number,stage FROM memorize_vocabulary_17day
             WHERE {flag}=0 AND ({self._study_due_clause()})
             ORDER BY group_number,word_id""", (context.day.isoformat(),)).fetchall()
-        return [StudyTask(self.get(row['word_id']), row['group_number'], row['stage'], row['stage'] != 1)
+        entries = self._study_entries(rows, entries_by_id)
+        return [StudyTask(entries[row['word_id']], row['group_number'], row['stage'], row['stage'] != 1)
                 for row in rows]
 
-    def study_completed_tasks(self, context: StudyContext) -> list[StudyTask]:
+    def _study_entries(self, rows, entries_by_id):
+        entries = entries_by_id if entries_by_id is not None else {}
+        missing = [row['word_id'] for row in rows if row['word_id'] not in entries]
+        if missing:
+            entries.update({entry.id: entry for entry in self.get_entries_by_ids(missing)})
+        return entries
+
+    def study_completed_tasks(self, context: StudyContext, entries_by_id=None) -> list[StudyTask]:
         flag = 'afternoon_done' if context.afternoon else 'morning_done'
         day = context.day.isoformat()
         rows = self.connection.execute(f'''SELECT word_id,group_number,stage,last_completed_on
             FROM memorize_vocabulary_17day
             WHERE ({flag}=1 AND ({self._study_due_clause()})) OR last_completed_on=?
             ORDER BY group_number,word_id''', (day, day)).fetchall()
-        return [StudyTask(self.get(row['word_id']), row['group_number'], row['stage'],
+        entries = self._study_entries(rows, entries_by_id)
+        return [StudyTask(entries[row['word_id']], row['group_number'], row['stage'],
                           not (row['stage'] == 1 or (row['stage'] == 2 and row['last_completed_on'] == day)))
                 for row in rows]
 
@@ -712,6 +790,7 @@ class Repository:
 
     def replace_study_progress(self, backup: StudyBackup):
         """Resolve final local word IDs, then atomically replace progress and its settings."""
+        previous_spelling_settings = self.study_spelling_hide_settings()
         with self.connection:
             self.connection.execute('BEGIN IMMEDIATE')
             values = []
@@ -741,6 +820,8 @@ class Repository:
                 ('study17.groups_per_day', str(backup.groups_per_day)),
             ])
             self._write_study_spelling_hide_settings(backup.spelling_hide)
+        if backup.spelling_hide != previous_spelling_settings:
+            self.spelling_settings_revision += 1
 
     def complete_study(self, word_id: int, context: StudyContext, *, duration_seconds=0,
                        instant=None) -> tuple[StudyTaskHistory, int] | bool:

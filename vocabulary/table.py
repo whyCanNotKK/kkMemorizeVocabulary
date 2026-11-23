@@ -1,6 +1,7 @@
 from dataclasses import dataclass, replace
 from contextlib import contextmanager
 from copy import deepcopy
+from collections import OrderedDict
 import math
 import time
 from html import escape
@@ -36,7 +37,7 @@ CELL_REMOVED = object()
 
 
 def learned_action_label(learned):
-    return '标记为"待记"' if learned else '标记为"已记下"'
+    return '标记为"待记" · F4' if learned else '标记为"记下" · F4'
 
 
 @dataclass
@@ -97,6 +98,28 @@ class WordTableModel(QAbstractTableModel):
         self.rows = [row for entry in entries
                      for row in self._project_entry(entry, entry.id not in revealed)]
         self.endResetModel()
+
+    def replace_entry(self, entry, revealed=None):
+        """Replace one loaded aggregate without resetting unrelated table rows."""
+        group = [i for i, row in enumerate(self.rows) if row.entry.id == entry.id]
+        if not group:
+            return range(0)
+        first, last = group[0], group[-1]
+        hidden = self.rows[first].hidden if revealed is None else not revealed
+        projected = self._project_entry(entry, hidden)
+        delta = len(projected) - len(group)
+        if delta > 0:
+            self.beginInsertRows(QModelIndex(), last + 1, last + delta)
+        elif delta < 0:
+            self.beginRemoveRows(QModelIndex(), first + len(projected), last)
+        self.rows[first:last + 1] = projected
+        if delta > 0:
+            self.endInsertRows()
+        elif delta < 0:
+            self.endRemoveRows()
+        end = first + len(projected) - 1
+        self.dataChanged.emit(self.index(first, 0), self.index(end, self.columnCount() - 1))
+        return range(first, end + 1)
 
     def _replace_projection(self, entry, owner):
         group = [i for i, row in enumerate(self.rows) if row.entry.id == entry.id]
@@ -251,6 +274,50 @@ class WordDelegate(QStyledItemDelegate):
         self.last_editor_field = None
         self._committing = False
         self.removed_field = None
+        # Layout documents are expensive; paint, hit testing and measurement share
+        # the same bounded cache. Keys include content, font and live column width.
+        self._documents = OrderedDict()
+        self._heights = OrderedDict()
+        self._measure_document = None
+        self._measure_font = None
+
+    def translation_document(self, text, font, width):
+        key = (text, font.key(), max(20, width))
+        document = self._documents.get(key)
+        if document is None:
+            document = text_document(text, font, width)
+            self._documents[key] = document
+            if len(self._documents) > 1024:
+                self._documents.popitem(last=False)
+        else:
+            self._documents.move_to_end(key)
+        return document
+
+    def translation_height(self, text, font, width):
+        # Measuring every row must not allocate a QObject tree for every text.
+        # One scratch document gives identical Qt wrapping; only visible cells
+        # need retained documents for painting and hit testing.
+        width = max(20, width)
+        font_key = font.key()
+        key = (text, font_key, width)
+        if key in self._heights:
+            self._heights.move_to_end(key)
+            return self._heights[key]
+        if self._measure_document is None:
+            self._measure_document = text_document('', font, width)
+            self._measure_font = font_key
+        document = self._measure_document
+        if self._measure_font != font_key:
+            document.setDefaultFont(font)
+            self._measure_font = font_key
+        if document.textWidth() != width:
+            document.setTextWidth(width)
+        document.setPlainText(text)
+        height = math.ceil(document.size().height())
+        self._heights[key] = height
+        if len(self._heights) > 2048:
+            self._heights.popitem(last=False)
+        return height
 
     @staticmethod
     def mask_rect(rect):
@@ -350,7 +417,7 @@ class WordDelegate(QStyledItemDelegate):
         rect = self.view.visualRect(index)
         if not rect.contains(point.toPoint() if isinstance(point, QPointF) else point):
             return False
-        document = text_document(index.data(), self.view.font(), rect.width() - 24)
+        document = self.translation_document(index.data(), self.view.font(), rect.width() - 24)
         local = QPointF(point) - QPointF(rect.left() + 12, rect.top() + row.top_padding)
         return document.documentLayout().hitTest(local, Qt.HitTestAccuracy.ExactHit) >= 0
 
@@ -448,7 +515,7 @@ class WordDelegate(QStyledItemDelegate):
                 painter.setPen(QColor("#bdc8d5"))
                 painter.drawText(badge, Qt.AlignmentFlag.AlignCenter, text)
             elif not row.hidden:
-                document = text_document(text, font, rect.width() - 24)
+                document = self.translation_document(text, font, rect.width() - 24)
                 painter.translate(rect.left() + 12, rect.top() + top)
                 context = document.documentLayout().PaintContext()
                 context.palette.setColor(context.palette.ColorRole.Text, QColor(TEXT))
@@ -461,13 +528,19 @@ class WordDelegate(QStyledItemDelegate):
                 and self.edit_index == index):
             return QSize(100, min(self.editor.content_height, max(36, self.view.viewport().height())))
         if row and not row.hidden and index.column() == 3:
-            document = text_document(index.data() or "", option.font, self.view.columnWidth(3) - 24)
+            height = self.translation_height(index.data() or "", option.font,
+                                             self.view.columnWidth(3) - 24)
             return QSize(100, max(row.minimum_height,
-                                  math.ceil(document.size().height()) + row.top_padding + row.bottom_padding))
+                                  height + row.top_padding + row.bottom_padding))
         return QSize(50, row.minimum_height if row else 36)
 
     def createEditor(self, parent, option, index):
-        if not self.before_edit():
+        if not self.view.isEnabled() or not self.before_edit():
+            return None
+        if not self.view.isEnabled():
+            row = index.data(Qt.ItemDataRole.UserRole)
+            if row is not None:
+                self.view.editDeferred.emit((row.entry.id, row.owner, row.sense, index.column()))
             return None
         if index.column() == 2:
             editor = PosPicker(parent)
@@ -801,6 +874,7 @@ class WordTable(QTableView):
     DEFAULT_ACTION_WIDTHS = {(False, True): 188, (False, False): 154, (True, False): 88}
 
     editPreparationRequested = Signal(int, int)
+    editDeferred = Signal(object)
     copyRequested = Signal(str)
     wholeWordCopyRequested = Signal(object)
     pasteRejected = Signal(str)
@@ -818,6 +892,7 @@ class WordTable(QTableView):
         self._mouse_moved = False
         self._last_mouse_position = QCursor.pos()
         self._hovered_index = QPersistentModelIndex()
+        self._backtab_edit_target = None
         self._action_widths = {}
         self._width_mode = None
         self._adjusting_columns = False
@@ -841,6 +916,8 @@ class WordTable(QTableView):
         self.action_column = model.action_column
         self.setModel(model)
         self.delegate = WordDelegate(self, before_edit)
+        model.modelAboutToBeReset.connect(self.delegate._documents.clear)
+        model.modelAboutToBeReset.connect(self.delegate._heights.clear)
         model.modelAboutToBeReset.connect(self.reset_study_input)
         model.modelAboutToBeReset.connect(self.reset_mouse_target)
         self.delegate.editingChanged.connect(self.reset_study_input)
@@ -891,8 +968,8 @@ class WordTable(QTableView):
         self.shuffle_button.setIcon(icon("shuffle"))
         self.shuffle_button.setFixedSize(30, 30)
         self.shuffle_button.setObjectName("quiet")
-        self.shuffle_button.setToolTip("随机排列当前待记单词")
-        self.shuffle_button.setAccessibleName("随机排列待记单词")
+        self.shuffle_button.setToolTip("随机排列全部待记单词")
+        self.shuffle_button.setAccessibleName("随机排列全部待记单词")
         self.edit_word_shortcut = ""
         self.shuffle_button.clicked.connect(self.shuffleRequested)
         self._layout_shuffle_button()
@@ -933,7 +1010,8 @@ class WordTable(QTableView):
 
     def _resize_column_rows(self):
         with self.preserve_view():
-            self.resizeRowsToContents()
+            self._resize_projection(range(self.model().rowCount()))
+        self._update_hover()
 
     def _fit_columns(self):
         """Keep the translation usable by reclaiming spare width from other columns."""
@@ -1084,12 +1162,14 @@ class WordTable(QTableView):
         self.reorder_enabled = self.show_drag_handle and not searching
         self.search_active = searching
         mode = (self.study_mode, self.show_drag_handle)
-        self._width_mode = mode
-        self.setColumnWidth(self.action_column, self._action_widths.get(mode, self.minimum_action_width()))
-        self._column_layout_timer.start(0)
+        if self._width_mode != mode:
+            self._width_mode = mode
+            self.setColumnWidth(self.action_column, self._action_widths.get(mode, self.minimum_action_width()))
+            self._column_layout_timer.start(0)
         label = {"pending": "待记", "all": "全部", "learned": "已记"}.get(page, "")
-        self.shuffle_button.setToolTip(f"随机排列当前{label}单词")
-        self.shuffle_button.setAccessibleName(f"随机排列{label}单词")
+        scope = label if page == "all" else "全部" + label
+        self.shuffle_button.setToolTip(f"随机排列{scope}单词")
+        self.shuffle_button.setAccessibleName(f"随机排列{scope}单词")
         self.shuffle_button.setVisible(not self.study_mode and not searching)
         self.shuffle_button.setEnabled(not self.study_mode and not searching and shuffle_count >= 2)
         self.viewport().update()
@@ -1119,15 +1199,59 @@ class WordTable(QTableView):
             self._selecting_group = False
 
     def _resize_projection(self, rows):
+        option = QStyleOptionViewItem()
+        option.font = self.font()
+        minimum = self.verticalHeader().minimumSectionSize()
         for row in rows:
-            self.resizeRowToContents(row)
+            # All other columns use the same row minimum. Measuring only the
+            # translation avoids Qt asking every cell for identical hints.
+            height = self.delegate.sizeHint(option, self.model().index(row, 3)).height()
+            self.setRowHeight(row, max(minimum, height))
 
-    def update_spans(self):
+    def _update_spans(self):
         self.clearSpans()
         for i, row in enumerate(self.model().rows):
             if row.hidden:
                 self.setSpan(i, 2, 1, 2)
-        self.resizeRowsToContents()
+
+    def update_spans(self):
+        self._update_spans()
+        self._resize_projection(range(self.model().rowCount()))
+
+    def replace_entries(self, entries, revealed, *, preserve=True):
+        """Project a loaded page; this method never accesses persistence."""
+        entries = list(entries)
+        if self.search_active:
+            revealed = {entry.id for entry in entries}
+
+        def project():
+            self.model().populate(entries, revealed)
+            self.update_spans()
+
+        if preserve:
+            with self.preserve_view():
+                project()
+        else:
+            project()
+
+    def replace_entry(self, entry, revealed=None):
+        """Update one loaded group and resize only its new projection."""
+        if self.search_active:
+            revealed = True
+        # Partial projections need the same transient-state cleanup as a model
+        # reset. A tooltip or spelling prefix belongs to the previous layout.
+        QToolTip.hideText()
+        self.reset_mouse_target()
+        self.reset_study_input()
+        self.cancel_pending_copy()
+        self._hovered_index = QPersistentModelIndex()
+        with self.preserve_view():
+            rows = self.model().replace_entry(entry, revealed)
+            if rows:
+                self._update_spans()
+                self._resize_projection(rows)
+        self._update_hover()
+        self.viewport().update()
 
     def _entry_index(self, entry_id, owner=-1, sense=0, column=1):
         matching = [i for i, row in enumerate(self.model().rows) if row.entry.id == entry_id]
@@ -1159,6 +1283,12 @@ class WordTable(QTableView):
             self.setCurrentIndex(self._entry_index(*part) if part else QModelIndex())
             if not selected:
                 self.clearSelection()
+            elif part:
+                # Inserting/removing rows can leave the same current index in
+                # place, so Qt emits no selection change to expand the group.
+                group = [i for i, row in enumerate(self.model().rows) if row.entry.id == part[0]]
+                if group:
+                    self._select_group(group)
             self.doItemsLayout()
             self.verticalScrollBar().setValue(position)
         finally:
@@ -1183,6 +1313,8 @@ class WordTable(QTableView):
 
     def set_entry_revealed(self, entry_id, expanded):
         """The page owns reveal state; restore selection after its projection resets."""
+        if self.search_active and not expanded:
+            return
         self.revealRequested.emit(entry_id, expanded)
         self.select_entry(entry_id)
 
@@ -1204,19 +1336,33 @@ class WordTable(QTableView):
     def edit_field(self, target):
         """Resolve a logical field again after draft handling or a saved-data refresh."""
         if not self.delegate.before_edit():
-            return
+            return False
         self.editPreparationRequested.emit(target[0], target[3])
+        if not self.isEnabled():
+            self.editDeferred.emit(tuple(target))
+            return False
         entry_id, owner, sense, column = target
         number = next((i for i, row in enumerate(self.model().rows)
                        if (row.entry.id, row.owner, row.sense) == target[:3]), None)
         if number is None:
             self.setFocus()
-            return
+            self._backtab_edit_target = None
+            return False
         index = self.model().index(number, column)
         if self.model().flags(index) & Qt.ItemFlag.ItemIsEditable:
             self.setCurrentIndex(index)
             self.scrollTo(index, QAbstractItemView.ScrollHint.EnsureVisible)
             self.edit(index)
+            if self._backtab_edit_target == target and isinstance(self.delegate.editor, WordNameEditor):
+                self.delegate.editor.phonetic.setFocus(Qt.FocusReason.BacktabFocusReason)
+            self._backtab_edit_target = None
+            return self.delegate.editor is not None
+        self._backtab_edit_target = None
+        return False
+
+    def cancel_deferred_edit(self):
+        """Drop the field-focus detail when a deferred edit intent is canceled."""
+        self._backtab_edit_target = None
 
     def edit_from_f2(self):
         """Commit the active editor before opening the logical F2 target."""
@@ -1271,9 +1417,8 @@ class WordTable(QTableView):
         for number in range(position + step, len(fields) if step > 0 else -1, step):
             destination = self.delegate.target_after_removal(fields[number])
             if destination is not None and (visible_ids is None or destination[0] in visible_ids):
+                self._backtab_edit_target = destination if step < 0 and destination[3] == 1 else None
                 self.edit_field(destination)
-                if step < 0 and isinstance(self.delegate.editor, WordNameEditor):
-                    self.delegate.editor.phonetic.setFocus(Qt.FocusReason.BacktabFocusReason)
                 return
         self.setFocus()
 
@@ -1409,6 +1554,9 @@ class WordTable(QTableView):
             removed = False
             if self.delegate.editor:
                 if not self.delegate.submit():
+                    event.accept()
+                    return
+                if not self.isEnabled():
                     event.accept()
                     return
                 removed = self.delegate.removed_field is not None
@@ -1665,13 +1813,16 @@ class WordTable(QTableView):
                        Qt.Key.Key_A, Qt.Key.Key_S, Qt.Key.Key_D):
                 event.accept()
                 return
-            if key == Qt.Key.Key_Delete:
+            if key in (Qt.Key.Key_F1, Qt.Key.Key_F4, Qt.Key.Key_Delete):
                 current = self.currentIndex()
                 row = current.data(Qt.ItemDataRole.UserRole)
-                if (not self.study_mode and not self.dragging and not event.isAutoRepeat()
+                if (not self.study_mode and self.can_navigate_entries() and not event.isAutoRepeat()
+                        and not QApplication.activeModalWidget() and not QApplication.activePopupWidget()
                         and row is not None and self.selectionModel().isSelected(current)):
                     self.cancel_pending_copy()
-                    self.actionRequested.emit(row.entry.id, "trash")
+                    action = {Qt.Key.Key_F1: "important", Qt.Key.Key_F4: "learned",
+                              Qt.Key.Key_Delete: "trash"}[key]
+                    self.actionRequested.emit(row.entry.id, action)
                 event.accept()
                 return
             if key == Qt.Key.Key_F2:
@@ -1746,7 +1897,7 @@ class WordTable(QTableView):
                 return
         self.cancel_pending_copy()
         self.reset_study_input()
-        if last:
+        if last and not self.search_active:
             self.entryCycleRestartRequested.emit()
         self.select_entry(pending[(pending.index(entry_id) + 1) % len(pending)], scroll=True)
         self.setFocus()
@@ -1887,16 +2038,7 @@ class WordTable(QTableView):
             target = self.delegate.target_after_removal(target)
             if target is None:
                 return
-        if not self.delegate.before_edit():
-            return
-        matching = next((i for i, item in enumerate(self.model().rows)
-                         if (item.entry.id, item.owner, item.sense) == target[:3]), None)
-        if matching is None:
-            return
-        index = self.model().index(matching, target[3])
-        self.setCurrentIndex(index)
-        self.edit(index)
-        if isinstance(self.delegate.editor, PosPicker):
+        if self.edit_field(target) and isinstance(self.delegate.editor, PosPicker):
             self.delegate.editor.showPopup()
 
     def viewportEvent(self, event):
@@ -1928,7 +2070,7 @@ class WordTable(QTableView):
                             text = labels[name]
                 elif index.column() == 0 and row.first:
                     text = ('' if self.study_mode else
-                            tooltip_lines("取消重点" if row.entry.important else "设为重点",
+                            tooltip_lines("取消重点 · F1" if row.entry.important else "设置为重点 · F1",
                                           mouse_action_hint("整词复制", "right")))
                 elif row.hidden and index.column() in (2, 3):
                     if self.delegate.mask_hit(index, event.pos()):
@@ -1947,8 +2089,10 @@ class WordTable(QTableView):
                 elif index.column() == 3 and not row.hidden:
                     lines = ([mouse_action_hint("复制", "left")]
                              if self.delegate.copy_hit(index, event.pos()) else [])
-                    text = tooltip_lines(*lines, mouse_action_hint("编辑", "right", "F2"),
-                                          mouse_action_hint("隐藏释义", "left", "空格", modifier="Ctrl"))
+                    lines.append(mouse_action_hint("编辑", "right", "F2"))
+                    if not self.search_active:
+                        lines.append(mouse_action_hint("隐藏释义", "left", "空格", modifier="Ctrl"))
+                    text = tooltip_lines(*lines)
                 else:
                     text = index.data(Qt.ItemDataRole.ToolTipRole) or ""
                 if text:

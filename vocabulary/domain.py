@@ -19,7 +19,7 @@ SHORTCUT_LABELS = {
     "add_related": "新增关联词", "remove_related": "删除关联词",
     "add_sense": "新增释义", "remove_sense": "删除释义",
     "save": "保存单词", "important": "单词 重点/非重点",
-    "toggle_visibility": "显示/隐藏 所有释义",
+    "toggle_visibility": "显示/隐藏 本页释义",
     "edit_selected": "编辑选定的单词",
     "focus_search": "搜索单词",
 }

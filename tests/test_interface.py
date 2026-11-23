@@ -860,17 +860,17 @@ def test_global_toggle_only_changes_current_category_and_related_words(window, r
     window.refresh()
     assert all(row.hidden for row in window.model.rows)
     qtbot.mouseClick(window.global_hide_button, Qt.MouseButton.LeftButton)
-    assert not window.global_hide_button.isChecked()
+    assert window.global_hide_button.isChecked()
     assert window.revealed == {pending.id}
     assert not any(row.hidden for row in window.model.rows)
     window.set_filter("learned")
     assert len(window.model.rows) == 1 and window.model.rows[0].hidden
-    assert window.global_hide_button.isChecked()
-    qtbot.mouseClick(window.global_hide_button, Qt.MouseButton.LeftButton)
     assert not window.global_hide_button.isChecked()
+    qtbot.mouseClick(window.global_hide_button, Qt.MouseButton.LeftButton)
+    assert window.global_hide_button.isChecked()
     assert len(window.model.rows) == 2 and not any(row.hidden for row in window.model.rows)
     window.set_filter("pending")
-    assert not window.global_hide_button.isChecked()
+    assert window.global_hide_button.isChecked()
     assert not any(row.hidden for row in window.model.rows)
     qtbot.mouseClick(window.global_hide_button, Qt.MouseButton.LeftButton)
     assert window.model.rowCount() == 1 and window.model.rows[0].hidden
@@ -888,7 +888,7 @@ def test_restart_resets_visibility_after_new_word_and_global_show(window, repo, 
     restarted.show()
     qtbot.wait(20)
     assert restarted.windowTitle() == "kkMemorizeVocabulary"
-    assert restarted.global_hide_button.isChecked()
+    assert not restarted.global_hide_button.isChecked()
     assert all(row.hidden for row in restarted.model.rows)
 
 
@@ -901,7 +901,7 @@ def test_global_toggle_keeps_visibility_when_inline_edit_is_invalid(window, repo
     qtbot.mouseClick(window.global_hide_button, Qt.MouseButton.LeftButton)
     qtbot.wait(20)
     assert window.global_hide_button.isChecked()
-    assert window.global_hidden
+    assert not window.global_hidden
     assert not window.model.rows[0].hidden
     assert window.table.delegate.editor is not None
     assert repo.get(saved.id).senses[0].translation

@@ -1,6 +1,7 @@
 """Opt-in acceptance run for source and bundled builds with isolated data."""
 import json
 from pathlib import Path
+import time
 import traceback
 
 from PySide6.QtCore import QPoint, Qt, QTimer
@@ -31,16 +32,27 @@ def _auto_merge_and_confirm(comparison):
         timer.deleteLater()
 
 
+def _settle_lists(window, timeout=5):
+    deadline = time.monotonic() + timeout
+    while window._list_loading:
+        if time.monotonic() >= deadline:
+            raise TimeoutError("后台分页查询未完成")
+        QTest.qWait(10)
+
+
 def run_smoke(app, window, directory: Path):
     report = {"ok": False, "checks": [], "platform": app.platformName()}
     try:
         window.activateWindow()
         window.raise_()
         QTest.qWait(40)
+        _settle_lists(window)
         assert window.windowTitle() == "kkMemorizeVocabulary"
         assert not any(label.text() == "单词本" for label in window.findChildren(QLabel))
-        assert window.global_hide_button.isChecked()
+        assert not window.global_hide_button.isChecked()
         assert all(row.hidden for row in window.model.rows)
+        assert window.pagination.isVisible()
+        assert len(window.list_state.normal['pending'].entries) <= 500
         assert window.settings_button.text() == "设置"
         assert window.add_related_button.text().startswith("新增关联词 · ")
         assert window.remove_related_button.isHidden()
@@ -99,6 +111,7 @@ def run_smoke(app, window, directory: Path):
             child.rows[0].translation.setPlainText("平静；安宁")
             QTest.keyClick(child.rows[0].translation, Qt.Key.Key_Return, Qt.KeyboardModifier.ControlModifier)
             QTest.qWait(30)
+            _settle_lists(window)
             saved = repo.list_entries()[0]
             assert saved.text == "serendipity" and len(saved.related) == 2
             assert saved.phonetic == "/ˌserənˈdɪpəti/" and saved.related[0].phonetic == "/ˌserənˈdɪpɪtəs/"

@@ -11,6 +11,8 @@ from PySide6.QtWidgets import (
 
 from .domain import SHORTCUT_LABELS, DuplicateWord, RelatedWord, ValidationError, WordContentValidationError, WordEntry
 from .busy_overlay import BusyOverlay
+from .list_controller import ListControllerMixin
+from .pagination import PaginationBar
 from .draft_reset_dialog import DraftResetDialog
 from .unsaved_input_dialog import UnsavedInputDialog
 from .import_dialog import ImportConflictDialog
@@ -32,13 +34,11 @@ from .widgets import FloatingNotice, PosCombo, SearchBox, WordBlock, button, con
 from .word_clipboard import encode
 
 
-class MainWindow(QMainWindow):
+class MainWindow(ListControllerMixin, QMainWindow):
     def __init__(self, repository):
         super().__init__()
         self.repository = repository
-        self.revealed = set()
-        self._global_hidden = {key: True for key in ("pending", "all", "learned")}
-        self._search_hidden = {key: set() for key in self._global_hidden}
+        self.init_lists()
         self.filter_name = "pending"
         self._view_filter = "pending"
         self._filter_scroll = {"pending": 0, "all": 0, "learned": 0}
@@ -121,7 +121,12 @@ class MainWindow(QMainWindow):
         self.table.delegate.editingChanged.connect(self.inline_changed)
         self.table.delegate.contentRemoved.connect(self.inline_content_removed)
         self.table.editPreparationRequested.connect(self.prepare_list_edit)
+        self.table.editDeferred.connect(self.defer_list_edit)
         list_layout.addWidget(self.table, 1)
+        self.pagination = PaginationBar()
+        self.list_loading_label = self.pagination.loading_label
+        self.pagination.pageRequested.connect(self.change_page)
+        list_layout.addWidget(self.pagination)
         self.study_page = StudyPage(repository, self.commit_cell)
         self.destroyed.connect(self.study_page.timer.dispose)
         self.study_page.table.delegate.editingChanged.connect(self.inline_changed)
@@ -134,13 +139,14 @@ class MainWindow(QMainWindow):
             table.pasteRejected.connect(self.toast_paste_error)
         self.study_page.table.relatedMoveRequested.connect(self.move_related_word)
         self.study_page.table.senseMoveRequested.connect(self.move_word_sense)
+        self.study_page.visibilityChanged.connect(self.study_visibility_changed)
         self.study_page.error.connect(lambda text: self.show_notice(text, True))
         self.study_page.hide()
         list_layout.addWidget(self.study_page, 1)
         layout.addWidget(list_panel, 1)
         self.review_keys = ReviewKeyRouter(
             list_panel, lambda: self.study_page.table if self.filter_name == "study17" else self.table,
-            self.search_box)
+            self.search_box, self.enter_search_results)
 
         editor_panel = QFrame()
         self.editor_panel = editor_panel
@@ -412,129 +418,6 @@ class MainWindow(QMainWindow):
         self.centralWidget().layout().activate()
         QTimer.singleShot(0, self.ensure_current_input_visible)
 
-    def refresh(self, entries=None):
-        self.update_tab_tooltips()
-        studying = self.filter_name == "study17"
-        self.search_box.setVisible(not studying)
-        self.editor_panel.setVisible(not studying)
-        self.editor_panel.setEnabled(not studying)
-        self.history_panel.setVisible(studying)
-        for control, label in ((self.import_button, '导入学习进度' if studying else '导入单词'),
-                               (self.export_button, '导出学习进度' if studying else '导出当前页面所有单词')):
-            control.setToolTip(label)
-            control.setAccessibleName(label)
-        self.table.setVisible(not studying)
-        self.study_page.setVisible(studying)
-        if studying:
-            for key, control in self.filter_buttons.items():
-                control.setProperty("active", key == self.filter_name)
-                control.style().unpolish(control)
-                control.style().polish(control)
-            self.update_visibility_button()
-            return
-        bar = self.table.verticalScrollBar()
-        self._filter_scroll[self._view_filter] = bar.value()
-        switching = self._view_filter != self.filter_name
-        if switching:
-            self._filter_view[self._view_filter] = self.table.view_state()
-        position = self._filter_scroll[self.filter_name]
-        if entries is None:
-            entries = self.repository.list_entries()
-        counts = {"all": len(entries), "pending": sum(not e.learned for e in entries),
-                  "learned": sum(e.learned for e in entries)}
-        labels = {"all": "全部", "pending": "待记", "learned": "已记"}
-        for key, control in self.filter_buttons.items():
-            if key == "study17":
-                control.setProperty("active", False)
-                control.style().unpolish(control)
-                control.style().polish(control)
-                continue
-            control.setText(f"{labels[key]}  {counts[key]}")
-            control.setProperty("active", key == self.filter_name)
-            control.style().unpolish(control)
-            control.style().polish(control)
-        visible = self._filter_entries(entries)
-        searching = bool(self.search_box.text().strip())
-        self.search_box.set_result_count(len(visible) if searching else None)
-        shuffle_count = (max(counts["pending"], counts["learned"])
-                         if self.filter_name == "all" else len(visible))
-        self.table.set_page_state(self.filter_name, searching, shuffle_count)
-        with self.table.preserve_view(
-                scroll_position=position,
-                view_state=self._filter_view[self.filter_name] if switching else None):
-            # Search expands only the projection, leaving the review state intact.
-            revealed = ({entry.id for entry in visible} - self._search_hidden[self.filter_name]
-                        if searching else self.revealed)
-            self.model.populate(visible, revealed)
-            self.table.update_spans()
-        self._view_filter = self.filter_name
-        self.update_visibility_button()
-
-    def _filter_entries(self, entries):
-        keyword = self.search_box.text().strip().casefold()
-        visible = [entry for entry in entries
-                   if (self.filter_name == "all" or
-                       (entry.learned if self.filter_name == "learned" else not entry.learned))]
-        if not keyword:
-            return visible
-
-        matches = []
-        for entry in visible:
-            fields = (
-                (entry.text,),
-                (word.text for word in entry.related),
-                (sense.translation for sense in entry.senses),
-                (sense.translation for word in entry.related for sense in word.senses),
-            )
-            for priority, texts in enumerate(fields):
-                position = min((index for text in texts
-                                if (index := text.casefold().find(keyword)) >= 0), default=None)
-                if position is not None:
-                    matches.append(((priority, position), entry))
-                    break
-        matches.sort(key=lambda match: match[0])
-        return [entry for _, entry in matches]
-
-    def search_changed(self):
-        if not self.current_table().delegate.submit():
-            # Keep the existing projection and query aligned when an invalid editor blocks filtering.
-            self.search_box.blockSignals(True)
-            self.search_box.setText(getattr(self, "_applied_search", ""))
-            self.search_box.blockSignals(False)
-            return
-        current = self.table.currentIndex()
-        row = current.data(Qt.ItemDataRole.UserRole)
-        anchor = None
-        if row is not None and self.table.selectionModel().isSelected(current):
-            anchor = (row.entry.id, row.owner, row.sense, current.column())
-        self._applied_search = self.search_box.text()
-        for hidden in self._search_hidden.values():
-            hidden.clear()
-        self._filter_scroll[self.filter_name] = 0
-        self.refresh()
-        target = self.table._entry_index(*anchor) if anchor else None
-        if target is not None and target.isValid():
-            self.table.setCurrentIndex(target)
-            self.table.ensure_entry_visible(anchor[0])
-        else:
-            self.table.verticalScrollBar().setValue(0)
-        self._filter_scroll[self.filter_name] = self.table.verticalScrollBar().value()
-
-    def move_word(self, entry_id, target_index):
-        if self.filter_name == "all" or self.search_box.text().strip():
-            return
-        try:
-            self.repository.move_entry(entry_id, target_index)
-        except Exception as error:
-            self.show_notice(str(error), True)
-        self.refresh()
-
-    def move_related_word(self, entry_id, source, target):
-        try:
-            self.repository.move_related(entry_id, source, target)
-        except Exception as error:
-            self.show_notice(str(error), True)
-        self.refresh_after_inline()
 
     def move_form_related(self, source, target):
         self.blocks.insert(target + 1, self.blocks.pop(source + 1))
@@ -544,12 +427,6 @@ class MainWindow(QMainWindow):
         self.update_tab_order()
         self.form_changed()
 
-    def move_word_sense(self, entry_id, owner, source, target):
-        try:
-            self.repository.move_sense(entry_id, owner, source, target)
-        except Exception as error:
-            self.show_notice(str(error), True)
-        self.refresh_after_inline()
 
     def form_drag_changed(self, active):
         if active:
@@ -558,31 +435,6 @@ class MainWindow(QMainWindow):
         else:
             self.shortcuts.set_suspended(self._shortcuts_before_form_drag)
 
-    def shuffle_words(self):
-        if self.filter_name not in {"pending", "all", "learned"} or self.search_box.text().strip():
-            return
-        if not self.current_table().delegate.submit():
-            return
-        try:
-            self.repository.shuffle_entries(self.filter_name)
-        except Exception as error:
-            self.show_notice(str(error), True)
-            return
-        self.refresh()
-        self.table.scrollToTop()
-        self._filter_scroll[self.filter_name] = 0
-
-    def set_filter(self, key):
-        if not self.current_table().delegate.submit():
-            return False
-        if key == "study17" and not self.study_page.reload():
-            return False
-        self.toast.dismiss()
-        self.filter_name = key
-        if key == "study17":
-            self.history_panel.set_collapsed(bool(self.study_page.tasks))
-        self.refresh()
-        return True
 
     def update_tab_tooltips(self):
         for number, (key, button) in enumerate(self.filter_buttons.items(), 1):
@@ -594,18 +446,6 @@ class MainWindow(QMainWindow):
         if 0 <= target < len(pages):
             self.activate_filter(pages[target])
 
-    def activate_filter(self, key):
-        if not self.set_filter(key):
-            return
-        table = self.current_table()
-        current = table.currentIndex()
-        row = current.data(Qt.ItemDataRole.UserRole)
-        if row is not None and table.selectionModel().isSelected(current):
-            with table.preserve_view():
-                table.setFocus(Qt.FocusReason.ShortcutFocusReason)
-            table.ensure_entry_visible(row.entry.id)
-        else:
-            table.navigate_entries(1)
 
     def can_focus_search(self, _focus):
         popup = QApplication.activePopupWidget()
@@ -616,6 +456,9 @@ class MainWindow(QMainWindow):
         if self.search_box.isHidden():
             if not self.set_filter("all"):
                 return
+            if self._list_request is not None:
+                self._list_request.intent['kind'] = 'focus_search'
+                return
         elif not self.current_table().delegate.submit():
             return
         popup = QApplication.activePopupWidget()
@@ -623,58 +466,6 @@ class MainWindow(QMainWindow):
             combo.hidePopup()
         self.search_box.setFocus(Qt.FocusReason.ShortcutFocusReason)
 
-    def reveal(self, entry_id, expanded):
-        if self.search_box.text().strip():
-            if expanded:
-                self._search_hidden[self.filter_name].discard(entry_id)
-            else:
-                self._search_hidden[self.filter_name].add(entry_id)
-        if expanded:
-            self.revealed.add(entry_id)
-        else:
-            self.revealed.discard(entry_id)
-        self.refresh()
-        if expanded:
-            self.table.ensure_entry_visible(entry_id)
-
-    @property
-    def global_hidden(self):
-        if self.filter_name == "study17":
-            return self.study_page.global_hidden
-        return self._global_hidden[self.filter_name]
-
-    def next_global_hidden(self):
-        model = self.study_page.model if self.filter_name == "study17" else self.model
-        roots = [row for row in model.rows if row.first]
-        if roots and all(not row.hidden for row in roots):
-            return True
-        if roots and all(row.hidden for row in roots):
-            return False
-        return not self.global_hidden
-
-    def set_global_hidden(self, hidden=None):
-        if self.current_table().delegate.submit():
-            if hidden is None:
-                hidden = self.next_global_hidden()
-            if self.filter_name == "study17":
-                self.study_page.set_global_hidden(hidden)
-            else:
-                self._global_hidden[self.filter_name] = hidden
-                ids = {row.entry.id for row in self.model.rows if row.first}
-                if hidden:
-                    self.revealed.difference_update(ids)
-                    self._search_hidden[self.filter_name].update(ids)
-                else:
-                    self.revealed.update(ids)
-                    self._search_hidden[self.filter_name].difference_update(ids)
-            self.refresh()
-        self.update_visibility_button()
-
-    def update_visibility_button(self):
-        self.global_hide_button.setChecked(self.global_hidden)
-        self.global_hide_button.setAccessibleName(f"全局隐藏：{'开' if self.global_hidden else '关'}")
-        self.global_hide_button.setToolTip(
-            f"显示/隐藏 所有释义 · {self.shortcuts.labels()['toggle_visibility']}")
 
     def add_block(self, text="", senses=None, related=False, *, position=None, phonetic=""):
         block = WordBlock(text, senses, related, phonetic=phonetic)
@@ -791,6 +582,8 @@ class MainWindow(QMainWindow):
         self.schedule_editor_resize()
         chain = [*self.filter_buttons.values(), self.settings_button, self.search_box, self.global_hide_button,
                  self.import_button, self.export_button, self.table,
+                 self.pagination.first_button, self.pagination.previous_button, self.pagination.page_input,
+                 self.pagination.next_button, self.pagination.last_button,
                  self.study_page.refresh_button, self.study_page.timer_button, self.study_page.completed_button,
                  self.study_page.table,
                  self.history_panel.collapse_button, self.history_panel.table, self.collapse_button]
@@ -804,6 +597,13 @@ class MainWindow(QMainWindow):
     def focus_changed(self, old, new):
         if self._closing:
             return
+        if self._enter_search_intent and old is self.search_box and new is not self.search_box:
+            if self._list_request is not None and isinstance(self._list_request.intent, dict):
+                self._list_request.intent['kind'] = 'restore'
+            self._enter_search_intent = False
+        if self._pending_edit_target is not None and new is not self.table and (new is None or not self.table.isAncestorOf(new)):
+            self._pending_edit_target = None
+            self.table.cancel_deferred_edit()
         target = next((block for block in self.blocks if new is block or
                        (new is not None and block.isAncestorOf(new))), None)
         self.active_block = target
@@ -963,16 +763,9 @@ class MainWindow(QMainWindow):
             self.show_notice(str(error), True)
             return False
         self.duplicate_id = None
-        if is_new:
-            self.revealed.add(saved.id)
-            if self.filter_name == "learned":
-                self.filter_name = "pending"
+        self.toast.dismiss()
         self.reset_form()
-        self.refresh()
-        if is_new:
-            self.scroll_to_new_word(saved.id)
-            QTimer.singleShot(0, lambda: self.scroll_to_new_word(saved.id))
-        self.show_notice(f"已保存 {saved.text}")
+        self.form_saved(saved, is_new)
         self.blocks[0].word.setFocus()
         return True
 
@@ -1034,8 +827,6 @@ class MainWindow(QMainWindow):
             self.revealed.discard(entry_id)
             self.study_page.revealed.discard(entry_id)
             self.study_page._known_ids.discard(entry_id)
-            for hidden in self._search_hidden.values():
-                hidden.discard(entry_id)
             if self.duplicate_id == entry_id:
                 self.duplicate_id = None
             if self.edit_id == entry_id:
@@ -1046,35 +837,10 @@ class MainWindow(QMainWindow):
                 else:
                     self.reset_form()
             if self.filter_name != 'study17' and self.study_page.context is not None:
-                self.study_page.load(self.study_page.context)
+                self.study_page.invalidate_contents()
             self.history_panel.refresh()
         self.refresh_after_inline()
 
-    def refresh_after_inline(self):
-        if self._closing or self.current_table().delegate.editor is not None:
-            return
-        if self.current_table().dragging:
-            QTimer.singleShot(50, self.refresh_after_inline)
-            return
-        if self.filter_name == 'study17':
-            self.study_page.load(self.study_page.context)
-        else:
-            self.refresh()
-
-    def prepare_list_edit(self, entry_id, column):
-        self.refresh_after_inline()
-        if column == 1:
-            return
-        row = next((row for row in self.current_table().model().rows if row.entry.id == entry_id), None)
-        if row is None or not row.hidden:
-            return
-        if self.filter_name == 'study17':
-            self.study_page.reveal(entry_id, True)
-        elif self.search_box.text().strip():
-            self._search_hidden[self.filter_name].discard(entry_id)
-            self.refresh()
-        else:
-            self.reveal(entry_id, True)
 
     def commit_cell(self, row, column, value):
         try:
@@ -1087,12 +853,14 @@ class MainWindow(QMainWindow):
                 if not spelling.strip():
                     self.repository.remove_inline_content(row.entry, row.owner, None, self.study_page.context)
                     self.show_notice(f"已删除 {row.word.text}")
+                    self.queue_saved_entry(row.entry.id)
                     return CELL_REMOVED
             if isinstance(value, RelatedWord):
                 self.repository.replace_word_content(row.entry, row.owner, value)
             elif column == 3 and not value.strip() and len(row.word.senses) > 1:
                 self.repository.remove_inline_content(row.entry, row.owner, row.sense, self.study_page.context)
                 self.show_notice("已删除释义")
+                self.queue_saved_entry(row.entry.id)
                 return CELL_REMOVED
             else:
                 entry = self.repository.get(row.entry.id)
@@ -1106,6 +874,7 @@ class MainWindow(QMainWindow):
                 elif column == 3:
                     target.senses[row.sense].translation = value
                 self.repository.save(entry)
+            self.queue_saved_entry(row.entry.id)
         except DuplicateWord as error:
             self.duplicate_id = error.entry_id
             self.show_notice(str(error), True, duplicate=True)
@@ -1146,58 +915,10 @@ class MainWindow(QMainWindow):
             return dialog.exec() == QDialog.DialogCode.Accepted
         finally:
             dialog.deleteLater()
+            self.restore_list_focus()
+            # Modal teardown may restore the old focus after exec() returns.
+            QTimer.singleShot(0, self.restore_list_focus)
 
-    def list_action(self, entry_id, action):
-        delegate = self.current_table().delegate
-        if not delegate.submit() or delegate.target_after_removal((entry_id, -1, 0, 1)) is None:
-            return
-        if action == "edit":
-            if self.edit_id == entry_id:
-                self.set_form_collapsed(False)
-                self.blocks[0].word.setFocus()
-                return
-            if not self.resolve_dirty():
-                return
-            self.reset_form(self.repository.get(entry_id))
-            self.blocks[0].word.setFocus()
-            return
-        if self.edit_id == entry_id and action == "trash":
-            if not self.resolve_dirty():
-                return
-            self.reset_form()
-        try:
-            entry = self.repository.get(entry_id)
-            if action == "important":
-                self.repository.set_flag(entry_id, "important", not entry.important)
-            elif action == "learned":
-                self.repository.set_flag(entry_id, "learned", not entry.learned)
-                self.show_notice(f"{entry.text} 已{'恢复待记' if entry.learned else '标记为已记下'}")
-            elif action == "trash":
-                if not self.confirm_word_removal(entry_id):
-                    return
-                self.repository.delete(entry_id, self.study_page.context or StudyContext.now())
-                if self.study_page.context is not None:
-                    self.study_page.load(self.study_page.context)
-                self.revealed.discard(entry_id)
-                self.show_notice(f"已删除 {entry.text}")
-            self.refresh()
-        except Exception as error:
-            self.show_notice(str(error), True)
-
-    def locate_duplicate(self):
-        if self.duplicate_id is not None:
-            if not self.current_table().delegate.submit():
-                return
-            self.search_box.clear()
-            # Locating a duplicate keeps its rejected draft available for correction.
-            self.filter_name = "all"
-            self.refresh()
-            for number, row in enumerate(self.model.rows):
-                if row.entry.id == self.duplicate_id:
-                    index = self.model.index(number, 1)
-                    self.table.setCurrentIndex(index)
-                    self.table.scrollTo(index)
-                    break
 
     def open_settings(self):
         if not self.current_table().delegate.submit():
@@ -1206,7 +927,7 @@ class MainWindow(QMainWindow):
         try:
             dialog = SettingsDialog(self.shortcuts, self, clear_content=self.clear_content,
                                     set_study_new_words=self.set_study_new_words)
-            dialog.spellingVisibilityChanged.connect(self.study_page.table.set_hide_word_while_spelling)
+            dialog.spellingVisibilityChanged.connect(self.study_page.set_spelling_settings)
             dialog.exec()
             dialog.deleteLater()
         finally:
@@ -1230,19 +951,18 @@ class MainWindow(QMainWindow):
             self.study_page.timer.reset()
             self.study_page.revealed.clear()
             self.study_page._known_ids.clear()
-        entries = self.repository.list_entries()
-        remaining_ids = {entry.id for entry in entries}
-        self.revealed.intersection_update(remaining_ids)
-        for hidden in self._search_hidden.values():
-            hidden.intersection_update(remaining_ids)
-        if self.edit_id is not None and self.edit_id not in remaining_ids:
-            self.reset_form()
+        if self.edit_id is not None:
+            try:
+                self.repository.get(self.edit_id)
+            except ValueError:
+                self.reset_form()
+        self.study_page.invalidate_contents()
         self.study_page.load(self.study_page.context or StudyContext.now())
         self.history_panel.refresh()
-        self.refresh(entries)
+        self.refresh()
 
     def export_words(self):
-        if self.busy_overlay.active:
+        if self.busy_overlay.active or self._list_loading:
             return
         if self.filter_name == 'study17':
             return self.export_study_progress()
@@ -1251,19 +971,21 @@ class MainWindow(QMainWindow):
         self.shortcuts.set_suspended(True)
         try:
             path, _ = QFileDialog.getSaveFileName(
-                self, "导出当前页面所有单词",
+                self, self.export_button.toolTip(),
                 str(Path(QStandardPaths.writableLocation(QStandardPaths.StandardLocation.DesktopLocation))
                     / "kkMemorizeVocabulary.json"), "JSON 文件 (*.json)")
             if not path:
                 return
             if not Path(path).suffix:
                 path += ".json"
+            cache = self._display_cache
+            if cache is None:
+                return
             entries = run_repository_task(self.repository, self.busy_overlay,
-                                          '正在导出单词…', 'list_entries')
-            entries = self._filter_entries(entries)
+                                          '正在导出单词…', 'export_entries', cache.category, cache.keyword)
             self.busy_overlay.run('正在导出单词…', lambda: write_entries(path, entries))
             page = {"pending": "待记", "learned": "已记", "all": "全部"}[self.filter_name]
-            QMessageBox.information(self, "导出完成", f"已导出“{page}”页面当前筛选结果的 {len(entries)} 个主词。")
+            QMessageBox.information(self, "导出完成", f"已导出“{page}”全部筛选结果，共 {len(entries)} 个主词。")
         except Exception as error:
             logging.exception("Could not export words")
             QMessageBox.critical(self, "导出失败", str(error))
@@ -1311,11 +1033,9 @@ class MainWindow(QMainWindow):
         QMessageBox.information(self, '导入完成', message)
 
     def refresh_after_transfer(self, overlay=None):
-        overlay = overlay or self.busy_overlay
-        entries = (run_repository_task(self.repository, overlay, '正在更新单词列表…', 'list_entries')
-                   if self.filter_name != 'study17' else None)
-        with overlay.display('正在更新单词列表…'):
-            self.refresh(entries)
+        self.study_page.invalidate_contents()
+        self.list_state.invalidate()
+        self.refresh()
 
     def resolve_word_conflicts(self, result, *, source=None):
         if not result.conflicts:
@@ -1402,6 +1122,7 @@ class MainWindow(QMainWindow):
                 run_repository_task(self.repository, self.busy_overlay,
                                     '正在恢复学习进度…', 'replace_study_progress', backup)
                 self.study_page.timer.reset()
+                self.study_page.invalidate_contents()
                 self.study_page.revealed.clear()
                 self.study_page.load(StudyContext.now())
             else:
@@ -1450,6 +1171,8 @@ class MainWindow(QMainWindow):
             event.ignore()
             return
         self.study_page.timer.dispose()
+        self._search_timer.stop()
+        self.list_jobs.shutdown()
         self._closing = True
         event.accept()
 

@@ -81,16 +81,11 @@ def test_candidate_check_excludes_learned_participants_finished_and_related(repo
     assert repo.has_new_study_words()
 
 
-def test_disabled_does_not_select_candidates_or_write_date(repo):
+def test_disabled_does_not_select_candidates_or_write_date(repo, monkeypatch):
     add(repo)
     repo.set_study_new_words_enabled(False, AM)
-    statements = []
-    repo.connection.set_trace_callback(statements.append)
-    try:
-        assert repo.prepare_study(AM) == []
-    finally:
-        repo.connection.set_trace_callback(None)
-    assert not any('random()' in statement for statement in statements)
+    monkeypatch.setattr('vocabulary.storage.random.sample', lambda *args: pytest.fail('must not draw words'))
+    assert repo.prepare_study(AM) == []
     assert repo.study_backup().study_last_add_new_vocabulary is None
     assert repo.study_backup().group_counter == 0
 

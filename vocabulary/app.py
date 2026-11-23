@@ -57,5 +57,6 @@ def main(argv=None):
     try:
         return app.exec()
     finally:
+        window.list_jobs.shutdown()
         repository.close()
 

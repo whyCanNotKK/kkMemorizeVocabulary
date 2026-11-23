@@ -1,4 +1,5 @@
 """Study projection with a frozen date/period and a separate live task clock."""
+from copy import deepcopy
 from dataclasses import replace
 from datetime import datetime, timedelta
 
@@ -15,6 +16,7 @@ from .widgets import button
 
 class StudyPage(QWidget):
     error = Signal(str)
+    visibilityChanged = Signal(bool)
 
     def __init__(self, repository, edit_callback, parent=None):
         super().__init__(parent)
@@ -22,6 +24,10 @@ class StudyPage(QWidget):
         self.context = None
         self._last_study_end = None
         self.tasks = []
+        self._entry_cache = {}
+        self._content_revision = getattr(repository, 'content_revision', 0)
+        self._spelling_settings = repository.study_spelling_hide_settings()
+        self._spelling_settings_revision = getattr(repository, 'spelling_settings_revision', 0)
         self.completed_tasks = []
         self.show_completed = False
         self.total_tasks = 0
@@ -82,7 +88,7 @@ class StudyPage(QWidget):
         self.update_completed_button()
         self.model = WordTableModel(edit_callback, self, study=True)
         self.table = WordTable(self.model, lambda: True)
-        self.table.set_hide_word_while_spelling(repository.study_spelling_hide_settings())
+        self.table.set_hide_word_while_spelling(self._spelling_settings)
         self.table.set_page_state("study17", False, 0)
         self.table.empty_text = ''
         self.completion_notice = StudyCompletionNotice(
@@ -106,10 +112,14 @@ class StudyPage(QWidget):
         if not self.table.delegate.submit():
             return False
         try:
-            tasks = (self.repository.prepare_study(context) if generate else
-                     self.repository.study_tasks(context))
+            revision = getattr(self.repository, 'content_revision', 0)
+            if revision != self._content_revision:
+                self._entry_cache.clear()
+            spelling_settings = self.repository.study_spelling_hide_settings()
+            tasks = (self.repository.prepare_study(context, entries_by_id=self._entry_cache) if generate else
+                     self.repository.study_tasks(context, entries_by_id=self._entry_cache))
             total = self.repository.study_task_total(context)
-            completed = self.repository.study_completed_tasks(context) if self.show_completed else []
+            completed = self.repository.study_completed_tasks(context, entries_by_id=self._entry_cache) if self.show_completed else []
             last_study_end = self.repository.latest_study_end()
             self.timer.bind(context)
             if not tasks:
@@ -117,6 +127,11 @@ class StudyPage(QWidget):
         except Exception as error:
             self.error.emit(str(error))
             return False
+        self._content_revision = getattr(self.repository, 'content_revision', 0)
+        self._spelling_settings = spelling_settings
+        self._spelling_settings_revision = getattr(self.repository, 'spelling_settings_revision', 0)
+        needed = {task.entry.id for task in tasks + completed}
+        self._entry_cache = {key: value for key, value in self._entry_cache.items() if key in needed}
         self.context, self.tasks = context, tasks
         self._last_study_end = last_study_end
         self.completed_tasks = completed
@@ -133,7 +148,11 @@ class StudyPage(QWidget):
         return True
 
     def render(self):
-        self.table.set_hide_word_while_spelling(self.repository.study_spelling_hide_settings())
+        revision = getattr(self.repository, 'spelling_settings_revision', 0)
+        if revision != self._spelling_settings_revision:
+            self._spelling_settings = self.repository.study_spelling_hide_settings()
+            self._spelling_settings_revision = revision
+        self.table.set_hide_word_while_spelling(self._spelling_settings)
         self.update_task_count()
         self.update_timer_button()
         self.update_elapsed()
@@ -201,7 +220,7 @@ class StudyPage(QWidget):
             self.completed_button.setChecked(self.show_completed)
             return
         try:
-            completed = self.repository.study_completed_tasks(self.context) if show and self.context else []
+            completed = self.repository.study_completed_tasks(self.context, entries_by_id=self._entry_cache) if show and self.context else []
         except Exception as error:
             self.completed_button.setChecked(self.show_completed)
             self.error.emit(str(error))
@@ -220,12 +239,51 @@ class StudyPage(QWidget):
             self.revealed.add(word_id)
         else:
             self.revealed.discard(word_id)
-        self.render()
+        ids = {task.entry.id for task in self.tasks + (self.completed_tasks if self.show_completed else [])}
+        if ids and ids <= self.revealed:
+            self.global_hidden = False
+        elif ids and not ids.intersection(self.revealed):
+            self.global_hidden = True
+        self.visibilityChanged.emit(not self.global_hidden)
+        entry = self._entry_cache.get(word_id)
+        if entry is not None:
+            self.table.replace_entry(entry, expanded)
+        else:
+            self.render()
         if expanded:
             self.table.ensure_entry_visible(word_id)
 
+    def set_spelling_settings(self, settings):
+        self._spelling_settings = settings
+        self._spelling_settings_revision = getattr(self.repository, 'spelling_settings_revision', 0)
+        self.table.set_hide_word_while_spelling(settings)
+
+    def invalidate_contents(self):
+        self._entry_cache.clear()
+
+    def patch_sort_orders(self, orders):
+        self._content_revision = getattr(self.repository, 'content_revision', 0)
+        for entry_id in self._entry_cache.keys() & orders.keys():
+            self._entry_cache[entry_id] = replace(self._entry_cache[entry_id], sort_order=orders[entry_id])
+        def updated(task):
+            return replace(task, entry=replace(task.entry, sort_order=orders[task.entry.id])) if task.entry.id in orders else task
+        self.tasks = [updated(task) for task in self.tasks]
+        self.completed_tasks = [updated(task) for task in self.completed_tasks]
+        self.model.study_tasks = {task.entry.id: task for task in self.tasks + self.completed_tasks}
+
+    def patch_entry(self, entry):
+        self._content_revision = getattr(self.repository, 'content_revision', 0)
+        if entry.id in self._entry_cache:
+            self._entry_cache[entry.id] = deepcopy(entry)
+        self.tasks = [replace(task, entry=deepcopy(entry)) if task.entry.id == entry.id else task for task in self.tasks]
+        self.completed_tasks = [replace(task, entry=deepcopy(entry)) if task.entry.id == entry.id else task for task in self.completed_tasks]
+        self.model.study_tasks = {task.entry.id: task for task in self.tasks + self.completed_tasks}
+        if self.table.delegate.editor is None:
+            self.table.replace_entry(entry)
+
     def set_global_hidden(self, hidden):
         self.global_hidden = hidden
+        self.visibilityChanged.emit(not hidden)
         ids = {task.entry.id for task in self.tasks + (self.completed_tasks if self.show_completed else [])}
         if hidden:
             self.revealed.difference_update(ids)

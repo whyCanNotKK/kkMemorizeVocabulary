@@ -18,8 +18,9 @@ def draft():
 def test_shuffle_hides_during_search_and_returns_when_cleared(window, page, label):
     window.set_filter(page)
     assert window.table.shuffle_button.isVisible()
-    assert window.table.shuffle_button.toolTip() == f"随机排列当前{label}单词"
-    assert window.table.shuffle_button.accessibleName() == f"随机排列{label}单词"
+    scope = label if page == "all" else "全部" + label
+    assert window.table.shuffle_button.toolTip() == f"随机排列{scope}单词"
+    assert window.table.shuffle_button.accessibleName() == f"随机排列{scope}单词"
     window.search_box.setText("query")
     assert not window.table.shuffle_button.isVisible()
     window.search_box.setText("   ")

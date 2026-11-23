@@ -177,6 +177,12 @@ def draw_symbol(p: QPainter, name: str, rect: QRectF, color: str):
         p.drawPolygon(QPolygonF([QPointF(-10, 0), QPointF(-5, -6), QPointF(5, -6),
                                 QPointF(10, 0), QPointF(5, 6), QPointF(-5, 6)]))
         p.drawEllipse(QRectF(-3, -3, 6, 6))
+    elif name == "eye_closed":
+        lid = QPainterPath(QPointF(-10, -2))
+        lid.cubicTo(QPointF(-5, 5), QPointF(5, 5), QPointF(10, -2))
+        p.drawPath(lid)
+        for x, y, tip_x, tip_y in ((-7, 1, -9, 5), (0, 3, 0, 8), (7, 1, 9, 5)):
+            p.drawLine(QPointF(x, y), QPointF(tip_x, tip_y))
     elif name == "sun":
         p.setBrush(QColor(color))
         p.drawEllipse(QRectF(-4, -4, 8, 8))

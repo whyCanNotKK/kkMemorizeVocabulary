@@ -19,6 +19,48 @@ def seed(window, repo):
     return entry
 
 
+@pytest.mark.parametrize('page,trigger,position', [
+    ('pending', 'del', 0), ('pending', 'icon', 1), ('learned', 'del', 2),
+    ('all', 'icon', 1), ('search', 'del', 0), ('search', 'icon', 1),
+])
+def test_removal_focuses_original_neighbor(window, repo, qtbot, monkeypatch, page, trigger, position):
+    for text in ('last match', 'match first', 'x match'):
+        repo.save(WordEntry(text, [Sense('n.', 'meaning'), Sense('v.', 'another')],
+                            [RelatedWord('child', [Sense('n.', 'child meaning')])],
+                            learned=page == 'learned'))
+    window.set_filter('all' if page == 'search' else page)
+    if page == 'search':
+        window.search_box.setText('match')
+    table = window.table
+    entry_ids = [row.entry.id for row in table.model().rows if row.first]
+    source = entry_ids[position]
+    target = entry_ids[position + 1 if position + 1 < len(entry_ids) else position - 1]
+    table.set_entry_revealed(source, True)
+    table.setCurrentIndex(table._entry_index(source, owner=0))
+    hidden = table._entry_index(target).data(Qt.ItemDataRole.UserRole).hidden
+    if page == 'pending' and trigger == 'del':
+        QTimer.singleShot(0, lambda: QApplication.activeModalWidget().accept())
+    else:
+        monkeypatch.setattr(window, 'confirm_word_removal', lambda entry_id: True)
+    if trigger == 'del':
+        table.setFocus()
+        qtbot.keyClick(table, Qt.Key.Key_Delete)
+    else:
+        window.blocks[0].word.setFocus()
+        index = table._entry_index(source, column=table.action_column)
+        table.scrollTo(index)
+        rect = dict(table.action_rects(table.visualRect(index), index.data(Qt.ItemDataRole.UserRole)))['trash']
+        qtbot.mouseClick(table.viewport(), Qt.MouseButton.LeftButton, pos=rect.center())
+    assert source not in [entry.id for entry in repo.list_entries()]
+    qtbot.wait(20)
+    assert table.hasFocus()
+    current = table.currentIndex()
+    assert current.isValid()
+    assert current.data(Qt.ItemDataRole.UserRole).entry.id == target
+    assert table.selectionModel().isSelected(current)
+    assert current.data(Qt.ItemDataRole.UserRole).hidden == hidden
+
+
 @pytest.mark.parametrize('trigger,choice', [
     ('del', 'enter'), ('del', 'escape'), ('del', 'tab-confirm'),
     ('icon', 'confirm'), ('icon', 'cancel'), ('icon', 'close'),
@@ -64,14 +106,41 @@ def test_word_removal_uses_compact_confirmation_with_cancel_default(
         qtbot.keyClick(window.table, Qt.Key.Key_Delete)
     else:
         table = window.table
+        if choice == 'confirm':
+            window.blocks[0].word.setFocus()
         index = table._entry_index(entry.id, column=table.action_column)
         rect = dict(table.action_rects(table.visualRect(index), index.data(Qt.ItemDataRole.UserRole)))['trash']
         qtbot.mouseClick(table.viewport(), Qt.MouseButton.LeftButton, pos=rect.center())
     assert not errors, errors
+    qtbot.waitUntil(window.table.hasFocus)
     if choice in ('confirm', 'tab-confirm'):
         assert not repo.list_entries() and not repo.study_backup().records
+        assert not window.table.currentIndex().isValid()
     else:
         assert repo.get(entry.id) == entry and repo.study_backup() == before
+        current = window.table.currentIndex()
+        assert current.data(Qt.ItemDataRole.UserRole).entry.id == entry.id
+        assert window.table.selectionModel().isSelected(current)
+
+
+def test_removal_failure_keeps_selection(window, repo, qtbot, monkeypatch):
+    entry = seed(window, repo)
+    repo.save(WordEntry('next', [Sense('n.', 'meaning')]))
+    window.refresh()
+    table = window.table
+    before = table.view_state()
+    monkeypatch.setattr(window, 'confirm_word_removal', lambda entry_id: True)
+
+    def fail(*args):
+        raise OSError('delete failed')
+
+    notices = []
+    monkeypatch.setattr(repo, 'delete', fail)
+    monkeypatch.setattr(window, 'show_notice', lambda *args: notices.append(args))
+    qtbot.keyClick(table, Qt.Key.Key_Delete)
+    assert table.hasFocus() and table.view_state() == before
+    assert repo.get(entry.id) == entry
+    assert notices == [('delete failed', True)]
 
 
 @pytest.mark.parametrize('page,owner,sense,confirmed', [

@@ -199,6 +199,7 @@ def test_real_pdf_cli_and_real_database_import_restart_roundtrip(tmp_path, qapp)
     assert extract.main([str(source), "-o", str(output), "--last-page", "1"]) == 0
     entries = read_entries(output)
     assert len(entries) == 1
+    assert entries[0].phonetic == '/rek/'
     assert entries[0].senses == [Sense("n.", "recording"), Sense("v.", "record")]
     assert parse_entries(serialize_entries(entries)) == entries
     report = json.loads(output.with_suffix(".report.json").read_text(encoding="utf-8"))
@@ -217,8 +218,9 @@ def test_real_pdf_cli_and_real_database_import_restart_roundtrip(tmp_path, qapp)
     repository = Repository(database_path)
     try:
         assert serialize_entries(repository.list_entries()) == serialize_entries([
-            # Repository persists a positive sort_order; compare with that field.
-            replace(entries[0], sort_order=1)
+            # Import normalizes the outer phonetic slashes and assigns an order;
+            # it does not rewrite the extracted source JSON.
+            replace(entries[0], sort_order=1, phonetic='rek')
         ])
     finally:
         repository.close()

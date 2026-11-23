@@ -40,7 +40,8 @@ def test_all_refresh_controls_use_same_entry_and_capture_next_period(window, rep
     page, entry, now = finish(window, repo, monkeypatch)
     requested = []
     prepare = repo.prepare_study
-    monkeypatch.setattr(repo, 'prepare_study', lambda context: (requested.append(context), prepare(context))[1])
+    monkeypatch.setattr(repo, 'prepare_study', lambda context, **kwargs: (
+        requested.append(context), prepare(context, **kwargs))[1])
     now[0] = PM
     control = {'toolbar': page.refresh_button, 'icon': page.completion_notice.refresh_icon,
                'link': page.completion_notice.refresh_link}[target]
@@ -121,7 +122,7 @@ def test_refresh_failure_keeps_completed_context_and_notice(window, repo, monkey
     errors = []
     page.error.connect(errors.append)
     now[0] = PM
-    def fail(context):
+    def fail(context, **kwargs):
         raise OSError('refresh failed')
     monkeypatch.setattr(repo, 'prepare_study', fail)
     qtbot.mouseClick(getattr(page.completion_notice, 'refresh_' + target), Qt.MouseButton.LeftButton)

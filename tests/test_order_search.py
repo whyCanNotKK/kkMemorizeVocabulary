@@ -446,47 +446,54 @@ def test_search_count_tracks_main_words_in_current_results(window, repo, qtbot):
 
 
 @pytest.mark.parametrize("clear_text", ["", "   "])
-def test_search_temporary_reveal_restores_mixed_states_across_pages(window, repo, qtbot, clear_text):
+def test_search_keeps_normal_mixed_states_independent_across_categories(window, repo, qtbot, clear_text):
     hidden = repo.save(WordEntry("record-hidden", [Sense("n.", "遮住的翻译"), Sense("v.", "第二释义")],
                      [RelatedWord("child", [Sense("n.", "关联译文")])]))
     expanded = repo.save(word("record-expanded"))
     learned = repo.save(word("record-learned", learned=True))
+    window.refresh()
     window.reveal(expanded.id, True)
     original = set(window.revealed)
     window.search_box.setText("record")
     assert visible(window) == [hidden.text, expanded.text]
     assert all(not row.hidden for row in window.model.rows)
     assert window.model.rowCount() == 4
-    # An explicit hide overrides the temporary reveal and survives clearing the query.
+    assert window.global_hide_button.isHidden()
+    # Search is always revealed and cannot change the normal page's mixed state.
     row = next(i for i, item in enumerate(window.model.rows) if item.entry.id == expanded.id)
     qtbot.mouseClick(window.table.viewport(), Qt.MouseButton.LeftButton,
                     Qt.KeyboardModifier.ControlModifier,
                     pos=window.table.visualRect(window.model.index(row, 3)).center())
-    original.discard(expanded.id)
     assert window.revealed == original
-    assert [item.entry.id for item in window.model.rows if item.hidden] == [expanded.id]
+    assert all(not item.hidden for item in window.model.rows)
     window.set_filter("learned")
     assert visible(window) == [learned.text] and not window.model.rows[0].hidden
     window.search_box.setText("no-match")
-    assert not window.model.rows and window.revealed == original
+    assert not window.model.rows
+    assert window.list_state.normal["pending"].revealed_ids == original
     window.search_box.setText("record")
     window.set_filter("all")
     assert all(not row.hidden for row in window.model.rows)
     window.search_box.setText(clear_text)
-    assert window.revealed == original
+    assert not window.revealed
     assert [row.entry.id for row in window.model.rows if row.hidden] == [hidden.id, expanded.id, learned.id]
+    window.set_filter("pending")
+    assert window.revealed == original
+    assert [row.entry.id for row in window.model.rows if row.hidden] == [hidden.id]
 
 
-def test_search_eye_changes_results_and_state_restored_after_clearing(window, repo):
+def test_search_hides_eye_and_does_not_change_normal_visibility(window, repo):
     entry = repo.save(word("record"))
     window.refresh()
     window.search_box.setText("record")
+    assert window.global_hide_button.isHidden()
     window.set_global_hidden(False)
-    assert not window.model.rows[0].hidden and window.revealed == {entry.id}
+    assert not window.model.rows[0].hidden and not window.revealed
     window.set_global_hidden(True)
-    assert window.model.rows[0].hidden and not window.revealed
+    assert not window.model.rows[0].hidden and not window.revealed
     window.search_box.clear()
     assert window.model.rows[0].hidden
+    assert window.global_hide_button.isVisible()
 
 
 def drag_handle(table, row):
@@ -500,8 +507,8 @@ def test_group_drag_preview_then_one_commit(window, repo, qtbot):
     first = replace(entries[0], senses=[Sense("n.", "第一行\n第二行"), Sense("v.", "动词")],
                     related=[RelatedWord("child", [Sense("n.", "关联")])])
     repo.save(first)
-    window.revealed.add(first.id)
     window.refresh()
+    window.reveal(first.id, True)
     table = window.table
     before = repo.list_entries()
     origin = drag_handle(table, 0)

@@ -15,11 +15,12 @@ def navigation_step(event):
 class ReviewKeyRouter(QObject):
     """Keep navigation within the list area and its search field."""
 
-    def __init__(self, panel, active_table, search_box=None):
+    def __init__(self, panel, active_table, search_box=None, search_enter=None):
         super().__init__(panel)
         self.panel = panel
         self.active_table = active_table
         self.search_box = search_box
+        self.search_enter = search_enter
         QApplication.instance().installEventFilter(self)
 
     def eventFilter(self, source, event):
@@ -41,6 +42,10 @@ class ReviewKeyRouter(QObject):
         table = self.active_table()
         if self.search_box is not None and self.search_box.isVisible():
             if source is self.search_box and (event.key() == Qt.Key.Key_Down or search_enter):
+                if self.search_enter is not None:
+                    self.search_enter()
+                    event.accept()
+                    return True
                 if table.navigate_entries(1, first=True):
                     event.accept()
                     return True

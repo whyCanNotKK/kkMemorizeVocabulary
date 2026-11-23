@@ -221,6 +221,7 @@ def test_review_keys_belong_to_inline_editor_while_editing(window, repo, qtbot, 
     entry = repo.save(WordEntry("alpha", [Sense("n.", "释义")],
                                 [RelatedWord("child", [Sense("n.", "关联")])]))
     repo.save(WordEntry("beta", [Sense("n.", "第二个词")]))
+    window.refresh()
     window.reveal(entry.id, True)
     table = window.table
     index = window.model.index(0, column)
@@ -244,7 +245,7 @@ def test_review_keys_belong_to_inline_editor_while_editing(window, repo, qtbot, 
     table.delegate.cancel()
 
 
-def test_search_toggles_answers_and_allows_main_word_navigation(window, repo, qtbot):
+def test_search_keeps_answers_shown_and_allows_main_word_navigation(window, repo, qtbot):
     entries = [repo.save(WordEntry(f"word-{i}", [Sense("n.", "释义")],
                                    [RelatedWord("child", [Sense("n.", "关联")])]))
                for i in range(2)]
@@ -254,12 +255,14 @@ def test_search_toggles_answers_and_allows_main_word_navigation(window, repo, qt
     table.setFocus()
     qtbot.keyClick(table, Qt.Key.Key_Space)
     assert window.revealed == set()
-    assert window.model.rows[0].hidden
+    assert all(not row.hidden for row in window.model.rows)
     qtbot.keyClick(table, Qt.Key.Key_Space)
-    assert window.revealed == {entries[0].id}
+    assert window.revealed == set()
     assert all(not row.hidden for row in window.model.rows)
     qtbot.keyClick(table, Qt.Key.Key_Down)
     assert_selected(table, entries[1])
+    window.search_box.clear()
+    assert all(row.hidden for row in window.model.rows)
 
 
 @pytest.mark.parametrize("review_list", ["pending", "all", "learned"], indirect=True)

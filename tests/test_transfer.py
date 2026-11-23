@@ -287,7 +287,7 @@ def test_toolbar_icons_export_current_filter(window, repo, tmp_path, monkeypatch
     assert window.export_button.x() > window.import_button.x()
     assert window.import_button.text() == window.export_button.text() == ""
     assert window.import_button.toolTip() == window.import_button.accessibleName() == "导入单词"
-    assert window.export_button.toolTip() == window.export_button.accessibleName() == "导出当前页面所有单词"
+    assert window.export_button.toolTip() == window.export_button.accessibleName() == "导出当前分类全部单词"
     assert not window.import_button.icon().isNull() and not window.export_button.icon().isNull()
     path = tmp_path / "all.json"
     monkeypatch.setattr(QFileDialog, "getSaveFileName", lambda *args: (str(path), ""))

@@ -185,9 +185,9 @@ def test_only_alt_digits_dispatch_tab_switch_once(window, qtbot, monkeypatch):
     calls = []
     original = window.set_filter
 
-    def switch(key):
+    def switch(key, **kwargs):
         calls.append(key)
-        original(key)
+        return original(key, **kwargs)
 
     monkeypatch.setattr(window, "set_filter", switch)
     for modifier in (Qt.KeyboardModifier.AltModifier, Qt.KeyboardModifier.ControlModifier):

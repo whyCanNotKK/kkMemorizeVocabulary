@@ -130,11 +130,16 @@ def test_mask_word_pos_translation_and_related_tooltips_use_matching_hit_regions
 def test_star_drag_and_edit_icon_follow_page_and_current_shortcut(tooltip_list, window):
     table, entry, hover = tooltip_list
     index = table._entry_index(entry.id, column=0)
-    assert hover(index)[0] == ('' if table.study_mode else '取消重点\n整词复制 · \ufffc')
+    assert hover(index)[0] == ('' if table.study_mode else '取消重点 · F1\n整词复制 · \ufffc')
+    index.data(Qt.ItemDataRole.UserRole).entry.important = False
+    assert hover(index)[0] == ('' if table.study_mode else '设置为重点 · F1\n整词复制 · \ufffc')
     index = table._entry_index(entry.id, column=table.action_column)
     actions = dict(table.action_rects(table.visualRect(index), index.data(Qt.ItemDataRole.UserRole)))
     if 'trash' in actions:
         assert hover(index, actions['trash'].center())[0] == '删除单词 · Del'
+    if 'learned' in actions:
+        assert hover(index, actions['learned'].center())[0] == (
+            '标记为"待记" · F4' if entry.learned else '标记为"记下" · F4')
     if 'drag' in actions:
         assert hover(index, actions['drag'].center())[0] == '按住拖动改变单词排序'
     if 'edit' in actions:

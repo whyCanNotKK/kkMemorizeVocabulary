@@ -116,7 +116,7 @@ def test_list_copy_hidden_then_related_right_click(window, repo, qtbot, monkeypa
     }
     assert list(dict(table.action_rects(table.visualRect(action_index)))) == expected_actions[page]
     if page != "study17":
-        mark = '标记为"待记"' if page == "learned" else '标记为"已记下"'
+        mark = '标记为"待记" · F4' if page == "learned" else '标记为"记下" · F4'
         for action, tooltip in [("edit", "编辑单词 · " + window.shortcuts.labels()['edit_selected']), ("learned", mark)]:
             point = action_point(table, action_index, action)
             event = QHelpEvent(QEvent.Type.ToolTip, point, table.viewport().mapToGlobal(point))

@@ -149,6 +149,9 @@ def test_hover_and_keyboard_show_whole_word_groups(window, repo, qtbot, monkeypa
     else:
         for entry in (first, second, third):
             window.reveal(entry.id, True)
+    # Entering the study tab changes the surrounding layout. Finish that
+    # layout before mapping a cell to the global position used by mouseMove.
+    qtbot.wait(20)
     model = table.model()
 
     def group_visible(entry, expected):

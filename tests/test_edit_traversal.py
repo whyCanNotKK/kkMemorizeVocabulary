@@ -445,17 +445,23 @@ def test_f2_without_selection_does_nothing(edit_list, qtbot):
     assert table.delegate.editor is None
 
 
-def test_f2_does_not_edit_hidden_search_result(window, repo, qtbot):
+def test_search_cannot_hide_results_and_f2_can_edit_translation(window, repo, qtbot):
     entry = repo.save(WordEntry('alpha', [Sense('n.', 'first')]))
     window.search_box.setText('alpha')
     window.set_global_hidden(True)
     table = window.table
-    assert table.model().rows[0].hidden
+    assert not table.model().rows[0].hidden
+    assert window.global_hide_button.isHidden()
     table.setCurrentIndex(table.model().index(0, 1))
     table.setFocus()
     qtbot.keyClick(table, Qt.Key.Key_F2)
-    assert table.delegate.editor is None
-    assert table.model().rows[0].hidden
+    assert table.delegate.editor is not None
+    assert field(table) == (entry.id, -1, 0, 3)
+    assert not table.model().rows[0].hidden
+    table.delegate.editor.setPlainText('updated meaning')
+    qtbot.keyClick(table.delegate.editor, Qt.Key.Key_Return)
+    assert repo.get(entry.id).senses[0].translation == 'updated meaning'
+    assert all(not row.hidden for row in table.model().rows)
 
 
 def test_tab_does_not_edit_wrong_entry_when_saved_name_stops_matching_search(window, repo, qtbot):

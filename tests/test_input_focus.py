@@ -2,7 +2,7 @@ from datetime import date
 
 import pytest
 from PySide6.QtCore import QEvent, QPoint, Qt
-from PySide6.QtGui import QHelpEvent
+from PySide6.QtGui import QHelpEvent, QTextDocument
 from PySide6.QtWidgets import QApplication, QLineEdit, QPlainTextEdit
 
 from vocabulary.domain import RelatedWord, Sense, WordEntry
@@ -127,18 +127,23 @@ def test_double_clicked_pos_escape_restores_opening_value(inline, repo, qtbot):
     assert repo.get(entry.id).senses[0].pos == "n."
 
 
-def test_revealed_pos_does_not_show_tooltip(inline, monkeypatch):
+def test_revealed_pos_shows_drag_and_edit_tooltip(inline, monkeypatch):
     table, entry = inline
-    tips, hidden = [], []
+    tips = []
     monkeypatch.setattr("PySide6.QtWidgets.QToolTip.showText", lambda *args: tips.append(args))
-    monkeypatch.setattr("PySide6.QtWidgets.QToolTip.hideText", lambda: hidden.append(True))
     for row in range(table.model().rowCount()):
         index = table.model().index(row, 2)
         assert index.data(Qt.ItemDataRole.ToolTipRole) is None
         point = table.visualRect(index).center()
         QApplication.sendEvent(table.viewport(), QHelpEvent(
             QEvent.Type.ToolTip, point, table.viewport().mapToGlobal(point)))
-    assert not tips and hidden
+    assert len(tips) == table.model().rowCount()
+    for arguments in tips:
+        document = QTextDocument()
+        document.setHtml(arguments[1])
+        assert document.toPlainText().splitlines() == [
+            '按住拖动改变释义排序', '编辑 · \ufffc']
+        assert 'alt="鼠标右键"' in arguments[1]
 
 
 def test_pos_choice_saves_and_closes_without_intermediate_editor(inline, repo, qtbot):
@@ -208,7 +213,8 @@ def test_background_click_releases_button_focus_without_changing_its_checked_sta
 
 def test_background_focus_release_keeps_tab_selection_and_keyboard_shortcuts(window, qtbot):
     qtbot.mouseClick(window.filter_buttons['all'], Qt.MouseButton.LeftButton)
-    assert window.filter_name == 'all' and window.filter_buttons['all'].hasFocus()
+    assert window.filter_name == 'all' and window.table.hasFocus()
+    assert not window.filter_buttons['all'].hasFocus()
     qtbot.mouseClick(window.centralWidget(), Qt.MouseButton.LeftButton, pos=QPoint(4, 4))
     assert not window.filter_buttons['all'].hasFocus() and window.filter_name == 'all'
     qtbot.keyClick(window, Qt.Key.Key_1, Qt.KeyboardModifier.AltModifier)
