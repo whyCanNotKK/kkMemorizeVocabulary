@@ -19,6 +19,86 @@ def seed(window, repo):
     return entry
 
 
+@pytest.mark.parametrize('page', ['pending', 'all', 'learned', 'search'])
+def test_click_star_selects_and_focuses_clicked_word(window, repo, qtbot, page):
+    entries = [repo.save(WordEntry(text, [Sense('n.', 'meaning')],
+                                   [RelatedWord('child', [Sense('v.', 'related')])],
+                                   learned=page == 'learned')) for text in ('first', 'second')]
+    window.set_filter('all' if page == 'search' else page)
+    if page == 'search':
+        window.search_box.setText('second')
+    table = window.table
+    window.blocks[0].word.setFocus()
+    draft = window.form_value()
+    index = table._entry_index(entries[1].id, column=0)
+    hidden = index.data(Qt.ItemDataRole.UserRole).hidden
+    qtbot.mouseClick(table.viewport(), Qt.MouseButton.LeftButton,
+                     pos=table.visualRect(index).center())
+    assert not repo.get(entries[1].id).important
+    assert table.hasFocus()
+    current = table.currentIndex()
+    assert current.data(Qt.ItemDataRole.UserRole).entry.id == entries[1].id
+    assert table.selectionModel().isSelected(current)
+    rows = [i for i, row in enumerate(table.model().rows) if row.entry.id == entries[1].id]
+    assert all(table.selectionModel().isRowSelected(i, current.parent()) for i in rows)
+    assert table._entry_index(entries[1].id).data(Qt.ItemDataRole.UserRole).hidden == hidden
+    assert window.form_value() == draft
+
+
+@pytest.mark.parametrize('first_trigger', ['mouse', 'f4'])
+def test_learned_cooldown_is_shared_and_does_not_extend(window, repo, qtbot, monkeypatch, first_trigger):
+    now = [100.0]
+    monkeypatch.setattr('vocabulary.list_controller.monotonic', lambda: now[0], raising=False)
+    entries = [repo.save(WordEntry(text, [Sense('n.', 'meaning')])) for text in ('first', 'second')]
+    window.refresh()
+    table = window.table
+    table.select_entry(entries[0].id)
+    table.setFocus()
+
+    def click(entry_id):
+        index = table._entry_index(entry_id, column=table.action_column)
+        rect = dict(table.action_rects(table.visualRect(index), index.data(Qt.ItemDataRole.UserRole)))['learned']
+        qtbot.mouseClick(table.viewport(), Qt.MouseButton.LeftButton, pos=rect.center())
+
+    if first_trigger == 'mouse':
+        click(entries[0].id)
+    else:
+        qtbot.keyClick(table, Qt.Key.Key_F4)
+    assert repo.get(entries[0].id).learned
+    now[0] = 100.499
+    if first_trigger == 'mouse':
+        qtbot.keyClick(table, Qt.Key.Key_F4)
+    else:
+        click(entries[1].id)
+    assert not repo.get(entries[1].id).learned
+    window.set_filter('all')
+    window.list_action(entries[0].id, 'learned')
+    assert repo.get(entries[0].id).learned
+    now[0] = 100.5
+    window.list_action(entries[0].id, 'learned')
+    assert not repo.get(entries[0].id).learned
+
+
+def test_failed_learned_write_can_retry_after_cooldown(window, repo, qtbot, monkeypatch):
+    entry = seed(window, repo)
+    now = [100.0]
+    monkeypatch.setattr('vocabulary.list_controller.monotonic', lambda: now[0])
+    set_flag = repo.set_flag
+    attempts = []
+    def fail(*args):
+        attempts.append(args)
+        raise OSError('write failed')
+    monkeypatch.setattr(repo, 'set_flag', fail)
+    monkeypatch.setattr(window, 'show_notice', lambda *args: None)
+    qtbot.keyClick(window.table, Qt.Key.Key_F4)
+    qtbot.keyClick(window.table, Qt.Key.Key_F4)
+    assert len(attempts) == 1 and repo.get(entry.id) == entry
+    monkeypatch.setattr(repo, 'set_flag', set_flag)
+    now[0] = 100.5
+    qtbot.keyClick(window.table, Qt.Key.Key_F4)
+    assert repo.get(entry.id).learned
+
+
 def test_mark_learned_focuses_original_next_word(window, repo, qtbot):
     entries = [repo.save(WordEntry(text, [Sense('n.', 'meaning')]))
                for text in ('first', 'second')]
@@ -134,6 +214,7 @@ def test_flag_keys_update_selected_main_word_and_persist(window, repo, qtbot, pa
     window.set_filter('all')
     table.select_entry(entry.id)
     table.setFocus()
+    qtbot.wait(500)
     qtbot.keyClick(table, Qt.Key.Key_F4)
     assert repo.get(entry.id).learned != learned
 

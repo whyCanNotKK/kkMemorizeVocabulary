@@ -1613,6 +1613,8 @@ class WordTable(QTableView):
                 self.viewport().setCursor(Qt.CursorShape.OpenHandCursor)
                 return
             if column == 0 and row.first and not self.study_mode:
+                self.setCurrentIndex(index)
+                self.setFocus(Qt.FocusReason.MouseFocusReason)
                 self.actionRequested.emit(row.entry.id, "important")
                 event.accept()
                 return

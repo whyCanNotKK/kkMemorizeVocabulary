@@ -518,7 +518,7 @@ def test_reserved_shortcuts_rejected(key):
         normalize_shortcut(key)
 
 
-def test_learning_and_star_actions_persist_and_restore_via_learned_filter(window, repo):
+def test_learning_and_star_actions_persist_and_restore_via_learned_filter(window, repo, qtbot):
     saved = seed(repo)
     window.refresh()
     window.list_action(saved.id, "important")
@@ -528,6 +528,7 @@ def test_learning_and_star_actions_persist_and_restore_via_learned_filter(window
     assert window.model.rowCount() == 0
     assert not hasattr(window, "undo")
     window.set_filter("learned")
+    qtbot.wait(500)
     window.list_action(saved.id, "learned")
     window.set_filter("pending")
     assert not repo.get(saved.id).learned and window.model.rowCount() == 1

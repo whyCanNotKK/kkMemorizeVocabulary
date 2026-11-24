@@ -4,6 +4,7 @@ The input query is a draft. Only a successfully committed snapshot determines
 which words the table, toolbar and export actions operate on.
 """
 from copy import deepcopy
+from time import monotonic
 
 from PySide6.QtCore import Qt, QTimer
 from PySide6.QtWidgets import QApplication
@@ -25,6 +26,7 @@ class ListControllerMixin:
         self.list_jobs.failure.connect(self.list_failed)
         self._display_cache = None
         self._list_loading = False
+        self._learned_blocked_until = 0.0
         self._list_request = None
         self._pending_search_anchor = None
         self._enter_search_intent = False
@@ -633,12 +635,16 @@ class ListControllerMixin:
                               intent='saved', force=True, reveal_id=entry.id if is_new else None)
 
     def list_action(self, entry_id, action):
+        if action == 'learned' and monotonic() < self._learned_blocked_until:
+            return
         table = self.current_table()
         if self._list_loading or not table.delegate.submit():
             return
         self.refresh_after_inline(requery=False)
         if table.delegate.target_after_removal((entry_id, -1, 0, 1)) is None:
             return
+        if action == 'learned':
+            self._learned_blocked_until = monotonic() + 0.5
         if action == 'edit':
             if self.edit_id == entry_id:
                 self.set_form_collapsed(False)
