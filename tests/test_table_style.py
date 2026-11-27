@@ -36,6 +36,41 @@ def cell(table, row, column):
     return table.visualRect(table.model().index(row, column))
 
 
+@pytest.mark.parametrize("page", ["pending", "all", "learned", "study17"])
+def test_first_column_stays_at_word_start_when_answer_grows(window, repo, qtbot, monkeypatch, page):
+    monkeypatch.setattr(StudyContext, "now", classmethod(
+        lambda cls: StudyContext(date(2026, 11, 1), False)))
+    entry = repo.save(WordEntry("record", [Sense("n.", "记录\n档案\n唱片")], [
+        RelatedWord("recorder", [Sense("n.", "录音机")]),
+    ], learned=page == "learned"))
+    window.set_filter(page)
+    window.set_form_collapsed(True)
+    table = window.study_page.table if page == "study17" else window.table
+
+    def marker_pixels():
+        table.clearSelection()
+        qtbot.wait(20)
+        rect = cell(table, 0, 0)
+        image = table.viewport().grab().toImage()
+        scale = image.devicePixelRatio()
+        # Compare the actual glyph, excluding the row separator/background.
+        pixels = {(x, y) for y in range(2, rect.height() - 1)
+                  for x in range(2, rect.width() - 2)
+                  if image.pixelColor(int((rect.x() + x) * scale),
+                                      int((rect.y() + y) * scale)).name()
+                  not in ("#1e242d", "#283440")}
+        assert pixels
+        return pixels, rect.height()
+
+    hidden, hidden_height = marker_pixels()
+    table.revealRequested.emit(entry.id, True)
+    revealed, revealed_height = marker_pixels()
+    assert revealed_height > hidden_height
+    assert revealed == hidden
+    table.revealRequested.emit(entry.id, False)
+    assert marker_pixels()[0] == hidden
+
+
 @pytest.mark.parametrize("width", [860, 1200])
 def test_uniform_background_and_word_rails(styled_list, window, qtbot, width):
     table, entry, hidden = styled_list

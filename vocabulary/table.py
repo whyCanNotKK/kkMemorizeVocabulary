@@ -440,7 +440,11 @@ class WordDelegate(QStyledItemDelegate):
         if self.view.study_mode and column in (0, STUDY_STAGE_COLUMN) and row.first:
             painter.setFont(option.font)
             painter.setPen(QColor(MUTED))
-            painter.drawText(rect, Qt.AlignmentFlag.AlignCenter, index.data())
+            label_rect = QRectF(rect)
+            if column == 0:
+                # Keep the group number at its collapsed-row position as answers grow.
+                label_rect.setHeight(36)
+            painter.drawText(label_rect, Qt.AlignmentFlag.AlignCenter, index.data())
         elif column == 0 and row.first:
             draw_symbol(painter, "star", QRectF(rect.center().x() - 8, rect.top() + 10, 16, 16),
                         GOLD if row.entry.important else "#596371")
