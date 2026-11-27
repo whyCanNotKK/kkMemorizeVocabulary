@@ -110,7 +110,7 @@ def test_enter_save_failure_preserves_input_and_editor(inline_table, repo, qtbot
     if failure == 'database':
         def fail(*args):
             raise sqlite3.OperationalError('disk full')
-        monkeypatch.setattr(repo, 'save', fail)
+        monkeypatch.setattr(repo, 'save_links', fail)
     qtbot.keyClick(editor, Qt.Key.Key_Return)
     assert table.delegate.editor is editor
     assert editor.text() == value

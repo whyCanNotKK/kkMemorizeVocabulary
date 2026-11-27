@@ -17,6 +17,8 @@ from .pagination import PaginationBar
 from .draft_reset_dialog import DraftResetDialog
 from .unsaved_input_dialog import UnsavedInputDialog
 from .import_dialog import ImportConflictDialog
+from .related_dialog import LinkQuestion, RelatedConflictDialog
+from .related_links import name as related_name
 from .input_focus import InputFocusPolicy
 from .pos_picker import PosPicker
 from .form_reorder import FormReorderDrag
@@ -795,10 +797,16 @@ class MainWindow(ListControllerMixin, QMainWindow):
             draft = self.form_value()
             before = self.repository.get(self.edit_id) if not is_new else None
             locations = self.form_location_map(before)
-            saved = self.repository.save(draft)
+            result = self.save_with_links(draft, self._form_source if not is_new else None)
+            if result is None:
+                return False
+            saved = result.saved
         except DuplicateWord as error:
             self.duplicate_id = error.entry_id
             self.show_notice(str(error), True, duplicate=True)
+            return False
+        except WordContentValidationError as error:
+            self.toast.show_message(str(error), self.save_button)
             return False
         except Exception as error:
             logging.exception("Could not save entry")
@@ -807,9 +815,78 @@ class MainWindow(ListControllerMixin, QMainWindow):
         self.duplicate_id = None
         self.toast.dismiss()
         self.reset_form()
-        self.form_saved(saved, is_new, before=before, locations=locations)
+        self.form_saved(saved, is_new, before=before, locations=locations,
+                        related_changes=self.link_committed_changes(result)[1:])
         self.blocks[0].word.setFocus()
         return True
+
+    def save_with_links(self, draft, baseline, *, inline=False):
+        plan = self.repository.prepare_links(draft, baseline, inline=inline)
+        if plan.conflicts:
+            question = LinkQuestion(self)
+            question.exec()
+            question.deleteLater()
+            if question.choice is None:
+                return None
+            if question.choice:
+                dialog = RelatedConflictDialog(plan, self.repository.save_links, self)
+                dialog.exec()
+                dialog.deleteLater()
+                return dialog.result_value
+        return self.repository.save_links(plan)
+
+    @staticmethod
+    def link_committed_changes(result, locations=None):
+        changes = []
+        for index, (before, after) in enumerate(result.changes):
+            mapping = (locations or LocationMap()) if index == 0 else LocationMap()
+            if index and before is not None:
+                owners = {}
+                if len(after.related) < len(before.related):
+                    position = 0
+                    for old, child in enumerate(before.related):
+                        removed = related_name(child.text) == related_name(result.saved.text)
+                        owners[old] = None if removed else position
+                        if not removed:
+                            position += 1
+                mapping = LocationMap(owners=owners, replaced=frozenset({-1})
+                                      if before.senses != after.senses else frozenset())
+            changes.append(CommittedChange(before=before, after=after, locations=mapping))
+        return changes
+
+    def commit_linked_word(self, row, value):
+        """Name edits and whole-word pastes share the same atomic link workflow."""
+        entry = self.repository.get(row.entry.id)
+        if (row.owner == -1 and (entry.text, entry.phonetic, entry.senses) !=
+                (row.entry.text, row.entry.phonetic, row.entry.senses)
+                or row.owner != -1 and entry.related != row.entry.related):
+            raise ValueError('单词内容已变化，当前输入已保留。')
+        before = deepcopy(entry)
+        target = entry if row.owner == -1 else entry.related[row.owner]
+        pasted = isinstance(value, RelatedWord)
+        if pasted:
+            target.text, target.phonetic, target.senses = value.text, value.phonetic, deepcopy(value.senses)
+        elif isinstance(value, tuple):
+            target.text, target.phonetic = value
+        else:
+            target.text = value
+        removed = not target.text.strip() and row.owner != -1
+        if removed:
+            del entry.related[row.owner]
+            locations = LocationMap(owners={i: None if i == row.owner else i - (i > row.owner)
+                                             for i in range(len(before.related))})
+        else:
+            locations = LocationMap(replaced=frozenset({row.owner}) if pasted else frozenset())
+        result = self.save_with_links(entry, before, inline=True)
+        if result is None:
+            return False
+        self.begin_content_sync()
+        for change in self.link_committed_changes(result, locations):
+            self._pending_entries[change.entry_id] = change
+        if self.current_table().delegate.editor is None:
+            self.refresh_after_inline()
+        self.show_notice(f'已删除 {row.word.text}' if removed else '修改已保存')
+        return CELL_REMOVED if removed else True
 
     def scroll_to_new_word(self, entry_id):
         if self._closing or self.table.delegate.editor:
@@ -886,6 +963,12 @@ class MainWindow(ListControllerMixin, QMainWindow):
 
     def commit_cell(self, row, column, value):
         try:
+            if column == 1 or isinstance(value, RelatedWord):
+                spelling = (value.text if isinstance(value, RelatedWord) else
+                            value[0] if isinstance(value, tuple) else value)
+                # Empty main names retain the existing whole-entry deletion rules.
+                if spelling.strip() or row.owner != -1:
+                    return self.commit_linked_word(row, value)
             if column == 1:
                 spelling = value
                 if isinstance(value, RelatedWord):

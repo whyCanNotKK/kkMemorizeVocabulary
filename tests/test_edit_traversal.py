@@ -420,7 +420,7 @@ def test_failed_save_does_not_move_editor(edit_list, repo, qtbot, monkeypatch, f
     if failure == 'database':
         def fail(*args):
             raise sqlite3.OperationalError('disk full')
-        monkeypatch.setattr(repo, 'save', fail)
+        monkeypatch.setattr(repo, 'save_links', fail)
     for key in (Qt.Key.Key_Tab, Qt.Key.Key_Backtab):
         qtbot.keyClick(editor, key)
         assert table.delegate.editor is editor and editor.text() == value

@@ -1,5 +1,6 @@
 """Empty-field hints using the shared Enter icon instead of font glyphs."""
-from PySide6.QtCore import QEvent, QRectF, Qt
+import shiboken6
+from PySide6.QtCore import QEvent, QRectF, Qt, Slot
 from PySide6.QtGui import QFont, QFontMetricsF, QPainter, QPalette
 from PySide6.QtWidgets import QLineEdit, QStyle, QStyleOptionFrame, QWidget
 
@@ -24,7 +25,13 @@ class EnterPlaceholder(QWidget):
         field.textChanged.connect(self.refresh)
         self.refresh()
 
+    @Slot()
     def refresh(self):
+        # Replacing a comparison card can destroy the viewport before a late
+        # text/layout notification arrives. Python references outlive Qt objects.
+        if (not shiboken6.isValid(self) or not shiboken6.isValid(self.field)
+                or not shiboken6.isValid(self.surface)):
+            return
         text = self.field.text() if isinstance(self.field, QLineEdit) else self.field.toPlainText()
         self.setGeometry(self.surface.rect())
         self.setVisible(not text and not self._preedit)

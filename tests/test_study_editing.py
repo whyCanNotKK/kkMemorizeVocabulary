@@ -112,7 +112,7 @@ def test_invalid_edit_blocks_refresh_switch_hide_settings_export_and_close(
     if failure == 'database':
         def fail(*args):
             raise sqlite3.OperationalError('disk full')
-        monkeypatch.setattr(repo, 'save', fail)
+        monkeypatch.setattr(repo, 'save_links', fail)
     assert not page.table.delegate.submit()
     if failure == 'empty':
         assert window.toast.label.text() == "单词拼写不可为空"

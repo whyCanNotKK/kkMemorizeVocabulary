@@ -428,7 +428,9 @@ def test_second_page_drag_uses_category_offset_and_keeps_first_page_unchanged(ma
 
 
 @pytest.mark.parametrize("new_text,expected", [("banana", []), ("apple-pie", ["apple-pie"])])
-def test_study_edit_revalidates_cached_search(make_window, repo, qtbot, new_text, expected):
+def test_study_edit_revalidates_cached_search(make_window, repo, qtbot, monkeypatch, new_text, expected):
+    # These tests need a newly drawn word; afternoons deliberately draw none.
+    monkeypatch.setattr(StudyContext, 'now', classmethod(lambda cls: StudyContext(date(2026, 11, 27), False)))
     entry = repo.save(WordEntry("apple", [Sense("n.", "fruit")]))
     window = make_window()
     window.search_box.setText("apple")
@@ -495,7 +497,8 @@ def test_form_reorder_tracks_duplicate_senses_by_original_widgets(make_window, r
     assert index.column() == 3
 
 
-def test_study_edit_can_add_an_absent_search_hit(make_window, repo, qtbot):
+def test_study_edit_can_add_an_absent_search_hit(make_window, repo, qtbot, monkeypatch):
+    monkeypatch.setattr(StudyContext, 'now', classmethod(lambda cls: StudyContext(date(2026, 11, 27), False)))
     entry = repo.save(WordEntry("banana", [Sense("n.", "fruit")]))
     window = make_window()
     window.search_box.setText("apple")

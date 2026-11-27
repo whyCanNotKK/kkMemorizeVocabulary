@@ -3,6 +3,7 @@ from pathlib import Path
 from contextlib import contextmanager
 from datetime import datetime
 from functools import wraps
+from copy import deepcopy
 import json
 import random
 import sqlite3
@@ -12,6 +13,9 @@ from .domain import (CLEANUP_COMMANDS, DEFAULT_SHORTCUTS, DuplicateWord, Related
                      same_entry_content, shortcut_candidates)
 from .transfer import ImportConflict, ImportResult
 from .import_merge import AutoMergeResult, plan_auto_merge
+from .related_links import (LinkConflict, LinkPlan, LinkSaveResult, changes as link_changes,
+                            content as link_content, name as link_name, snapshot as link_snapshot,
+                            validate_names)
 from .learning import (STAGE_GAPS, SpellingHideSettings, StudyContext, StudyDrawSettings, StudyTask,
                        StudyTaskHistory, next_stage, study_due, study_timestamp)
 from .study_transfer import RECORD_FIELDS, StudyBackup
@@ -138,6 +142,70 @@ class Repository:
         with self._transaction() as counters:
             self._save_entry(entry, counters)
         return self.get(entry.id)
+
+    def prepare_links(self, draft, baseline, *, inline=False):
+        """Read only affected aggregates; imports deliberately bypass this policy."""
+        draft = clean_entry(draft)
+        before = self.get(draft.id) if draft.id is not None else None
+        validate_names(draft, before if inline else None)
+        self._check_word_name(draft.text, draft.id)
+        added, removed = link_changes(baseline, draft)
+        targets = {}
+        for key in sorted(added | removed):
+            row = self.connection.execute('SELECT id FROM words WHERE normalized_text=?', (key,)).fetchone()
+            if row is not None and row[0] != draft.id:
+                targets[key] = self.get(row[0])
+        plan = LinkPlan(draft, before, added, removed, targets)
+        for index, child in enumerate(draft.related):
+            target = targets.get(link_name(child.text))
+            if link_name(child.text) in added and target and link_content(child) != link_content(target):
+                plan.conflicts.append(LinkConflict(target.id, index))
+        return plan
+
+    @_content_write
+    def save_links(self, plan, draft=None, targets=None):
+        """Atomically commit the source, comparison edits, and reverse links."""
+        draft = clean_entry(draft or plan.draft)
+        targets = targets or {}
+        result = []
+        with self._transaction() as counters:
+            self.connection.execute('BEGIN IMMEDIATE')
+            stale = '单词内容已变化，当前输入已保留。请取消后重新保存以检查最新内容。'
+            before = self.get(draft.id) if draft.id is not None else None
+            if before is not None and link_snapshot(before) != link_snapshot(plan.before):
+                raise ValueError(stale)
+            # Recheck both existing and absent name matches under the write lock.
+            for key in plan.added | plan.removed:
+                row = self.connection.execute('SELECT id FROM words WHERE normalized_text=?', (key,)).fetchone()
+                actual = row[0] if row is not None and row[0] != draft.id else None
+                expected = plan.targets.get(key)
+                if actual != (expected.id if expected else None):
+                    raise ValueError(stale)
+            current_targets = {}
+            for key, expected in plan.targets.items():
+                current = self.get(expected.id)
+                if link_snapshot(current) != link_snapshot(expected):
+                    raise ValueError(stale)
+                current_targets[key] = current
+            self._save_entry(draft, counters)
+            saved = self.get(draft.id)
+            result.append((before, saved))
+            for key, original in current_targets.items():
+                updated = deepcopy(original)
+                edited = targets.get(original.id)
+                if edited is not None:
+                    value = clean_word_content(RelatedWord(original.text, edited.senses, edited.phonetic))
+                    updated.phonetic, updated.senses = value.phonetic, value.senses
+                if key in plan.removed:
+                    updated.related = [child for child in updated.related
+                                       if link_name(child.text) != link_name(saved.text)]
+                if key in plan.added and not any(link_name(child.text) == link_name(saved.text)
+                                                 for child in updated.related):
+                    updated.related.append(RelatedWord(saved.text, deepcopy(saved.senses), saved.phonetic))
+                if updated != original:
+                    self._save_entry(updated, counters)
+                    result.append((original, self.get(updated.id)))
+        return LinkSaveResult(saved, result)
 
     @_content_write
     def set_phonetic(self, entry_id: int, phonetic: str, related_text: str | None = None) -> WordEntry:

@@ -606,7 +606,7 @@ class ListControllerMixin:
                  *(sense.translation for word in entry.related for sense in word.senses)]
         return any(keyword in text.casefold() for text in texts)
 
-    def form_saved(self, entry, is_new, *, before=None, locations=None):
+    def form_saved(self, entry, is_new, *, before=None, locations=None, related_changes=()):
         pending = self._list_request
         pending_keyword = (normalize_keyword(self.search_box.text())
                            if self._list_loading or self._search_timer.isActive() else self.applied_keyword())
@@ -614,9 +614,12 @@ class ListControllerMixin:
         self._search_timer.stop()
         self._pending_search_anchor = None
         self.cancel_list_intents()
+        self.begin_content_sync()
+        for change in related_changes:
+            self.apply_committed_change(change, published=True)
         self.apply_committed_change(CommittedChange(
             before=before if not is_new else None, after=entry,
-            locations=locations or LocationMap(reset=not is_new)))
+            locations=locations or LocationMap(reset=not is_new)), published=True)
         cache = self._display_cache
         category = 'pending' if is_new and pending_category == 'learned' else pending_category
         keyword = pending_keyword

@@ -1,7 +1,23 @@
 import pytest
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, QTimer
 from PySide6.QtGui import QInputMethodEvent
-from PySide6.QtWidgets import QApplication, QLineEdit
+from PySide6.QtWidgets import QApplication, QLineEdit, QWidget
+
+from vocabulary.widgets import SenseRow
+
+
+def test_pending_hint_refresh_after_viewport_teardown(qtbot):
+    row = SenseRow()
+    qtbot.addWidget(row)
+    field = row.translation
+    hint = field.enter_placeholder
+    with qtbot.captureExceptions() as errors:
+        # Replay the logged refresh after the QWidget viewport has died while
+        # the outer text editor is still alive, independently of its contents.
+        QTimer.singleShot(0, lambda: hint.refresh())
+        field.setViewport(QWidget())
+        qtbot.wait(10)
+    assert not errors, [(kind.__name__, str(error)) for kind, error, _ in errors]
 
 
 @pytest.mark.parametrize('name,description', [
