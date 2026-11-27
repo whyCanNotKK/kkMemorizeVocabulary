@@ -57,7 +57,6 @@ class ContentEditor(QFrame):
         self.outer.addLayout(heading)
         self.senses = QVBoxLayout()
         self.outer.addLayout(self.senses)
-        self.outer.addStretch()
         self.set_content(word)
 
     def set_content(self, word):
@@ -168,8 +167,8 @@ class RelatedConflictDialog(QDialog):
                 editor.outer.addWidget(control)
                 editor.adopt_button = control
                 editor.structureChanged.connect(self.update_tab_order)
-            pair.addWidget(left, 1)
-            pair.addWidget(right, 1)
+            pair.addWidget(left, 1, Qt.AlignmentFlag.AlignTop)
+            pair.addWidget(right, 1, Qt.AlignmentFlag.AlignTop)
             pairs.addLayout(pair)
             self.cards.append((conflict, left, right))
         pairs.addStretch()
